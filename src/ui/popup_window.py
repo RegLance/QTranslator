@@ -349,7 +349,7 @@ class PopupWindow(QWidget):
         self._result_scroll.setWidgetResizable(True)
         self._result_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._result_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._result_scroll.setMinimumHeight(100)
+        self._result_scroll.setMinimumHeight(50)  # 降低最小高度，使窗口更紧凑
 
         # 翻译结果容器
         self._result_container = QWidget()
@@ -691,6 +691,7 @@ class PopupWindow(QWidget):
         self._is_loading = False
         self._current_result = None
         self._streaming_text = ""
+        self._result_shown = False  # 标记翻译结果是否已显示
 
         # 显示原文
         if original_text:
@@ -699,22 +700,28 @@ class PopupWindow(QWidget):
         else:
             self._original_scroll.hide()
 
-        # 清空翻译结果，准备接收流式内容
+        # 清空翻译结果，但暂时隐藏输出区域（等待实际翻译内容）
         self._result_label.setText("")
-        self._result_scroll.show()
+        self._result_scroll.hide()  # 隐藏翻译结果区域，等待实际内容
         self._loading_label.hide()
         self._error_label.hide()
 
-        # 重置窗口到默认大小
-        self.resize(self._default_width, self._default_height)
+        # 窗口大小暂时只适应原文区域
+        self._adjust_initial_window_height()
 
     def append_translation_text(self, chunk: str):
         """追加流式翻译文本"""
         if not hasattr(self, '_streaming_text'):
             self._streaming_text = ""
+            self._result_shown = False
 
         self._streaming_text += chunk
         self._result_label.setText(self._streaming_text)
+
+        # 首次收到翻译内容时，显示翻译结果区域
+        if not self._result_shown:
+            self._result_shown = True
+            self._result_scroll.show()
 
         # 延迟调整窗口高度，确保 UI 已更新
         QTimer.singleShot(50, self._adjust_window_height)
@@ -730,6 +737,57 @@ class PopupWindow(QWidget):
 
         # 重置自动关闭计时器
         self._auto_close_timer.start(self._auto_close_delay)
+
+    def _adjust_initial_window_height(self):
+        """调整初始窗口高度（只有原文区域时）"""
+        try:
+            # 获取屏幕尺寸
+            screen_x, screen_y, screen_w, screen_h = self._get_screen_bounds()
+
+            # 最大允许高度（屏幕高度的50%）
+            max_height = int(screen_h * 0.5)
+
+            # 标题高度
+            title_height = 24
+            margin = 30
+
+            # 原文区域高度
+            original_height = 80
+            if self._original_scroll.isVisible():
+                original_text = self._original_label.text()
+                from PyQt6.QtGui import QFontMetrics
+                original_font = self._original_label.font()
+                fm = QFontMetrics(original_font)
+
+                # 估算原文行数
+                lines = original_text.split('\n')
+                total_lines = 0
+                char_width = fm.horizontalAdvance('M')
+                if char_width > 0:
+                    chars_per_line = max(20, (self.width() - 40) // char_width)
+                    for line in lines:
+                        if len(line) == 0:
+                            total_lines += 1
+                        else:
+                            total_lines += (len(line) + chars_per_line - 1) // chars_per_line
+                else:
+                    total_lines = len(lines)
+
+                line_height = fm.lineSpacing()
+                original_height = min(120, total_lines * line_height + 20)
+
+            # 总高度 = 标题 + 原文 + 边距（没有翻译结果区域）
+            total_height = title_height + original_height + margin
+
+            # 限制在合理范围内
+            total_height = max(self._min_height, min(total_height, max_height))
+
+            # 保持当前宽度，只调整高度
+            self.resize(self.width(), int(total_height))
+
+        except Exception as e:
+            log_error(f"调整初始窗口高度失败: {e}")
+            self.resize(self._default_width, self._min_height)
 
     def _adjust_window_height(self):
         """根据内容动态调整窗口高度"""
@@ -768,6 +826,8 @@ class PopupWindow(QWidget):
                 # 计算高度
                 line_height = fm.lineSpacing()
                 result_height = total_lines * line_height + 30
+                # 确保最小高度，避免一开始太小
+                result_height = max(50, result_height)
             else:
                 result_height = 100
 

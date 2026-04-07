@@ -39,6 +39,7 @@ class SelectionDetector(QObject):
 
         self._last_position: Optional[MousePosition] = None
         self._is_enabled = True
+        self._is_paused = False  # 暂停标志
 
         # 上一次捕获的时间戳，用于检测新选择
         self._last_capture_time = 0.0
@@ -50,6 +51,14 @@ class SelectionDetector(QObject):
 
         # 文本捕获引用（延迟获取）
         self._text_capture = None
+
+    def pause(self):
+        """暂停检测"""
+        self._is_paused = True
+
+    def resume(self):
+        """恢复检测"""
+        self._is_paused = False
 
     def _get_text_capture(self):
         """延迟获取 text_capture 实例"""
@@ -144,7 +153,7 @@ class SelectionDetector(QObject):
 
     def _on_poll(self):
         """轮询检查是否有新的文本选择"""
-        if not self._is_enabled:
+        if not self._is_enabled or self._is_paused:
             return
 
         # 检查是否在我们自己的窗口中选择
@@ -174,7 +183,6 @@ class SelectionDetector(QObject):
             self._last_position = MousePosition(x=x, y=y, timestamp=self._last_capture_time)
 
             # 发出信号
-            print(f"[DEBUG] New selection detected at ({x}, {y})", file=sys.stderr)
             self.selection_finished.emit()
 
     def get_last_position(self) -> Optional[Tuple[int, int]]:

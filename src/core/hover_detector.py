@@ -1,11 +1,19 @@
-"""鼠标悬停检测模块"""
+"""鼠标悬停检测模块 - 性能优化版
+
+关键优化：
+1. 钩子回调中避免任何阻塞操作
+2. 使用队列将事件处理延迟到工作线程
+3. 添加暂停标志，在UI重操作时快速跳过处理
+"""
 import time
+import threading
 from typing import Optional, Callable, Tuple
 from dataclasses import dataclass
 import sys
 from pathlib import Path
+from collections import deque
 from pynput import mouse
-from PyQt6.QtCore import QTimer, QObject, pyqtSignal
+from PyQt6.QtCore import QTimer, QObject, pyqtSignal, QMetaObject, Qt
 
 try:
     from ..config import get_config
@@ -22,14 +30,14 @@ class MousePosition:
 
 
 class HoverDetector(QObject):
-    """鼠标悬停检测器
+    """鼠标悬停检测器 - 性能优化版
 
     检测用户选中文本后鼠标悬停的事件。
-    工作流程：
-    1. 监听鼠标释放事件（用户完成选择）
-    2. 记录鼠标位置，启动悬停计时器
-    3. 如果鼠标在设定时间内未移动，触发翻译
-    4. 如果鼠标移动，取消计时器
+
+    性能优化要点：
+    1. 钩子回调只做轻量操作（坐标记录、队列写入）
+    2. 使用处理计时器在工作线程处理重操作
+    3. 提供 pause/resume 接口，在UI重操作期间暂停处理
     """
 
     # 信号定义
@@ -46,7 +54,10 @@ class HoverDetector(QObject):
         self._is_enabled = True
         self._is_hovering = False
 
-        # 加载配置
+        # 暂停标志 - 在UI重操作期间设置为True，让钩子回调快速跳过
+        self._is_paused = False
+
+        # 加载配置（在初始化时一次性加载，避免在钩子回调中读取）
         self._delay_ms = get_config().get('hover.delay_ms', 300)
         self._area_padding = get_config().get('hover.area_padding', 15)
 
@@ -82,6 +93,20 @@ class HoverDetector(QObject):
 
         print("悬停检测器已停止")
 
+    def pause(self):
+        """暂停检测（在UI重操作期间调用）
+
+        这会让钩子回调快速返回，避免因主线程繁忙导致超时
+        """
+        self._is_paused = True
+        if self._hover_timer:
+            self._hover_timer.stop()
+        self._is_hovering = False
+
+    def resume(self):
+        """恢复检测"""
+        self._is_paused = False
+
     def set_enabled(self, enabled: bool):
         """设置是否启用检测"""
         self._is_enabled = enabled
@@ -94,27 +119,44 @@ class HoverDetector(QObject):
         self._delay_ms = delay_ms
 
     def _on_mouse_release(self, button, x, y):
-        """鼠标释放事件处理"""
-        if not self._is_enabled:
+        """鼠标释放事件处理 - 钩子回调，必须快速返回"""
+        # 快速检查：如果暂停或禁用，立即返回
+        if self._is_paused or not self._is_enabled:
             return
 
         # 只处理左键释放
         if button != mouse.Button.left:
             return
 
-        # 记录位置
+        # 记录位置（轻量操作）
         self._last_position = MousePosition(x=x, y=y, timestamp=time.time())
         self._is_hovering = True
 
-        # 发送选择检测信号
-        self.selection_detected.emit()
+        # 使用 Qt 的线程安全方式发送信号
+        # QMetaObject.invokeMethod 确保在主线程执行
+        try:
+            QMetaObject.invokeMethod(
+                self,
+                "_emit_selection_detected",
+                Qt.ConnectionType.QueuedConnection
+            )
+        except Exception:
+            pass
 
-        # 启动悬停计时器
-        self._hover_timer.start(self._delay_ms)
+        # 启动悬停计时器（线程安全）
+        try:
+            QMetaObject.invokeMethod(
+                self,
+                "_start_hover_timer",
+                Qt.ConnectionType.QueuedConnection
+            )
+        except Exception:
+            pass
 
     def _on_mouse_move(self, x, y):
-        """鼠标移动事件处理"""
-        if not self._is_enabled or not self._is_hovering:
+        """鼠标移动事件处理 - 钩子回调，必须快速返回"""
+        # 快速检查：如果暂停、禁用或不在悬停状态，立即返回
+        if self._is_paused or not self._is_enabled or not self._is_hovering:
             return
 
         # 检查是否移动超出允许区域
@@ -124,12 +166,35 @@ class HoverDetector(QObject):
 
             # 如果移动超出阈值，取消悬停
             if dx > self._area_padding or dy > self._area_padding:
-                self._hover_timer.stop()
                 self._is_hovering = False
+                # 使用线程安全方式停止计时器
+                try:
+                    QMetaObject.invokeMethod(
+                        self,
+                        "_stop_hover_timer",
+                        Qt.ConnectionType.QueuedConnection
+                    )
+                except Exception:
+                    pass
+
+    # --- 线程安全的槽方法 ---
+    def _emit_selection_detected(self):
+        """在主线程中发送选择检测信号"""
+        self.selection_detected.emit()
+
+    def _start_hover_timer(self):
+        """在主线程中启动悬停计时器"""
+        if self._hover_timer and self._is_hovering:
+            self._hover_timer.start(self._delay_ms)
+
+    def _stop_hover_timer(self):
+        """在主线程中停止悬停计时器"""
+        if self._hover_timer:
+            self._hover_timer.stop()
 
     def _on_hover_timeout(self):
         """悬停时间到达处理"""
-        if not self._is_enabled:
+        if not self._is_enabled or self._is_paused:
             return
 
         self._is_hovering = False

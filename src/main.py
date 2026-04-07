@@ -25,6 +25,7 @@ try:
     from .config import get_config, APP_NAME
     from .core.text_capture import get_text_capture, capture_text_direct
     from .core.selection_detector import get_selection_detector
+    from .core.hover_detector import get_hover_detector
     from .core.translator import get_translator, TranslationResult
     from .ui.popup_window import get_popup_window
     from .ui.translate_button import get_translate_button
@@ -39,6 +40,7 @@ except ImportError:
     from config import get_config, APP_NAME
     from core.text_capture import get_text_capture, capture_text_direct
     from core.selection_detector import get_selection_detector
+    from core.hover_detector import get_hover_detector
     from core.translator import get_translator, TranslationResult
     from ui.popup_window import get_popup_window
     from ui.translate_button import get_translate_button
@@ -570,27 +572,54 @@ class SettingsDialog(QDialog):
 
     def _save_settings(self):
         """保存设置"""
-        self._config.set('translator.api_key', self._api_key_input.text())
-        self._config.set('translator.base_url', self._base_url_input.text())
-        self._config.set('translator.model', self._model_input.text())
-        self._config.set('target_language', self._target_lang_combo.currentText())
+        # 暂停鼠标检测器，避免UI重操作期间钩子超时导致鼠标卡顿
+        try:
+            hover_detector = get_hover_detector()
+            hover_detector.pause()
+        except Exception:
+            pass
 
-        popup_style = 'dark' if self._popup_style_combo.currentIndex() == 0 else 'light'
-        self._config.set('theme.popup_style', popup_style)
+        try:
+            selection_detector = get_selection_detector()
+            selection_detector.pause()
+        except Exception:
+            pass
 
-        self._config.set('popup.auto_close_on_leave', self._auto_close_on_leave_check.isChecked())
+        try:
+            self._config.set('translator.api_key', self._api_key_input.text())
+            self._config.set('translator.base_url', self._base_url_input.text())
+            self._config.set('translator.model', self._model_input.text())
+            self._config.set('target_language', self._target_lang_combo.currentText())
 
-        auto_start = self._auto_start_check.isChecked()
-        self._config.set('startup.auto_start', auto_start)
-        setup_auto_start(auto_start)
+            popup_style = 'dark' if self._popup_style_combo.currentIndex() == 0 else 'light'
+            self._config.set('theme.popup_style', popup_style)
 
-        self._config.save()
+            self._config.set('popup.auto_close_on_leave', self._auto_close_on_leave_check.isChecked())
 
-        # 更新所有窗口主题
-        self._update_all_themes()
+            auto_start = self._auto_start_check.isChecked()
+            self._config.set('startup.auto_start', auto_start)
+            setup_auto_start(auto_start)
 
-        # 使用自定义提示框
-        self._show_message_dialog("保存成功", "设置已保存", "info")
+            self._config.save()
+
+            # 更新所有窗口主题
+            self._update_all_themes()
+
+            # 使用自定义提示框
+            self._show_message_dialog("保存成功", "设置已保存", "info")
+        finally:
+            # 恢复鼠标检测器
+            try:
+                hover_detector = get_hover_detector()
+                hover_detector.resume()
+            except Exception:
+                pass
+
+            try:
+                selection_detector = get_selection_detector()
+                selection_detector.resume()
+            except Exception:
+                pass
 
     def _update_all_themes(self):
         """更新所有窗口的主题"""
@@ -872,38 +901,43 @@ class MainController(QObject):
         log_info(f"{APP_NAME} 已停止")
 
     def _on_selection_finished(self):
-        log_debug("选择完成事件触发")
-
         if not self._tray_icon._is_enabled:
             return
 
         text = capture_text_direct()
-        log_debug(f"捕获到的文本: '{text[:50] if text else '(空)'}...'")
 
         if not text or not text.strip():
             self._translate_button.hide()
             return
 
         mouse_pos = self._selection_detector.get_last_position()
-        log_debug(f"选择位置: {mouse_pos}")
 
         if mouse_pos is None:
             from PyQt6.QtGui import QCursor
             cursor = QCursor.pos()
             mouse_pos = (cursor.x(), cursor.y())
-            log_debug(f"使用鼠标位置: {mouse_pos}")
 
         self._translate_button.set_selected_text(text.strip())
+
+        # 获取来源程序名（用于判断是否是浏览器）
+        try:
+            from .core.text_capture import get_last_program_name
+            program_name = get_last_program_name()
+        except ImportError:
+            from core.text_capture import get_last_program_name
+            program_name = get_last_program_name()
+
+        log_debug(f"来源程序: {program_name}")
 
         # 强制处理所有待处理事件，确保窗口显示
         from PyQt6.QtWidgets import QApplication
         QApplication.processEvents()
 
-        self._translate_button.show_at_position(mouse_pos, text.strip())
+        # 传递程序名，让按钮根据环境决定显示方式
+        self._translate_button.show_at_position(mouse_pos, text.strip(), program_name)
 
         # 再次强制处理事件
         QApplication.processEvents()
-        log_debug("翻译按钮已显示")
 
     def _on_translate_button_clicked(self):
         if self._current_worker and self._current_worker.isRunning():

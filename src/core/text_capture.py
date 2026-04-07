@@ -1,4 +1,4 @@
-"""文本捕获模块 - 使用 selection-hook 进行跨应用文本选择捕获，并添加剪贴板轮询作为补充"""
+"""文本捕获模块 - 使用 selection-hook 进行跨应用文本选择捕获"""
 import sys
 import os
 import json
@@ -8,16 +8,6 @@ import threading
 from typing import Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
-
-try:
-    import pyperclip
-except ImportError:
-    pyperclip = None
-
-try:
-    from pynput import mouse
-except ImportError:
-    mouse = None
 
 
 @dataclass
@@ -29,279 +19,8 @@ class SelectionInfo:
     error: Optional[str] = None
 
 
-class ClipboardPoller:
-    """剪贴板轮询器 - 作为 selection-hook 的补充检测方式
-
-    用于解决某些应用（如 MobaXterm 终端）不触发 UI Automation 选择事件的问题。
-    这些应用通常有"选中即复制"功能，所以可以通过检测剪贴板变化来捕获选择。
-
-    重要：
-    1. 只在支持"选中即复制"的终端应用（如 MobaXterm）中激活
-    2. 只在"选择时间窗口"内检测剪贴板变化，避免误触发用户主动复制操作
-    """
-
-    # 支持"选中即复制"的终端应用列表
-    TERMINAL_APPS = [
-        'mobaxterm',      # MobaXterm
-        'xshell',         # Xshell
-        'securecrt',      # SecureCRT
-        'putty',          # PuTTY
-        'windowsterminal', # Windows Terminal
-        'cmd',            # 命令提示符
-        'powershell',     # PowerShell
-        'conda',          # Anaconda Prompt
-        'alacritty',      # Alacritty
-        'hyper',          # Hyper Terminal
-        'fluentterminal', # Fluent Terminal
-        'terminus',       # Terminus
-    ]
-
-    def __init__(self, on_change_callback):
-        """初始化剪贴板轮询器
-
-        Args:
-            on_change_callback: 剪贴板内容变化时的回调函数，接收 (text, timestamp) 参数
-        """
-        self._callback = on_change_callback
-        self._last_clipboard_text: str = ""
-        self._last_clipboard_time: float = 0
-        self._poll_thread: Optional[threading.Thread] = None
-        self._running = False
-        self._poll_interval = 0.1  # 100ms 轮询间隔（更快检测）
-        self._lock = threading.Lock()
-
-        # 选择时间窗口：只有鼠标释放后短时间内才触发
-        self._selection_window_start: float = 0
-        self._selection_window_duration: float = 1.0  # 1秒窗口
-
-        # 鼠标监听器（用于开启选择窗口）
-        self._mouse_listener: Optional[object] = None
-
-        # 获取初始剪贴板内容
-        self._init_clipboard()
-
-    def _init_clipboard(self):
-        """初始化剪贴板内容"""
-        try:
-            if pyperclip:
-                self._last_clipboard_text = pyperclip.paste() or ""
-            elif sys.platform == 'win32':
-                import ctypes
-                # 使用 Windows API 获取剪贴板文本
-                ctypes.windll.user32.OpenClipboard(0)
-                try:
-                    hwnd = ctypes.windll.user32.GetClipboardData(1)  # CF_TEXT
-                    if hwnd:
-                        text = ctypes.windll.kernel32.GlobalLock(hwnd)
-                        if text:
-                            buffer = ctypes.c_char_p(text)
-                            self._last_clipboard_text = buffer.value.decode('utf-8', errors='replace') if buffer.value else ""
-                            ctypes.windll.kernel32.GlobalUnlock(hwnd)
-                finally:
-                    ctypes.windll.user32.CloseClipboard()
-        except Exception:
-            self._last_clipboard_text = ""
-
-    def start(self):
-        """启动轮询和鼠标监听"""
-        if self._running:
-            return
-
-        self._running = True
-        self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
-        self._poll_thread.start()
-
-        # 启动鼠标监听器（监听左键释放来开启选择窗口）
-        if mouse:
-            self._mouse_listener = mouse.Listener(
-                on_release=self._on_mouse_release
-            )
-            self._mouse_listener.start()
-            print("[ClipboardPoller] 剪贴板轮询和鼠标监听已启动", file=sys.stderr)
-        else:
-            print("[ClipboardPoller] 剪贴板轮询已启动（无鼠标监听）", file=sys.stderr)
-
-    def stop(self):
-        """停止轮询和鼠标监听"""
-        self._running = False
-        if self._poll_thread:
-            self._poll_thread.join(timeout=1.0)
-            self._poll_thread = None
-
-        if self._mouse_listener:
-            self._mouse_listener.stop()
-            self._mouse_listener = None
-
-        print("[ClipboardPoller] 剪贴板轮询已停止", file=sys.stderr)
-
-    def _on_mouse_release(self, button, x, y):
-        """鼠标释放事件处理 - 开启选择窗口
-
-        当用户在终端应用中释放鼠标左键时（可能刚完成划词选择），开启选择窗口。
-        如果终端应用有"选中即复制"功能，剪贴板变化会在窗口内被检测到。
-        """
-        # 只处理左键释放
-        if mouse and button != mouse.Button.left:
-            return
-
-        # 检测当前前台窗口是否是终端应用
-        if self._is_terminal_app():
-            self.set_selection_window()
-
-    def _is_terminal_app(self) -> bool:
-        """检测当前前台窗口是否是支持"选中即复制"的终端应用
-
-        Returns:
-            bool: 如果前台窗口是终端应用返回 True，否则返回 False
-        """
-        if sys.platform != 'win32':
-            return False
-
-        try:
-            import ctypes
-
-            # 获取前台窗口句柄
-            hwnd = ctypes.windll.user32.GetForegroundWindow()
-            if not hwnd:
-                return False
-
-            # 方法1: 获取窗口标题检查
-            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
-            if length > 0:
-                buffer = ctypes.create_unicode_buffer(length + 1)
-                ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
-                title = buffer.value.lower()
-
-                # 检查窗口标题是否包含终端应用名称
-                for terminal in self.TERMINAL_APPS:
-                    if terminal in title:
-                        print(f"[ClipboardPoller] 检测到终端应用: {title}", file=sys.stderr)
-                        return True
-
-            # 方法2: 获取进程名检查
-            pid = ctypes.c_ulong()
-            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-
-            # 使用 ctypes 获取进程名
-            PROCESS_QUERY_INFORMATION = 0x0400
-            PROCESS_VM_READ = 0x0010
-
-            h_process = ctypes.windll.kernel32.OpenProcess(
-                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-                False, pid.value
-            )
-
-            if h_process:
-                try:
-                    # 获取进程映像名称
-                    buffer = ctypes.create_unicode_buffer(260)
-                    size = ctypes.c_ulong(260)
-                    ctypes.windll.psapi.GetModuleBaseNameW(
-                        h_process, None, buffer, size
-                    )
-                    process_name = buffer.value.lower()
-
-                    # 检查进程名是否包含终端应用名称
-                    for terminal in self.TERMINAL_APPS:
-                        if terminal in process_name:
-                            print(f"[ClipboardPoller] 检测到终端进程: {process_name}", file=sys.stderr)
-                            return True
-                finally:
-                    ctypes.windll.kernel32.CloseHandle(h_process)
-
-        except Exception as e:
-            print(f"[ClipboardPoller] 检测终端应用失败: {e}", file=sys.stderr)
-
-        return False
-
-    def _poll_loop(self):
-        """轮询循环"""
-        while self._running:
-            try:
-                self._check_clipboard()
-            except Exception as e:
-                # 忽略错误，继续轮询
-                pass
-            time.sleep(self._poll_interval)
-
-    def _check_clipboard(self):
-        """检查剪贴板是否有变化
-
-        只有在选择时间窗口内检测到的变化才会触发回调。
-        """
-        # 首先检查是否在选择窗口内（不在窗口内直接跳过）
-        if not self._is_in_selection_window():
-            return
-
-        try:
-            current_text = ""
-
-            # 使用 pyperclip 或 Windows API 获取剪贴板内容
-            if pyperclip:
-                current_text = pyperclip.paste() or ""
-            elif sys.platform == 'win32':
-                import ctypes
-                ctypes.windll.user32.OpenClipboard(0)
-                try:
-                    hwnd = ctypes.windll.user32.GetClipboardData(1)  # CF_TEXT
-                    if hwnd:
-                        text = ctypes.windll.kernel32.GlobalLock(hwnd)
-                        if text:
-                            buffer = ctypes.c_char_p(text)
-                            current_text = buffer.value.decode('utf-8', errors='replace') if buffer.value else ""
-                            ctypes.windll.kernel32.GlobalUnlock(hwnd)
-                finally:
-                    ctypes.windll.user32.CloseClipboard()
-
-            current_time = time.time()
-
-            with self._lock:
-                # 检查是否有变化
-                if current_text and current_text != self._last_clipboard_text:
-                    # 排除太短的变化（可能是误操作）
-                    if len(current_text.strip()) >= 1:
-                        self._last_clipboard_text = current_text
-                        self._last_clipboard_time = current_time
-
-                        # 重置选择窗口（防止重复触发）
-                        self._selection_window_start = 0
-
-                        # 触发回调
-                        if self._callback:
-                            self._callback(current_text, current_time)
-
-        except Exception:
-            pass
-
-    def get_last_text(self) -> Tuple[str, float]:
-        """获取最后一次剪贴板文本和时间"""
-        with self._lock:
-            return self._last_clipboard_text, self._last_clipboard_time
-
-    def set_selection_window(self):
-        """设置选择时间窗口
-
-        当鼠标释放（用户完成选择动作）时调用此方法。
-        只有在此后的短时间内检测到的剪贴板变化才会触发回调。
-        这可以有效区分：
-        - 终端划词选择（选中即复制）→ 在窗口内，触发图标
-        - 用户主动 Ctrl+C 复制 → 不在窗口内，不触发图标
-        """
-        with self._lock:
-            self._selection_window_start = time.time()
-            print("[ClipboardPoller] 选择窗口已开启", file=sys.stderr)
-
-    def _is_in_selection_window(self) -> bool:
-        """检查当前是否在选择时间窗口内"""
-        with self._lock:
-            if self._selection_window_start == 0:
-                return False
-            elapsed = time.time() - self._selection_window_start
-            return elapsed < self._selection_window_duration
-
-
 class TextCapture:
-    """文本捕获类 - 使用 selection-hook Node.js 服务，并添加剪贴板轮询作为补充"""
+    """文本捕获类 - 使用 selection-hook Node.js 服务"""
 
     def __init__(self):
         """初始化文本捕获"""
@@ -314,18 +33,11 @@ class TextCapture:
         self._ready = False
         self._node_path: Optional[str] = None
 
-        # 剪贴板轮询器（作为补充检测方式）
-        self._clipboard_poller: Optional[ClipboardPoller] = None
-        self._clipboard_source_time: float = 0  # 剪贴板来源时间
-
         # 查找 Node.js 路径
         self._find_node()
 
         # 启动服务
         self._start_service()
-
-        # 启动剪贴板轮询（作为补充检测）
-        self._start_clipboard_poller()
 
     def _find_node(self):
         """查找 Node.js 可执行文件路径"""
@@ -404,39 +116,6 @@ class TextCapture:
             self._process = None
             self._running = False
 
-    def _start_clipboard_poller(self):
-        """启动剪贴板轮询器（作为补充检测方式）"""
-        if self._clipboard_poller is not None:
-            return
-
-        self._clipboard_poller = ClipboardPoller(self._on_clipboard_change)
-        self._clipboard_poller.start()
-
-    def _on_clipboard_change(self, text: str, timestamp: float):
-        """剪贴板内容变化回调
-
-        当剪贴板内容变化时，将其作为选择数据存储。
-        这主要用于处理那些不触发 UI Automation 选择事件的应用（如 MobaXterm）。
-        """
-        # 检查是否与当前选择相同（避免重复）
-        with self._lock:
-            current_text = self._last_selection.get('text', '') if self._last_selection else ''
-            if text == current_text:
-                return
-
-            # 存储剪贴板数据作为选择
-            self._last_selection = {
-                'text': text,
-                'x': 0,
-                'y': 0,
-                'program': 'clipboard',
-                'timestamp': timestamp
-            }
-            self._last_capture_time = timestamp
-            self._clipboard_source_time = timestamp
-
-        print(f"[TextCapture] 剪贴板变化检测: '{text[:30]}...' (来自终端类应用)", file=sys.stderr)
-
     def _read_output(self):
         """读取 Node.js 进程的输出（在后台线程运行）"""
         if not self._process or not self._process.stdout:
@@ -502,6 +181,13 @@ class TextCapture:
                 return self._last_selection.get('text', '')
         return ""
 
+    def get_last_program(self) -> str:
+        """获取最后一次选择的程序名"""
+        with self._lock:
+            if self._last_selection:
+                return self._last_selection.get('program', '')
+        return ""
+
     def clear_selection(self):
         """清除缓存的选中内容（在翻译完成后调用）"""
         with self._lock:
@@ -524,11 +210,6 @@ class TextCapture:
     def cleanup(self):
         """清理资源"""
         self._running = False
-
-        # 停止剪贴板轮询器
-        if self._clipboard_poller:
-            self._clipboard_poller.stop()
-            self._clipboard_poller = None
 
         if self._process:
             try:
@@ -577,3 +258,75 @@ def capture_text_direct() -> str:
 def clear_text_capture():
     """快捷函数：清除缓存"""
     get_text_capture().clear_selection()
+
+
+def get_last_program_name() -> str:
+    """快捷函数：获取最后一次选择的程序名"""
+    return get_text_capture().get_last_program()
+
+
+# 常见浏览器进程名（Windows）
+BROWSER_PROCESS_NAMES = {
+    # Chrome 系列
+    'chrome.exe',
+    'chrome',
+    # Firefox
+    'firefox.exe',
+    'firefox',
+    # Edge
+    'msedge.exe',
+    'msedge',
+    'microsoftedge.exe',
+    'microsoftedge',
+    # Brave
+    'brave.exe',
+    'brave',
+    # Opera
+    'opera.exe',
+    'opera',
+    # Safari (Windows)
+    'safari.exe',
+    'safari',
+    # Vivaldi
+    'vivaldi.exe',
+    'vivaldi',
+    # QQ浏览器
+    'qqbrowser.exe',
+    'qqbrowser',
+    # 360浏览器
+    '360se.exe',
+    '360se',
+    # 搜狗浏览器
+    'sogouexplorer.exe',
+    'sogouexplorer',
+    # UC浏览器
+    'ucbrowser.exe',
+    'ucbrowser',
+}
+
+
+def is_browser_program(program_name: str) -> bool:
+    """判断给定的程序名是否是浏览器
+
+    Args:
+        program_name: 程序名（如 'chrome.exe', 'notepad.exe'）
+
+    Returns:
+        True 如果是浏览器，False 否则
+    """
+    if not program_name:
+        return False
+
+    # 转换为小写进行匹配
+    program_lower = program_name.lower()
+
+    # 直接匹配
+    if program_lower in BROWSER_PROCESS_NAMES:
+        return True
+
+    # 部分匹配（处理可能的路径或其他变体）
+    for browser in BROWSER_PROCESS_NAMES:
+        if browser in program_lower or program_lower in browser:
+            return True
+
+    return False

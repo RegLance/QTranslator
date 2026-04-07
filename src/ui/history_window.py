@@ -32,6 +32,10 @@ class HistoryWindow(QWidget):
         # 设置窗口对象名称，用于识别
         self.setObjectName("HistoryWindow")
 
+        # 窗口状态
+        self._is_maximized = False
+        self._normal_geometry: Optional[QRect] = None
+
         # 拖动状态
         self._is_dragging = False
         self._drag_start_pos: Optional[QPoint] = None
@@ -108,7 +112,7 @@ class HistoryWindow(QWidget):
                 background-color: {theme['button_bg']};
             }}
         """)
-        self._title_bar.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+        # 不设置整体光标，在 mouseMoveEvent 中动态控制
 
         title_layout = QHBoxLayout(self._title_bar)
         title_layout.setContentsMargins(8, 0, 8, 0)
@@ -140,10 +144,55 @@ class HistoryWindow(QWidget):
         self._clear_btn.clicked.connect(self._clear_history)
         title_layout.addWidget(self._clear_btn)
 
+        # 最小化按钮
+        self._minimize_btn = QPushButton("─")
+        self._minimize_btn.setObjectName("minimizeBtn")
+        self._minimize_btn.setFixedSize(20, 20)
+        self._minimize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._minimize_btn.setStyleSheet(f"""
+            QPushButton#minimizeBtn {{
+                background-color: transparent;
+                color: {theme['text_muted']};
+                border: none;
+                border-radius: 10px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+            QPushButton#minimizeBtn:hover {{
+                background-color: {theme['button_hover']};
+                color: {theme['text_primary']};
+            }}
+        """)
+        self._minimize_btn.clicked.connect(self._on_minimize)
+        title_layout.addWidget(self._minimize_btn)
+
+        # 最大化按钮
+        self._maximize_btn = QPushButton("□")
+        self._maximize_btn.setObjectName("maximizeBtn")
+        self._maximize_btn.setFixedSize(20, 20)
+        self._maximize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._maximize_btn.setStyleSheet(f"""
+            QPushButton#maximizeBtn {{
+                background-color: transparent;
+                color: {theme['text_muted']};
+                border: none;
+                border-radius: 10px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QPushButton#maximizeBtn:hover {{
+                background-color: {theme['button_hover']};
+                color: {theme['text_primary']};
+            }}
+        """)
+        self._maximize_btn.clicked.connect(self._on_maximize)
+        title_layout.addWidget(self._maximize_btn)
+
         # 关闭按钮
         self._close_btn = QPushButton("×")
         self._close_btn.setObjectName("closeBtn")
         self._close_btn.setFixedSize(20, 20)
+        self._close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._close_btn.setStyleSheet(f"""
             QPushButton#closeBtn {{
                 background-color: transparent;
@@ -442,6 +491,38 @@ class HistoryWindow(QWidget):
             QPushButton#closeBtn:hover {{
                 background-color: {theme['close_hover']};
                 color: #ffffff;
+            }}
+        """)
+
+        # 更新最小化按钮
+        self._minimize_btn.setStyleSheet(f"""
+            QPushButton#minimizeBtn {{
+                background-color: transparent;
+                color: {theme['text_muted']};
+                border: none;
+                border-radius: 10px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+            QPushButton#minimizeBtn:hover {{
+                background-color: {theme['button_hover']};
+                color: {theme['text_primary']};
+            }}
+        """)
+
+        # 更新最大化按钮
+        self._maximize_btn.setStyleSheet(f"""
+            QPushButton#maximizeBtn {{
+                background-color: transparent;
+                color: {theme['text_muted']};
+                border: none;
+                border-radius: 10px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QPushButton#maximizeBtn:hover {{
+                background-color: {theme['button_hover']};
+                color: {theme['text_primary']};
             }}
         """)
 
@@ -813,9 +894,38 @@ class HistoryWindow(QWidget):
             self._translated_detail.clear()
             self._meta_label.clear()
 
+    def _is_over_title_bar_buttons(self, pos: QPoint) -> bool:
+        """判断鼠标是否在标题栏按钮区域内（包括按钮之间的间距）"""
+        title_bar_height = 28
+        # 首先检查是否在标题栏区域
+        if pos.y() > title_bar_height:
+            return False
+
+        # history_window 的按钮区域包括：清空按钮、最小化、最大化、关闭按钮
+        # 清空按钮在左侧，三个窗口控制按钮在右侧
+        # 窗口控制按钮大小 20x20，右侧有三个按钮
+        button_width = 20
+        total_buttons_width = button_width * 3 + 8  # 三个按钮，额外8px间距余量
+
+        # 标题栏右边距
+        right_margin = 8
+
+        # 右侧按钮区域的左边界
+        window_width = self.width()
+        buttons_left = window_width - right_margin - total_buttons_width
+
+        # 左侧的清空按钮区域（大约 40px 左右）
+        clear_button_width = 40
+        left_margin = 8
+        clear_button_right = left_margin + clear_button_width + 8  # 额外8px余量
+
+        # 检查鼠标是否在按钮区域内（左侧清空按钮或右侧三个控制按钮）
+        return pos.x() >= buttons_left or (pos.x() <= clear_button_right)
+
     def _get_resize_edge(self, pos: QPoint) -> Optional[str]:
         """判断鼠标位置对应的调整边缘"""
-        margin = 8
+        # 增大边缘检测区域，提高灵敏度（从8px增加到12px）
+        margin = 12
         w, h = self.width(), self.height()
         x, y = pos.x(), pos.y()
 
@@ -854,6 +964,27 @@ class HistoryWindow(QWidget):
 
         self.setCursor(QCursor(cursor_shape))
 
+    def _on_minimize(self):
+        """最小化窗口"""
+        self.showMinimized()
+
+    def _on_maximize(self):
+        """最大化/还原窗口"""
+        if self._is_maximized:
+            # 还原
+            if self._normal_geometry:
+                self.setGeometry(self._normal_geometry)
+            self._is_maximized = False
+            self._maximize_btn.setText("□")
+        else:
+            # 最大化
+            self._normal_geometry = self.geometry()
+            screen = QApplication.primaryScreen()
+            if screen:
+                self.setGeometry(screen.availableGeometry())
+            self._is_maximized = True
+            self._maximize_btn.setText("❐")
+
     def show_window(self):
         """显示窗口"""
         # 检查并更新主题
@@ -875,14 +1006,15 @@ class HistoryWindow(QWidget):
     def mousePressEvent(self, event: QMouseEvent):
         """鼠标按下事件"""
         if event.button() == Qt.MouseButton.LeftButton:
-            pos = event.position()
+            pos = event.position().toPoint()
             title_bar_height = 28
-            if pos.y() <= title_bar_height:
+            # 只有在标题栏的非按钮区域才开始拖动
+            if pos.y() <= title_bar_height and not self._is_over_title_bar_buttons(pos):
                 self._is_dragging = True
                 self._drag_start_pos = event.globalPosition().toPoint()
                 self._drag_window_start_pos = self.pos()
             else:
-                edge = self._get_resize_edge(event.position().toPoint())
+                edge = self._get_resize_edge(pos)
                 if edge:
                     self._is_resizing = True
                     self._resize_edge = edge
@@ -892,6 +1024,8 @@ class HistoryWindow(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent):
         """鼠标移动事件"""
+        pos = event.position().toPoint()
+
         if self._is_dragging and self._drag_start_pos:
             delta = event.globalPosition().toPoint() - self._drag_start_pos
             new_pos = self._drag_window_start_pos + delta
@@ -924,8 +1058,19 @@ class HistoryWindow(QWidget):
 
             self.setGeometry(new_x, new_y, new_w, new_h)
         else:
-            edge = self._get_resize_edge(event.position().toPoint())
-            self._update_cursor_for_edge(edge)
+            # 智能光标控制
+            title_bar_height = 28
+            # 1. 首先检查边框调整区域
+            edge = self._get_resize_edge(pos)
+            if edge:
+                self._update_cursor_for_edge(edge)
+            # 2. 检查是否在标题栏非按钮区域（显示拖动光标）
+            elif pos.y() <= title_bar_height and not self._is_over_title_bar_buttons(pos):
+                self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+            # 3. 其他区域显示默认箭头光标
+            else:
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
@@ -937,6 +1082,12 @@ class HistoryWindow(QWidget):
             self._resize_edge = None
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event):
+        """鼠标离开事件"""
+        # 鼠标离开窗口时恢复默认光标
+        self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        super().leaveEvent(event)
 
 
 # 全局历史窗口实例

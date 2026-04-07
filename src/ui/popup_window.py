@@ -90,7 +90,6 @@ class PopupWindow(QWidget):
         # 加载配置
         config = get_config()
         self._opacity = config.get('popup.opacity', 0.95)
-        self._auto_close_delay = config.get('popup.auto_close_delay', 10000)  # 10秒
         self._theme_style = config.get('theme.popup_style', 'dark')
 
         # 窗口尺寸限制
@@ -102,8 +101,10 @@ class PopupWindow(QWidget):
         # 状态
         self._is_loading = False
         self._current_result: Optional[TranslationResult] = None
-        self._auto_close_timer: Optional[QTimer] = None
-        self._is_just_shown: bool = False
+
+        # 窗口状态
+        self._is_maximized = False
+        self._normal_geometry: Optional[QRect] = None
 
         # 拖动状态
         self._is_dragging = False
@@ -123,7 +124,6 @@ class PopupWindow(QWidget):
         self._setup_ui()
         self._apply_theme(self._theme_style)
         self._setup_window_properties()
-        self._setup_auto_close_timer()
 
     def _set_window_icon(self):
         """设置窗口图标（任务栏图标）"""
@@ -191,7 +191,7 @@ class PopupWindow(QWidget):
                 background-color: #3d3d3d;
             }
         """)
-        self._title_bar.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+        # 不设置整体光标，在 mouseMoveEvent 中动态控制
 
         title_layout = QHBoxLayout(self._title_bar)
         title_layout.setContentsMargins(8, 0, 8, 0)
@@ -206,9 +206,55 @@ class PopupWindow(QWidget):
         title_layout.addWidget(self._title_label)
         title_layout.addStretch()
 
+        # 最小化按钮
+        self._minimize_btn = QPushButton("─")
+        self._minimize_btn.setObjectName("minimizeBtn")
+        self._minimize_btn.setFixedSize(20, 20)
+        self._minimize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._minimize_btn.setStyleSheet("""
+            QPushButton#minimizeBtn {
+                background-color: transparent;
+                color: #888888;
+                border: none;
+                border-radius: 10px;
+                font-size: 10px;
+                font-weight: bold;
+            }
+            QPushButton#minimizeBtn:hover {
+                background-color: #5d5d5d;
+                color: #ffffff;
+            }
+        """)
+        self._minimize_btn.clicked.connect(self._on_minimize)
+        title_layout.addWidget(self._minimize_btn)
+
+        # 最大化按钮
+        self._maximize_btn = QPushButton("□")
+        self._maximize_btn.setObjectName("maximizeBtn")
+        self._maximize_btn.setFixedSize(20, 20)
+        self._maximize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._maximize_btn.setStyleSheet("""
+            QPushButton#maximizeBtn {
+                background-color: transparent;
+                color: #888888;
+                border: none;
+                border-radius: 10px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton#maximizeBtn:hover {
+                background-color: #5d5d5d;
+                color: #ffffff;
+            }
+        """)
+        self._maximize_btn.clicked.connect(self._on_maximize)
+        title_layout.addWidget(self._maximize_btn)
+
+        # 关闭按钮
         self._close_btn = QPushButton("×")
         self._close_btn.setObjectName("closeBtn")
         self._close_btn.setFixedSize(20, 20)
+        self._close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._close_btn.setStyleSheet("""
             QPushButton#closeBtn {
                 background-color: transparent;
@@ -414,12 +460,6 @@ class PopupWindow(QWidget):
         self._content_layout.addWidget(self._error_label)
         self._error_label.hide()
 
-    def _setup_auto_close_timer(self):
-        """设置自动关闭计时器"""
-        self._auto_close_timer = QTimer()
-        self._auto_close_timer.setSingleShot(True)
-        self._auto_close_timer.timeout.connect(self._on_auto_close)
-
     def _apply_theme(self, theme_name: str):
         """应用主题样式"""
         theme = THEMES.get(theme_name, THEMES['dark'])
@@ -589,6 +629,59 @@ class PopupWindow(QWidget):
             }}
         """)
 
+        # 更新最小化按钮样式
+        self._minimize_btn.setStyleSheet(f"""
+            QPushButton#minimizeBtn {{
+                background-color: transparent;
+                color: {theme['title_color']};
+                border: none;
+                border-radius: 10px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+            QPushButton#minimizeBtn:hover {{
+                background-color: {theme['scrollbar_handle']};
+                color: #ffffff;
+            }}
+        """)
+
+        # 更新最大化按钮样式
+        self._maximize_btn.setStyleSheet(f"""
+            QPushButton#maximizeBtn {{
+                background-color: transparent;
+                color: {theme['title_color']};
+                border: none;
+                border-radius: 10px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QPushButton#maximizeBtn:hover {{
+                background-color: {theme['scrollbar_handle']};
+                color: #ffffff;
+            }}
+        """)
+
+    def _on_minimize(self):
+        """最小化窗口"""
+        self.showMinimized()
+
+    def _on_maximize(self):
+        """最大化/还原窗口"""
+        if self._is_maximized:
+            # 还原
+            if self._normal_geometry:
+                self.setGeometry(self._normal_geometry)
+            self._is_maximized = False
+            self._maximize_btn.setText("□")
+        else:
+            # 最大化
+            self._normal_geometry = self.geometry()
+            screen = QApplication.primaryScreen()
+            if screen:
+                self.setGeometry(screen.availableGeometry())
+            self._is_maximized = True
+            self._maximize_btn.setText("❐")
+
     def _get_screen_bounds(self) -> Tuple[int, int, int, int]:
         """获取屏幕可用区域"""
         try:
@@ -662,14 +755,10 @@ class PopupWindow(QWidget):
 
         x, y = self._calculate_position(mouse_pos)
         self.move(x, y)
-        self._is_just_shown = True
         self.show()
         self.raise_()
 
-        self._auto_close_timer.start(self._auto_close_delay)
         log_debug(f"PopupWindow 显示在 ({x}, {y})")
-
-        QTimer.singleShot(800, self._reset_just_shown)
 
     def show_loading(self, original_text: str = None):
         """显示加载状态"""
@@ -734,9 +823,6 @@ class PopupWindow(QWidget):
 
         # 最终调整窗口大小
         QTimer.singleShot(100, self._adjust_window_height)
-
-        # 重置自动关闭计时器
-        self._auto_close_timer.start(self._auto_close_delay)
 
     def _adjust_initial_window_height(self):
         """调整初始窗口高度（只有原文区域时）"""
@@ -880,28 +966,40 @@ class PopupWindow(QWidget):
             self._original_scroll.verticalScrollBar().setValue(0)
             self._result_scroll.verticalScrollBar().setValue(0)
 
-        self._auto_close_timer.start(self._auto_close_delay)
-
     def hide(self):
         """隐藏悬浮窗"""
         log_debug("PopupWindow.hide() 被调用")
-        self._auto_close_timer.stop()
         super().hide()
         self.closed.emit()
 
-    def _on_auto_close(self):
-        """自动关闭处理"""
-        log_debug("PopupWindow._on_auto_close 触发")
-        self.hide()
+    def _is_over_title_bar_buttons(self, pos: QPoint) -> bool:
+        """判断鼠标是否在标题栏按钮区域内（包括按钮之间的间距）"""
+        # 获取标题栏相对于窗口的位置
+        title_bar_geo = self._title_bar.geometry()
+        if not title_bar_geo.contains(pos):
+            return False
 
-    def _reset_just_shown(self):
-        """重置刚显示状态"""
-        log_debug("PopupWindow._reset_just_shown 刚显示状态已重置")
-        self._is_just_shown = False
+        # 计算按钮区域（三个按钮都在标题栏右侧）
+        # 按钮大小 20x20
+        button_width = 20
+        total_buttons_width = button_width * 3 + 8  # 三个按钮，额外8px间距余量
+
+        # 标题栏右边距
+        right_margin = 8
+
+        # 按钮区域的左边界
+        title_bar_width = title_bar_geo.width()
+        buttons_left = title_bar_width - right_margin - total_buttons_width
+
+        # 检查鼠标是否在按钮区域内
+        relative_x = pos.x() - title_bar_geo.x()
+
+        return relative_x >= buttons_left
 
     def _get_resize_edge(self, pos: QPoint) -> Optional[str]:
         """判断鼠标位置对应的调整边缘"""
-        margin = 8
+        # 增大边缘检测区域，提高灵敏度（从8px增加到12px）
+        margin = 12
         w, h = self.width(), self.height()
         x, y = pos.x(), pos.y()
 
@@ -943,14 +1041,15 @@ class PopupWindow(QWidget):
     def mousePressEvent(self, event: QMouseEvent):
         """鼠标按下事件"""
         if event.button() == Qt.MouseButton.LeftButton:
-            pos = event.position()
-            if self._title_bar.geometry().contains(int(pos.x()), int(pos.y())):
+            pos = event.position().toPoint()
+            # 只有在标题栏的非按钮区域才开始拖动
+            if self._title_bar.geometry().contains(pos) and not self._is_over_title_bar_buttons(pos):
                 self._is_dragging = True
                 self._drag_start_pos = event.globalPosition().toPoint()
                 self._drag_window_start_pos = self.pos()
                 log_debug("开始拖动窗口")
             else:
-                edge = self._get_resize_edge(event.position().toPoint())
+                edge = self._get_resize_edge(pos)
                 if edge:
                     self._is_resizing = True
                     self._resize_edge = edge
@@ -962,6 +1061,8 @@ class PopupWindow(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent):
         """鼠标移动事件"""
+        pos = event.position().toPoint()
+
         if self._is_dragging and self._drag_start_pos:
             delta = event.globalPosition().toPoint() - self._drag_start_pos
             new_pos = self._drag_window_start_pos + delta
@@ -999,8 +1100,17 @@ class PopupWindow(QWidget):
             self._ensure_within_screen()
 
         else:
-            edge = self._get_resize_edge(event.position().toPoint())
-            self._update_cursor_for_edge(edge)
+            # 智能光标控制
+            # 1. 首先检查边框调整区域
+            edge = self._get_resize_edge(pos)
+            if edge:
+                self._update_cursor_for_edge(edge)
+            # 2. 检查是否在标题栏非按钮区域（显示拖动光标）
+            elif self._title_bar.geometry().contains(pos) and not self._is_over_title_bar_buttons(pos):
+                self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+            # 3. 其他区域显示默认箭头光标
+            else:
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
         super().mouseMoveEvent(event)
 
@@ -1022,26 +1132,13 @@ class PopupWindow(QWidget):
     def enterEvent(self, event):
         """鼠标进入事件"""
         log_debug("PopupWindow.enterEvent 鼠标进入窗口")
-        self._auto_close_timer.stop()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         """鼠标离开事件"""
-        if self._is_just_shown:
-            log_debug("PopupWindow.leaveEvent 被忽略（刚显示状态）")
-            super().leaveEvent(event)
-            return
-
-        # 检查是否启用了鼠标离开自动关闭
-        config = get_config()
-        auto_close_on_leave = config.get('popup.auto_close_on_leave', True)
-
-        if auto_close_on_leave:
-            log_debug("PopupWindow.leaveEvent 鼠标离开窗口，3秒后关闭")
-            self._auto_close_timer.start(3000)
-        else:
-            log_debug("PopupWindow.leaveEvent 鼠标离开窗口，自动关闭已禁用")
-
+        log_debug("PopupWindow.leaveEvent 鼠标离开窗口")
+        # 鼠标离开窗口时恢复默认光标
+        self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         super().leaveEvent(event)
 
     def _show_original_context_menu(self, pos):

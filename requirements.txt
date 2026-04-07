@@ -17,3 +17,9 @@ comtypes>=1.2.0
 
 # 配置文件解析
 PyYAML>=6.0
+
+# 语言检测
+langdetect>=1.0.9
+
+# 全局热键
+keyboard>=0.13.5

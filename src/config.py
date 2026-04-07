@@ -94,12 +94,17 @@ class Config:
                 'popup_style': 'dark',  # 'dark' 或 'light'
                 'opacity': 0.95,
             },
+            'font': {
+                'size': 14,  # 字体大小
+            },
+            'hotkey': {
+                'translator_window': 'Ctrl+Shift+T',  # 唤醒翻译窗口的快捷键
+            },
             'startup': {
                 'auto_start': False,  # 开机自启
             },
             'popup': {
-                'auto_close_delay': 10000,
-                'auto_close_on_leave': True,  # 鼠标离开时自动关闭
+                'opacity': 0.95,
             },
         }
 

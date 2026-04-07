@@ -7,10 +7,11 @@ from PyQt6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QFormLayout, QComboBox,
     QCheckBox, QGroupBox, QMessageBox, QSizePolicy, QFrame,
-    QGraphicsDropShadowEffect, QScrollArea, QMenu, QWidget
+    QGraphicsDropShadowEffect, QScrollArea, QMenu, QWidget,
+    QSpinBox, QKeySequenceEdit
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect
-from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen
+from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence
 
 # 设置高 DPI 支持
 if sys.platform == 'win32':
@@ -36,6 +37,7 @@ try:
     from .utils.logger import get_logger, log_info, log_error, log_debug
     from .utils.history import add_translation_history
     from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style
+    from .utils.hotkey_manager import get_hotkey_manager
 except ImportError:
     from config import get_config, APP_NAME
     from core.text_capture import get_text_capture, capture_text_direct
@@ -51,6 +53,7 @@ except ImportError:
     from utils.logger import get_logger, log_info, log_error, log_debug
     from utils.history import add_translation_history
     from utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style
+    from utils.hotkey_manager import get_hotkey_manager
 
 
 def setup_auto_start(enable: bool):
@@ -162,7 +165,7 @@ class SettingsDialog(QDialog):
         # 标题栏
         self._title_bar = QFrame()
         self._title_bar.setFixedHeight(28)
-        self._title_bar.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+        # 不设置整体光标，在 mouseMoveEvent 中动态控制
 
         title_layout = QHBoxLayout(self._title_bar)
         title_layout.setContentsMargins(8, 0, 8, 0)
@@ -249,18 +252,37 @@ class SettingsDialog(QDialog):
 
         scroll_layout.addWidget(self._theme_group)
 
-        # 弹窗行为设置组
-        self._behavior_group = QGroupBox("弹窗行为")
-        behavior_layout = QVBoxLayout(self._behavior_group)
-        behavior_layout.setSpacing(8)
-        behavior_layout.setContentsMargins(12, 20, 12, 12)
+        # 字体设置组
+        self._font_group = QGroupBox("字体设置")
+        font_layout = QFormLayout(self._font_group)
+        font_layout.setSpacing(10)
+        font_layout.setContentsMargins(12, 20, 12, 12)
+        font_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        self._auto_close_on_leave_check = QCheckBox("鼠标离开时自动关闭弹窗")
-        self._auto_close_on_leave_check.setToolTip("勾选后，鼠标离开翻译弹窗3秒后自动关闭")
-        self._auto_close_on_leave_check.toggled.connect(self._on_checkbox_toggled)
-        behavior_layout.addWidget(self._auto_close_on_leave_check)
+        self._font_size_spin = QSpinBox()
+        self._font_size_spin.setRange(10, 24)
+        self._font_size_spin.setValue(14)
+        self._font_size_spin.setMinimumHeight(32)
+        self._font_size_spin.setSuffix(" px")
+        self._font_size_label = QLabel("字体大小:")
+        font_layout.addRow(self._font_size_label, self._font_size_spin)
 
-        scroll_layout.addWidget(self._behavior_group)
+        scroll_layout.addWidget(self._font_group)
+
+        # 快捷键设置组
+        self._hotkey_group = QGroupBox("快捷键设置")
+        hotkey_layout = QFormLayout(self._hotkey_group)
+        hotkey_layout.setSpacing(10)
+        hotkey_layout.setContentsMargins(12, 20, 12, 12)
+        hotkey_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self._hotkey_edit = QKeySequenceEdit()
+        self._hotkey_edit.setMinimumHeight(32)
+        self._hotkey_edit.setKeySequence(QKeySequence("Ctrl+Shift+T"))
+        self._hotkey_label = QLabel("唤醒翻译窗口:")
+        hotkey_layout.addRow(self._hotkey_label, self._hotkey_edit)
+
+        scroll_layout.addWidget(self._hotkey_group)
 
         # 系统设置组
         self._sys_group = QGroupBox("系统设置")
@@ -441,7 +463,8 @@ class SettingsDialog(QDialog):
         self._api_group.setStyleSheet(groupbox_style)
         self._trans_group.setStyleSheet(groupbox_style)
         self._theme_group.setStyleSheet(groupbox_style)
-        self._behavior_group.setStyleSheet(groupbox_style)
+        self._font_group.setStyleSheet(groupbox_style)
+        self._hotkey_group.setStyleSheet(groupbox_style)
         self._sys_group.setStyleSheet(groupbox_style)
 
         # 输入框样式
@@ -457,20 +480,52 @@ class SettingsDialog(QDialog):
         self._model_label.setStyleSheet(label_style)
         self._target_lang_label.setStyleSheet(label_style)
         self._popup_style_label.setStyleSheet(label_style)
+        self._font_size_label.setStyleSheet(label_style)
+        self._hotkey_label.setStyleSheet(label_style)
 
         # 下拉框样式
         combobox_style = get_combobox_style(self._theme)
         self._target_lang_combo.setStyleSheet(combobox_style)
         self._popup_style_combo.setStyleSheet(combobox_style)
 
+        # 字体大小设置
+        self._font_size_spin.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {self._theme['input_bg']};
+                border: 1px solid {self._theme['input_border']};
+                border-radius: 4px;
+                padding: 4px 8px;
+                color: {self._theme['text_primary']};
+                font-size: 13px;
+            }}
+            QSpinBox:focus {{
+                border-color: {self._theme['accent_color']};
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                width: 16px;
+            }}
+        """)
+
+        # 快捷键设置
+        self._hotkey_edit.setStyleSheet(f"""
+            QKeySequenceEdit {{
+                background-color: {self._theme['input_bg']};
+                border: 1px solid {self._theme['input_border']};
+                border-radius: 4px;
+                padding: 4px 8px;
+                color: {self._theme['text_primary']};
+                font-size: 13px;
+            }}
+            QKeySequenceEdit:focus {{
+                border-color: {self._theme['accent_color']};
+            }}
+        """)
+
         # 复选框样式和图标
         checkbox_style = get_checkbox_style(self._theme)
-        self._auto_close_on_leave_check.setStyleSheet(checkbox_style)
         self._auto_start_check.setStyleSheet(checkbox_style)
-        # 设置复选框图标
         check_icon = self._create_check_icon()
         uncheck_icon = self._create_uncheck_icon()
-        self._auto_close_on_leave_check.setIcon(check_icon if self._auto_close_on_leave_check.isChecked() else uncheck_icon)
         self._auto_start_check.setIcon(check_icon if self._auto_start_check.isChecked() else uncheck_icon)
 
         # 底部按钮栏
@@ -520,12 +575,31 @@ class SettingsDialog(QDialog):
         self._theme = get_theme()
         self._apply_theme()
 
+    def _is_over_title_bar_button(self, pos: QPoint) -> bool:
+        """判断鼠标是否在标题栏按钮区域内"""
+        title_bar_height = 28
+        # 首先检查是否在标题栏区域
+        if pos.y() > title_bar_height:
+            return False
+
+        # 关闭按钮在标题栏右侧，按钮大小 20x20
+        button_width = 20
+        right_margin = 8
+
+        # 按钮区域的左边界
+        window_width = self.width()
+        button_left = window_width - right_margin - button_width - 4  # 额外4px余量
+
+        # 检查鼠标是否在按钮区域内
+        return pos.x() >= button_left
+
     def mousePressEvent(self, event: QMouseEvent):
         """鼠标按下事件"""
         if event.button() == Qt.MouseButton.LeftButton:
-            # 检查是否在标题栏区域
+            pos = event.position().toPoint()
             title_bar_height = 28
-            if event.position().y() <= title_bar_height:
+            # 只有在标题栏的非按钮区域才开始拖动
+            if pos.y() <= title_bar_height and not self._is_over_title_bar_button(pos):
                 self._is_dragging = True
                 self._drag_start_pos = event.globalPosition().toPoint()
                 self._drag_window_start_pos = self.pos()
@@ -534,10 +608,21 @@ class SettingsDialog(QDialog):
 
     def mouseMoveEvent(self, event: QMouseEvent):
         """鼠标移动事件"""
+        pos = event.position().toPoint()
+
         if self._is_dragging and self._drag_start_pos:
             delta = event.globalPosition().toPoint() - self._drag_start_pos
             new_pos = self._drag_window_start_pos + delta
             self.move(new_pos)
+        else:
+            # 智能光标控制
+            title_bar_height = 28
+            # 检查是否在标题栏非按钮区域（显示拖动光标）
+            if pos.y() <= title_bar_height and not self._is_over_title_bar_button(pos):
+                self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+            # 其他区域显示默认箭头光标
+            else:
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
         super().mouseMoveEvent(event)
 
@@ -549,6 +634,12 @@ class SettingsDialog(QDialog):
 
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event):
+        """鼠标离开事件"""
+        # 鼠标离开窗口时恢复默认光标
+        self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        super().leaveEvent(event)
 
     def _load_settings(self):
         """加载设置"""
@@ -564,9 +655,13 @@ class SettingsDialog(QDialog):
         popup_style = self._config.get('theme.popup_style', 'dark')
         self._popup_style_combo.setCurrentIndex(0 if popup_style == 'dark' else 1)
 
-        self._auto_close_on_leave_check.setChecked(
-            self._config.get('popup.auto_close_on_leave', True)
-        )
+        # 字体大小
+        font_size = self._config.get('font.size', 14)
+        self._font_size_spin.setValue(font_size)
+
+        # 快捷键
+        hotkey = self._config.get('hotkey.translator_window', 'Ctrl+Shift+T')
+        self._hotkey_edit.setKeySequence(QKeySequence(hotkey))
 
         self._auto_start_check.setChecked(self._config.get('startup.auto_start', False))
 
@@ -594,7 +689,12 @@ class SettingsDialog(QDialog):
             popup_style = 'dark' if self._popup_style_combo.currentIndex() == 0 else 'light'
             self._config.set('theme.popup_style', popup_style)
 
-            self._config.set('popup.auto_close_on_leave', self._auto_close_on_leave_check.isChecked())
+            # 字体大小
+            self._config.set('font.size', self._font_size_spin.value())
+
+            # 快捷键
+            hotkey = self._hotkey_edit.keySequence().toString()
+            self._config.set('hotkey.translator_window', hotkey)
 
             auto_start = self._auto_start_check.isChecked()
             self._config.set('startup.auto_start', auto_start)
@@ -846,12 +946,14 @@ class MainController(QObject):
         self._tray_icon = get_tray_icon()
         self._translator = get_translator()
         self._text_capture = get_text_capture()
+        self._hotkey_manager = get_hotkey_manager()
 
         self._current_worker: StreamingTranslationWorker = None
         self._last_text: str = ""
 
         self._connect_signals()
         self._check_config()
+        self._setup_hotkey()
 
     def _connect_signals(self):
         self._selection_detector.selection_finished.connect(self._on_selection_finished)
@@ -863,6 +965,7 @@ class MainController(QObject):
         self._tray_icon.history_requested.connect(self._on_history_requested)
         self._tray_icon.help_requested.connect(self._on_help_requested)
         self._popup_window.closed.connect(self._on_popup_closed)
+        self._hotkey_manager.hotkey_triggered.connect(self._on_hotkey_triggered)
 
     def _check_config(self):
         """检查 API 配置是否完整"""
@@ -877,6 +980,12 @@ class MainController(QObject):
                 "warning"
             )
 
+    def _setup_hotkey(self):
+        """设置全局热键"""
+        hotkey = self._config.get('hotkey.translator_window', 'Ctrl+Shift+T')
+        self._hotkey_manager.register_hotkey(hotkey, self._on_hotkey_triggered)
+        log_debug(f"已注册热键: {hotkey}")
+
     def start(self):
         self._selection_detector.start()
         self._tray_icon.show()
@@ -885,6 +994,9 @@ class MainController(QObject):
     def stop(self):
         self._selection_detector.stop()
         self._selection_detector.cleanup()
+
+        # 停止热键监听
+        self._hotkey_manager.stop()
 
         if self._current_worker:
             self._current_worker.cancel()
@@ -899,6 +1011,18 @@ class MainController(QObject):
         self._text_capture.cleanup()
 
         log_info(f"{APP_NAME} 已停止")
+
+    def _on_hotkey_triggered(self):
+        """热键触发时显示翻译窗口"""
+        log_debug("热键触发，显示翻译窗口")
+        # 先隐藏划词翻译相关窗口
+        self._popup_window.hide()
+        self._translate_button.hide()
+        self._last_text = ""
+
+        # 显示翻译窗口
+        translator_window = get_translator_window()
+        translator_window.show_window()
 
     def _on_selection_finished(self):
         if not self._tray_icon._is_enabled:

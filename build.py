@@ -32,6 +32,10 @@ def get_spec_content() -> str:
         "comtypes.client",
         "yaml",
         "yaml.safe_load",
+        # 新增依赖
+        "langdetect",
+        "langdetect.lang_detect_exception",
+        "keyboard",
     ]
 
     # 添加所有 src 目录下的模块
@@ -143,6 +147,11 @@ a = Analysis(
         "comtypes.client",
         "yaml",
         "yaml.safe_load",
+        # 新增依赖包
+        "langdetect",
+        "langdetect.lang_detect_exception",
+        "keyboard",
+        # 核心模块
         "src.config",
         "src.main",
         "src.__init__",
@@ -151,14 +160,20 @@ a = Analysis(
         "src.core.text_capture",
         "src.core.translator",
         "src.core.__init__",
+        # UI 模块
         "src.ui.history_window",
         "src.ui.popup_window",
         "src.ui.translate_button",
         "src.ui.translator_window",
         "src.ui.tray_icon",
+        "src.ui.help_window",  # 新增
         "src.ui.__init__",
+        # 工具模块
         "src.utils.history",
         "src.utils.logger",
+        "src.utils.language_detector",  # 新增
+        "src.utils.hotkey_manager",  # 新增
+        "src.utils.theme",  # 新增
         "src.utils.__init__",
     ],
     hookspath=[],

@@ -1,4 +1,4 @@
-"""翻译服务模块 - OpenAI API 封装（支持流式翻译）"""
+"""翻译服务模块 - OpenAI API 封装（支持流式翻译、智能语言检测）"""
 import hashlib
 from typing import Optional, Dict, Generator, Callable
 from dataclasses import dataclass
@@ -14,10 +14,12 @@ from openai import OpenAI
 
 try:
     from ..config import get_config
-    from ..utils.logger import log_warning, log_info, log_translation
+    from ..utils.logger import log_warning, log_info, log_translation, log_debug
+    from ..utils.language_detector import detect_language, is_chinese_text, get_translation_direction
 except ImportError:
     from config import get_config
-    from utils.logger import log_warning, log_info, log_translation
+    from utils.logger import log_warning, log_info, log_translation, log_debug
+    from utils.language_detector import detect_language, is_chinese_text, get_translation_direction
 
 
 @dataclass
@@ -55,33 +57,106 @@ class Translator:
             timeout=config.get('translator.timeout', 60),
         )
 
-    def _get_cache_key(self, text: str, target_language: str) -> str:
+    def _get_cache_key(self, text: str, target_language: str, source_language: str = None) -> str:
         """生成缓存键"""
-        return hashlib.md5(f"{text}:{target_language}".encode()).hexdigest()
+        return hashlib.md5(f"{text}:{source_language}:{target_language}".encode()).hexdigest()
 
-    def _build_prompt(self, text: str, target_language: str) -> str:
-        """构建翻译 Prompt"""
-        return f"""你是一个专业的翻译助手。请将以下文本翻译成{target_language}。
+    def _build_translation_prompt(self, text: str, source_lang: str, target_lang: str) -> tuple:
+        """构建翻译提示词（参考 nextai-translator）
+        
+        Returns:
+            tuple: (system_prompt, user_prompt)
+        """
+        # 判断是否翻译成中文
+        to_chinese = target_lang in ['中文', 'zh', 'zh-cn', 'zh-hans']
+        
+        # 判断是否是单词模式（短文本且无空格或只有一个单词）
+        is_single_word = len(text.strip()) <= 20 and (
+            ' ' not in text.strip() or 
+            (text.strip().count(' ') == 0 and len(text.strip()) < 15)
+        )
+        
+        if to_chinese:
+            # 翻译成中文
+            if is_single_word and not is_chinese_text(text):
+                # 单词模式：详细翻译
+                system_prompt = """你是一个翻译引擎，请翻译给出的文本，只需要翻译不需要解释。
+当且仅当文本只有一个单词时，请给出单词原始形态（如果有）、单词的语种、对应的音标、所有含义（含词性）、双语示例，至少三条例句。
+如果你认为单词拼写错误，请提示我最可能的正确拼写，否则请严格按照下面格式给到翻译结果：
 
-要求：
-1. 如果文本已经是{target_language}，请简要解释其含义或用法
-2. 保持原文的风格和语气
-3. 对于专业术语，给出准确的翻译
-4. 如果是代码或技术内容，保持专业性和准确性
-5. 简洁输出，不需要额外的解释
+<单词>
+[<语种>]· /[<音标>]
+[<词性缩写>] <中文含义>]
+例句：
+<序号><例句>(例句翻译)
+词源：
+<词源>"""
+                user_prompt = f"单词是：{text}"
+            else:
+                # 普通翻译模式
+                system_prompt = f"""你是一个专业的翻译引擎，请将文本翻译成{target_lang}。
+翻译要求：
+1. 保持原文的风格和语气
+2. 对于专业术语，给出准确的翻译
+3. 如果是代码或技术内容，保持专业性和准确性
+4. 直接输出翻译结果，不要添加解释或注释
+5. 翻译应该自然流畅，符合目标语言的表达习惯"""
+                user_prompt = text
+        else:
+            # 翻译成其他语言（如英文）
+            if is_single_word and is_chinese_text(text):
+                # 中文单词翻译成英文
+                system_prompt = f"""You are a professional translation engine.
+Please translate the text into {target_lang} without explanation.
+When the text has only one word or short phrase, please act as a professional Chinese-English dictionary,
+and list all senses with parts of speech, sentence examples (at least 3).
 
-原文: {text}
+Format:
+<word>
+[<part of speech>] <meaning>
+Examples:
+<index>. <sentence>(<sentence translation>)"""
+                user_prompt = f"The word/phrase is: {text}"
+            else:
+                # 普通翻译模式
+                system_prompt = f"""You are a professional translation engine.
+Please translate the text into {target_lang} without explanation.
 
-翻译结果:"""
+Requirements:
+1. Keep the style and tone of the original text
+2. For professional terms, provide accurate translations
+3. For code or technical content, maintain professionalism and accuracy
+4. Output the translation directly without adding explanations
+5. The translation should be natural and fluent"""
+                user_prompt = text
+
+        return (system_prompt, user_prompt)
+
+    def _build_smart_prompt(self, text: str) -> tuple:
+        """构建智能翻译提示词（自动检测语言并确定翻译方向）
+        
+        Returns:
+            tuple: (system_prompt, user_prompt, source_lang, target_lang)
+        """
+        # 检测语言并确定翻译方向
+        source_lang, target_lang, source_code = get_translation_direction(text)
+        
+        log_debug(f"智能翻译: {source_lang} -> {target_lang}")
+        
+        system_prompt, user_prompt = self._build_translation_prompt(text, source_lang, target_lang)
+        
+        return (system_prompt, user_prompt, source_lang, target_lang)
 
     def translate_stream(self, text: str, target_language: str = None,
-                         on_chunk: Callable[[str], None] = None) -> Generator[str, None, None]:
+                         on_chunk: Callable[[str], None] = None,
+                         auto_detect: bool = True) -> Generator[str, None, None]:
         """流式翻译文本
 
         Args:
             text: 待翻译的文本
-            target_language: 目标语言
+            target_language: 目标语言（如果为None且auto_detect=True，则自动检测）
             on_chunk: 每次收到新内容时的回调函数
+            auto_detect: 是否自动检测语言并确定翻译方向
 
         Yields:
             str: 翻译结果的文本片段
@@ -91,11 +166,24 @@ class Translator:
             return
 
         text = text.strip()
-        if target_language is None:
-            target_language = get_config().target_language
+        
+        # 智能检测语言并确定翻译方向
+        if auto_detect and target_language is None:
+            source_lang, target_lang, source_code = get_translation_direction(text)
+            system_prompt, user_prompt = self._build_translation_prompt(text, source_lang, target_lang)
+            cache_key = self._get_cache_key(text, target_lang, source_lang)
+        else:
+            # 使用指定的目标语言
+            if target_language is None:
+                target_language = get_config().target_language
+            
+            # 检测源语言
+            source_code, source_lang = detect_language(text)
+            system_prompt, user_prompt = self._build_translation_prompt(text, source_lang, target_language)
+            cache_key = self._get_cache_key(text, target_language, source_lang)
+            target_lang = target_language
 
         # 检查缓存
-        cache_key = self._get_cache_key(text, target_language)
         if cache_key in self._cache:
             cached_result = self._cache[cache_key].translated_text
             yield cached_result
@@ -103,7 +191,6 @@ class Translator:
 
         # 检查客户端
         if self._client is None:
-            # 检查是否未配置 API
             config = get_config()
             api_key = config.get('translator.api_key', '')
             base_url = config.get('translator.base_url', '')
@@ -119,7 +206,6 @@ class Translator:
                 yield "[错误: 请先在设置中配置 Model]"
                 return
 
-            # 重新初始化客户端
             self._init_client()
             if self._client is None:
                 yield "[错误: API 配置无效，请检查设置]"
@@ -130,12 +216,12 @@ class Translator:
             stream = self._client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "你是一个专业的翻译助手，擅长多种语言的互译。"},
-                    {"role": "user", "content": self._build_prompt(text, target_language)}
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
                 ],
                 max_tokens=1000,
                 temperature=0.3,
-                stream=True,  # 启用流式输出
+                stream=True,
             )
 
             full_text = ""
@@ -151,7 +237,8 @@ class Translator:
             result = TranslationResult(
                 original_text=text,
                 translated_text=full_text.strip(),
-                target_language=target_language
+                source_language=source_lang,
+                target_language=target_lang
             )
             self._cache[cache_key] = result
 
@@ -168,7 +255,8 @@ class Translator:
 
             yield f"[错误: {error_msg}]"
 
-    def translate_sync(self, text: str, target_language: str = None) -> TranslationResult:
+    def translate_sync(self, text: str, target_language: str = None,
+                        auto_detect: bool = True) -> TranslationResult:
         """同步翻译（用于非流式场景）"""
         if not text or not text.strip():
             return TranslationResult(
@@ -178,17 +266,27 @@ class Translator:
             )
 
         text = text.strip()
-        if target_language is None:
-            target_language = get_config().target_language
+        
+        # 智能检测语言并确定翻译方向
+        if auto_detect and target_language is None:
+            source_lang, target_lang, source_code = get_translation_direction(text)
+            system_prompt, user_prompt = self._build_translation_prompt(text, source_lang, target_lang)
+            cache_key = self._get_cache_key(text, target_lang, source_lang)
+        else:
+            if target_language is None:
+                target_language = get_config().target_language
+            
+            source_code, source_lang = detect_language(text)
+            system_prompt, user_prompt = self._build_translation_prompt(text, source_lang, target_language)
+            cache_key = self._get_cache_key(text, target_language, source_lang)
+            target_lang = target_language
 
         # 检查缓存
-        cache_key = self._get_cache_key(text, target_language)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
         # 检查客户端
         if self._client is None:
-            # 检查是否未配置 API
             config = get_config()
             api_key = config.get('translator.api_key', '')
             base_url = config.get('translator.base_url', '')
@@ -199,31 +297,30 @@ class Translator:
                     original_text=text,
                     translated_text="",
                     error="请先在设置中配置 API Key",
-                    target_language=target_language
+                    target_language=target_lang
                 )
             if not base_url:
                 return TranslationResult(
                     original_text=text,
                     translated_text="",
                     error="请先在设置中配置 Base URL",
-                    target_language=target_language
+                    target_language=target_lang
                 )
             if not model:
                 return TranslationResult(
                     original_text=text,
                     translated_text="",
                     error="请先在设置中配置 Model",
-                    target_language=target_language
+                    target_language=target_lang
                 )
 
-            # 重新初始化客户端
             self._init_client()
             if self._client is None:
                 return TranslationResult(
                     original_text=text,
                     translated_text="",
                     error="API 配置无效，请检查设置",
-                    target_language=target_language
+                    target_language=target_lang
                 )
 
         try:
@@ -231,8 +328,8 @@ class Translator:
             response = self._client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "你是一个专业的翻译助手，擅长多种语言的互译。"},
-                    {"role": "user", "content": self._build_prompt(text, target_language)}
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
                 ],
                 max_tokens=1000,
                 temperature=0.3,
@@ -243,12 +340,11 @@ class Translator:
             result = TranslationResult(
                 original_text=text,
                 translated_text=translated_text,
-                target_language=target_language
+                source_language=source_lang,
+                target_language=target_lang
             )
 
-            # 存入缓存
             self._cache[cache_key] = result
-
             return result
 
         except Exception as e:
@@ -264,7 +360,7 @@ class Translator:
                 original_text=text,
                 translated_text="",
                 error=error_msg,
-                target_language=target_language
+                target_language=target_lang
             )
 
     def clear_cache(self):

@@ -68,8 +68,13 @@ def is_chinese_text(text: str) -> bool:
     if len(non_space_chars) == 0:
         return False
     
-    # 如果中文字符占比超过 30%，认为是中文文本
-    return len(chinese_chars) / len(non_space_chars) > 0.3
+    ratio = len(chinese_chars) / len(non_space_chars)
+    result = ratio > 0.3
+    
+    # 调试日志
+    log_debug(f"[语言检测] 中文字符数={len(chinese_chars)}, 总字符数={len(non_space_chars)}, 比例={ratio:.2f}, 判断为中文={result}")
+    
+    return result
 
 
 def detect_language(text: str) -> Tuple[str, str]:

@@ -99,12 +99,16 @@ class Config:
             },
             'hotkey': {
                 'translator_window': 'Ctrl+Shift+T',  # 唤醒翻译窗口的快捷键
+                'writing': 'Ctrl+Shift+W',  # 写作快捷键
             },
             'startup': {
                 'auto_start': False,  # 开机自启
             },
             'popup': {
                 'opacity': 0.95,
+            },
+            'writing': {
+                'keep_original': False,  # 保留原文
             },
         }
 

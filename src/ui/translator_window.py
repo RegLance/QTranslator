@@ -57,6 +57,83 @@ class StreamingTranslationWorker(QThread):
         self._is_cancelled = True
 
 
+class StreamingPolishingWorker(QThread):
+    """流式润色工作线程"""
+
+    chunk_received = pyqtSignal(str)
+    polishing_finished = pyqtSignal(str)
+    polishing_error = pyqtSignal(str)
+
+    def __init__(self, text: str):
+        super().__init__()
+        self._text = text
+        self._is_cancelled = False
+
+    def run(self):
+        try:
+            from core.translator import get_translator
+            translator = get_translator()
+            full_text = ""
+
+            for chunk in translator.polishing_stream(self._text):
+                if self._is_cancelled:
+                    return
+
+                if chunk:
+                    full_text += chunk
+                    self.chunk_received.emit(chunk)
+
+            if not self._is_cancelled:
+                self.polishing_finished.emit(full_text)
+
+        except Exception as e:
+            if not self._is_cancelled:
+                self.polishing_error.emit(str(e))
+
+    def cancel(self):
+        """取消润色"""
+        self._is_cancelled = True
+
+
+class StreamingSummarizeWorker(QThread):
+    """流式总结工作线程"""
+
+    chunk_received = pyqtSignal(str)
+    summarize_finished = pyqtSignal(str)
+    summarize_error = pyqtSignal(str)
+
+    def __init__(self, text: str, target_language: str = "中文"):
+        super().__init__()
+        self._text = text
+        self._target_language = target_language
+        self._is_cancelled = False
+
+    def run(self):
+        try:
+            from core.translator import get_translator
+            translator = get_translator()
+            full_text = ""
+
+            for chunk in translator.summarize_stream(self._text, self._target_language):
+                if self._is_cancelled:
+                    return
+
+                if chunk:
+                    full_text += chunk
+                    self.chunk_received.emit(chunk)
+
+            if not self._is_cancelled:
+                self.summarize_finished.emit(full_text)
+
+        except Exception as e:
+            if not self._is_cancelled:
+                self.summarize_error.emit(str(e))
+
+    def cancel(self):
+        """取消总结"""
+        self._is_cancelled = True
+
+
 class TranslatorWindow(QWidget):
     """独立翻译窗口（无边框，支持调整大小、主题切换、纯文本显示）"""
 
@@ -125,6 +202,8 @@ class TranslatorWindow(QWidget):
                 border: 1px solid {theme['border_color']};
             }}
         """)
+        # 开启鼠标追踪
+        self._content_frame.setMouseTracking(True)
         layout.addWidget(self._content_frame)
 
         # 添加阴影效果
@@ -152,7 +231,8 @@ class TranslatorWindow(QWidget):
                 background-color: {theme['button_bg']};
             }}
         """)
-        # 不设置整体光标，在 mouseMoveEvent 中动态控制
+        # 开启鼠标追踪，让鼠标移动事件能传递到主窗口
+        self._title_bar.setMouseTracking(True)
 
         title_layout = QHBoxLayout(self._title_bar)
         title_layout.setContentsMargins(8, 0, 8, 0)
@@ -165,6 +245,7 @@ class TranslatorWindow(QWidget):
                 font-size: 12px;
             }}
         """)
+        self._title_label.setMouseTracking(True)
         title_layout.addWidget(self._title_label)
         title_layout.addStretch()
 
@@ -300,6 +381,54 @@ class TranslatorWindow(QWidget):
         self._translate_btn.clicked.connect(self._start_translation)
         control_layout.addWidget(self._translate_btn)
 
+        # 润色按钮
+        self._polishing_btn = QPushButton("润色")
+        self._polishing_btn.setFixedHeight(28)
+        self._polishing_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._polishing_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {theme['button_bg']};
+                color: {theme['text_primary']};
+                border: 1px solid {theme['border_color']};
+                border-radius: 4px;
+                padding: 0 12px;
+                font-size: 13px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['button_hover']};
+            }}
+            QPushButton:disabled {{
+                background-color: {theme['scrollbar_handle']};
+                color: {theme['text_muted']};
+            }}
+        """)
+        self._polishing_btn.clicked.connect(self._start_polishing)
+        control_layout.addWidget(self._polishing_btn)
+
+        # 总结按钮
+        self._summarize_btn = QPushButton("总结")
+        self._summarize_btn.setFixedHeight(28)
+        self._summarize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._summarize_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {theme['button_bg']};
+                color: {theme['text_primary']};
+                border: 1px solid {theme['border_color']};
+                border-radius: 4px;
+                padding: 0 12px;
+                font-size: 13px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['button_hover']};
+            }}
+            QPushButton:disabled {{
+                background-color: {theme['scrollbar_handle']};
+                color: {theme['text_muted']};
+            }}
+        """)
+        self._summarize_btn.clicked.connect(self._start_summarize)
+        control_layout.addWidget(self._summarize_btn)
+
         content_layout.addWidget(self._control_bar)
 
         # 分割器
@@ -359,6 +488,11 @@ class TranslatorWindow(QWidget):
         # 设置分割器初始比例
         self._splitter.setSizes([150, 150])
         content_layout.addWidget(self._splitter, 1)
+
+        # 为标题栏安装事件过滤器，以便处理鼠标移动事件更新光标
+        self._title_bar.installEventFilter(self)
+        self._title_label.installEventFilter(self)
+        self._content_frame.installEventFilter(self)
 
     def _on_minimize(self):
         """最小化窗口"""
@@ -512,6 +646,44 @@ class TranslatorWindow(QWidget):
             }}
         """)
 
+        # 更新润色按钮
+        self._polishing_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {theme['button_bg']};
+                color: {theme['text_primary']};
+                border: 1px solid {theme['border_color']};
+                border-radius: 4px;
+                padding: 0 12px;
+                font-size: 13px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['button_hover']};
+            }}
+            QPushButton:disabled {{
+                background-color: {theme['scrollbar_handle']};
+                color: {theme['text_muted']};
+            }}
+        """)
+
+        # 更新总结按钮
+        self._summarize_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {theme['button_bg']};
+                color: {theme['text_primary']};
+                border: 1px solid {theme['border_color']};
+                border-radius: 4px;
+                padding: 0 12px;
+                font-size: 13px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['button_hover']};
+            }}
+            QPushButton:disabled {{
+                background-color: {theme['scrollbar_handle']};
+                color: {theme['text_muted']};
+            }}
+        """)
+
         # 更新分割器
         self._splitter.setStyleSheet(get_splitter_style(theme))
 
@@ -570,6 +742,8 @@ class TranslatorWindow(QWidget):
         # 禁用按钮
         self._translate_btn.setEnabled(False)
         self._translate_btn.setText("翻译中...")
+        self._polishing_btn.setEnabled(False)
+        self._summarize_btn.setEnabled(False)
 
         # 获取目标语言
         target_language = self._lang_combo.currentText()
@@ -585,39 +759,228 @@ class TranslatorWindow(QWidget):
 
     def _on_chunk_received(self, chunk: str):
         """收到翻译片段"""
-        if not hasattr(self, '_streaming_text'):
-            self._streaming_text = ""
-        self._streaming_text += chunk
-        self._output_text.setPlainText(self._streaming_text)
+        try:
+            if not hasattr(self, '_streaming_text'):
+                self._streaming_text = ""
+            self._streaming_text += chunk
+            self._output_text.setPlainText(self._streaming_text)
+        except RuntimeError:
+            # 窗口已被销毁，忽略
+            pass
 
     def _on_translation_finished(self, result: str):
         """翻译完成"""
-        self._translate_btn.setEnabled(True)
-        self._translate_btn.setText("翻译")
-        self._current_worker = None
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._do_translation_finished(result))
 
-        # 保存翻译历史
-        if result:
-            try:
-                from utils.history import add_translation_history
-                target_lang = self._lang_combo.currentText()
-                if target_lang == "自动检测":
-                    target_lang = "中文"  # 默认
-                add_translation_history(
-                    self._input_text.toPlainText(),
-                    result,
-                    target_lang,
-                    "manual"
-                )
-            except Exception:
-                pass
+    def _do_translation_finished(self, result: str):
+        """实际执行翻译完成操作"""
+        try:
+            self._translate_btn.setEnabled(True)
+            self._translate_btn.setText("翻译")
+            self._polishing_btn.setEnabled(True)
+            self._summarize_btn.setEnabled(True)
+            self._current_worker = None
+
+            # 保存翻译历史
+            if result:
+                try:
+                    from utils.history import add_translation_history
+                    target_lang = self._lang_combo.currentText()
+                    if target_lang == "自动检测":
+                        target_lang = "中文"  # 默认
+                    add_translation_history(
+                        self._input_text.toPlainText(),
+                        result,
+                        target_lang,
+                        "manual"
+                    )
+                except Exception:
+                    pass
+        except RuntimeError:
+            # 窗口已被销毁，忽略
+            pass
 
     def _on_translation_error(self, error: str):
         """翻译错误"""
-        self._output_text.setPlainText(f"翻译失败: {error}")
-        self._translate_btn.setEnabled(True)
-        self._translate_btn.setText("翻译")
-        self._current_worker = None
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._do_translation_error(error))
+
+    def _do_translation_error(self, error: str):
+        """实际执行翻译错误操作"""
+        try:
+            self._output_text.setPlainText(f"翻译失败: {error}")
+            self._translate_btn.setEnabled(True)
+            self._translate_btn.setText("翻译")
+            self._polishing_btn.setEnabled(True)
+            self._summarize_btn.setEnabled(True)
+            self._current_worker = None
+        except RuntimeError:
+            # 窗口已被销毁，忽略
+            pass
+
+    def _start_polishing(self):
+        """开始润色"""
+        text = self._input_text.toPlainText().strip()
+        if not text:
+            return
+
+        # 取消之前的任务
+        if self._current_worker and self._current_worker.isRunning():
+            self._current_worker.cancel()
+            self._current_worker.wait(1000)
+            self._current_worker = None
+
+        # 清空输出
+        self._output_text.clear()
+        self._streaming_text = ""
+
+        # 禁用所有操作按钮
+        self._translate_btn.setEnabled(False)
+        self._polishing_btn.setEnabled(False)
+        self._polishing_btn.setText("润色中...")
+        self._summarize_btn.setEnabled(False)
+
+        # 启动润色线程
+        self._current_worker = StreamingPolishingWorker(text)
+        self._current_worker.chunk_received.connect(self._on_chunk_received)
+        self._current_worker.polishing_finished.connect(self._on_polishing_finished)
+        self._current_worker.polishing_error.connect(self._on_polishing_error)
+        self._current_worker.start()
+
+    def _on_polishing_finished(self, result: str):
+        """润色完成"""
+        # 使用 QTimer 延迟执行，避免在信号槽中直接操作
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._do_polishing_finished(result))
+
+    def _do_polishing_finished(self, result: str):
+        """实际执行润色完成操作（在主线程中）"""
+        try:
+            self._translate_btn.setEnabled(True)
+            self._polishing_btn.setEnabled(True)
+            self._polishing_btn.setText("润色")
+            self._summarize_btn.setEnabled(True)
+            self._current_worker = None
+
+            # 保存润色历史
+            if result:
+                try:
+                    from utils.history import add_translation_history
+                    add_translation_history(
+                        self._input_text.toPlainText(),
+                        result,
+                        "润色",
+                        "polishing"
+                    )
+                except Exception:
+                    pass
+        except RuntimeError:
+            # 窗口已被销毁，忽略
+            pass
+
+    def _on_polishing_error(self, error: str):
+        """润色错误"""
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._do_polishing_error(error))
+
+    def _do_polishing_error(self, error: str):
+        """实际执行润色错误操作（在主线程中）"""
+        try:
+            self._output_text.setPlainText(f"润色失败: {error}")
+            self._translate_btn.setEnabled(True)
+            self._polishing_btn.setEnabled(True)
+            self._polishing_btn.setText("润色")
+            self._summarize_btn.setEnabled(True)
+            self._current_worker = None
+        except RuntimeError:
+            # 窗口已被销毁，忽略
+            pass
+
+    def _start_summarize(self):
+        """开始总结"""
+        text = self._input_text.toPlainText().strip()
+        if not text:
+            return
+
+        # 取消之前的任务
+        if self._current_worker and self._current_worker.isRunning():
+            self._current_worker.cancel()
+            self._current_worker.wait(1000)
+            self._current_worker = None
+
+        # 清空输出
+        self._output_text.clear()
+        self._streaming_text = ""
+
+        # 禁用所有操作按钮
+        self._translate_btn.setEnabled(False)
+        self._polishing_btn.setEnabled(False)
+        self._summarize_btn.setEnabled(False)
+        self._summarize_btn.setText("总结中...")
+
+        # 获取目标语言（用于总结输出的语言）
+        target_language = self._lang_combo.currentText()
+        if target_language == "自动检测":
+            target_language = "中文"
+
+        # 启动总结线程
+        self._current_worker = StreamingSummarizeWorker(text, target_language)
+        self._current_worker.chunk_received.connect(self._on_chunk_received)
+        self._current_worker.summarize_finished.connect(self._on_summarize_finished)
+        self._current_worker.summarize_error.connect(self._on_summarize_error)
+        self._current_worker.start()
+
+    def _on_summarize_finished(self, result: str):
+        """总结完成"""
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._do_summarize_finished(result))
+
+    def _do_summarize_finished(self, result: str):
+        """实际执行总结完成操作"""
+        try:
+            self._translate_btn.setEnabled(True)
+            self._polishing_btn.setEnabled(True)
+            self._summarize_btn.setEnabled(True)
+            self._summarize_btn.setText("总结")
+            self._current_worker = None
+
+            # 保存总结历史
+            if result:
+                try:
+                    from utils.history import add_translation_history
+                    target_lang = self._lang_combo.currentText()
+                    if target_lang == "自动检测":
+                        target_lang = "中文"
+                    add_translation_history(
+                        self._input_text.toPlainText(),
+                        result,
+                        target_lang,
+                        "summarize"
+                    )
+                except Exception:
+                    pass
+        except RuntimeError:
+            # 窗口已被销毁，忽略
+            pass
+
+    def _on_summarize_error(self, error: str):
+        """总结错误"""
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._do_summarize_error(error))
+
+    def _do_summarize_error(self, error: str):
+        """实际执行总结错误操作"""
+        try:
+            self._output_text.setPlainText(f"总结失败: {error}")
+            self._translate_btn.setEnabled(True)
+            self._polishing_btn.setEnabled(True)
+            self._summarize_btn.setEnabled(True)
+            self._summarize_btn.setText("总结")
+            self._current_worker = None
+        except RuntimeError:
+            # 窗口已被销毁，忽略
+            pass
 
     def _show_input_context_menu(self, pos):
         """显示输入框右键菜单"""
@@ -712,40 +1075,37 @@ class TranslatorWindow(QWidget):
 
     def _get_resize_edge(self, pos: QPoint) -> Optional[str]:
         """判断鼠标位置对应的调整边缘（优化灵敏度）"""
-        # 增大边缘检测区域，使整个边框都能触发调整大小
-        # 边缘区域使用较大的 margin (32px)，角落区域使用较小的 margin (16px)
-        edge_margin = 32  # 边缘检测区域 - 覆盖整个边框
-        corner_margin = 16  # 角落检测区域（需要更精确）
+        # 边缘检测区域 - 覆盖整个边框和边缘附近的区域
+        edge_margin = 15  # 边缘检测宽度
 
         w, h = self.width(), self.height()
         x, y = pos.x(), pos.y()
 
+        # 分别检测四个方向的边缘（不使用 elif，以支持组合）
+        on_left = x <= edge_margin
+        on_right = x >= w - edge_margin
+        on_top = y <= edge_margin
+        on_bottom = y >= h - edge_margin
+
+        # 组合边缘检测结果
         edge = None
-
-        # 先检测边缘（优先级高于角落），避免在边缘附近误判为角落
-        if x <= edge_margin:
+        
+        if on_top and on_left:
+            edge = 'top-left'
+        elif on_top and on_right:
+            edge = 'top-right'
+        elif on_bottom and on_left:
+            edge = 'bottom-left'
+        elif on_bottom and on_right:
+            edge = 'bottom-right'
+        elif on_top:
+            edge = 'top'
+        elif on_bottom:
+            edge = 'bottom'
+        elif on_left:
             edge = 'left'
-        elif x >= w - edge_margin:
+        elif on_right:
             edge = 'right'
-
-        if y <= edge_margin:
-            edge = 'top' if edge is None else f'top-{edge}'
-        elif y >= h - edge_margin:
-            edge = 'bottom' if edge is None else f'bottom-{edge}'
-
-        # 重新检查角落区域，确保角落检测更精确
-        # 只在明确进入角落核心区域时才切换为角落调整
-        if edge and ('top' in edge or 'bottom' in edge) and ('left' in edge or 'right' in edge):
-            # 如果已经检测到角落组合，检查是否在角落核心区域内
-            if (x <= corner_margin and y <= corner_margin):
-                edge = 'top-left'
-            elif (x >= w - corner_margin and y <= corner_margin):
-                edge = 'top-right'
-            elif (x <= corner_margin and y >= h - corner_margin):
-                edge = 'bottom-left'
-            elif (x >= w - corner_margin and y >= h - corner_margin):
-                edge = 'bottom-right'
-            # 否则保持边缘检测（例如：在顶边但x=16时，应该检测为'top'而不是'top-left'）
 
         return edge
 
@@ -767,19 +1127,21 @@ class TranslatorWindow(QWidget):
         """鼠标按下事件"""
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
-            title_bar_height = 28
-            # 只有在标题栏的非按钮区域才开始拖动
-            if pos.y() <= title_bar_height and not self._is_over_title_bar_buttons(pos):
-                self._is_dragging = True
-                self._drag_start_pos = event.globalPosition().toPoint()
-                self._drag_window_start_pos = self.pos()
+
+            # 优先检测边缘调整区域（让调整大小优先于拖动）
+            edge = self._get_resize_edge(pos)
+            if edge:
+                self._is_resizing = True
+                self._resize_edge = edge
+                self._resize_start_pos = event.globalPosition().toPoint()
+                self._resize_start_geometry = self.geometry()
             else:
-                edge = self._get_resize_edge(pos)
-                if edge:
-                    self._is_resizing = True
-                    self._resize_edge = edge
-                    self._resize_start_pos = event.globalPosition().toPoint()
-                    self._resize_start_geometry = self.geometry()
+                # 不是边缘区域，检测标题栏拖动
+                title_bar_height = 28
+                if pos.y() <= title_bar_height and not self._is_over_title_bar_buttons(pos):
+                    self._is_dragging = True
+                    self._drag_start_pos = event.globalPosition().toPoint()
+                    self._drag_window_start_pos = self.pos()
 
         super().mousePressEvent(event)
 
@@ -850,6 +1212,42 @@ class TranslatorWindow(QWidget):
         # 鼠标离开窗口时恢复默认光标
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         super().leaveEvent(event)
+
+    def eventFilter(self, obj, event):
+        """事件过滤器 - 处理子控件的鼠标事件以更新光标"""
+        if event.type() == event.Type.MouseMove:
+            # 获取鼠标在主窗口中的位置
+            pos = self.mapFromGlobal(obj.mapToGlobal(event.position().toPoint()))
+            
+            # 更新光标样式
+            edge = self._get_resize_edge(pos)
+            if edge:
+                self._update_cursor_for_edge(edge)
+                obj.setCursor(QCursor(self._get_cursor_shape_for_edge(edge)))
+            elif pos.y() <= 28 and not self._is_over_title_bar_buttons(pos):
+                self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+                obj.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+            else:
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+                obj.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        
+        elif event.type() == event.Type.Leave:
+            self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            obj.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        
+        return super().eventFilter(obj, event)
+
+    def _get_cursor_shape_for_edge(self, edge: Optional[str]) -> Qt.CursorShape:
+        """根据边缘获取光标形状"""
+        if edge == 'top-left' or edge == 'bottom-right':
+            return Qt.CursorShape.SizeFDiagCursor
+        elif edge == 'top-right' or edge == 'bottom-left':
+            return Qt.CursorShape.SizeBDiagCursor
+        elif edge == 'left' or edge == 'right':
+            return Qt.CursorShape.SizeHorCursor
+        elif edge == 'top' or edge == 'bottom':
+            return Qt.CursorShape.SizeVerCursor
+        return Qt.CursorShape.ArrowCursor
 
     def closeEvent(self, event):
         """窗口关闭事件"""

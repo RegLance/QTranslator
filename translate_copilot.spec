@@ -15,9 +15,9 @@ a = Analysis(
     binaries=[],
     datas=[
         # 添加 native 目录 - 包含 selection-hook Node.js 服务
-        ("E:/qoder/Translate-Copilot/native", "native"),
+        ("C:/Users/WRZ/Desktop/Translate-Copilot/native", "native"),
         # 添加 assets 目录 - 包含应用图标
-        ("E:/qoder/Translate-Copilot/assets", "assets"),
+        ("C:/Users/WRZ/Desktop/Translate-Copilot/assets", "assets"),
     ],
     hiddenimports=[
         "PyQt6.QtCore",
@@ -92,5 +92,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="E:/qoder/Translate-Copilot/assets/icon.ico",  # 应用图标
+    icon="C:/Users/WRZ/Desktop/Translate-Copilot/assets/icon.ico",  # 应用图标
 )

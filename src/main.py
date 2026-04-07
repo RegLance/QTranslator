@@ -1,5 +1,6 @@
 """Translate Copilot - 主入口文件"""
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +29,7 @@ try:
     from .core.selection_detector import get_selection_detector
     from .core.hover_detector import get_hover_detector
     from .core.translator import get_translator, TranslationResult
+    from .core.writing import get_writing_service, WritingResult
     from .ui.popup_window import get_popup_window
     from .ui.translate_button import get_translate_button
     from .ui.tray_icon import get_tray_icon
@@ -44,6 +46,7 @@ except ImportError:
     from core.selection_detector import get_selection_detector
     from core.hover_detector import get_hover_detector
     from core.translator import get_translator, TranslationResult
+    from core.writing import get_writing_service, WritingResult
     from ui.popup_window import get_popup_window
     from ui.translate_button import get_translate_button
     from ui.tray_icon import get_tray_icon
@@ -282,7 +285,32 @@ class SettingsDialog(QDialog):
         self._hotkey_label = QLabel("唤醒翻译窗口:")
         hotkey_layout.addRow(self._hotkey_label, self._hotkey_edit)
 
+        # 写作快捷键
+        self._writing_hotkey_edit = QKeySequenceEdit()
+        self._writing_hotkey_edit.setMinimumHeight(32)
+        self._writing_hotkey_edit.setKeySequence(QKeySequence("Ctrl+Shift+W"))
+        self._writing_hotkey_label = QLabel("划词写作:")
+        hotkey_layout.addRow(self._writing_hotkey_label, self._writing_hotkey_edit)
+
         scroll_layout.addWidget(self._hotkey_group)
+
+        # 写作设置组
+        self._writing_group = QGroupBox("写作设置")
+        writing_layout = QVBoxLayout(self._writing_group)
+        writing_layout.setSpacing(8)
+        writing_layout.setContentsMargins(12, 20, 12, 12)
+
+        self._keep_original_check = QCheckBox("保留原文")
+        self._keep_original_check.toggled.connect(self._on_checkbox_toggled)
+        writing_layout.addWidget(self._keep_original_check)
+
+        # 添加说明文字
+        self._writing_hint_label = QLabel("勾选后，写作时会在原文下方另起一行插入翻译结果")
+        self._writing_hint_label.setStyleSheet(f"color: {self._theme['text_muted']}; font-size: 11px;")
+        self._writing_hint_label.setWordWrap(True)
+        writing_layout.addWidget(self._writing_hint_label)
+
+        scroll_layout.addWidget(self._writing_group)
 
         # 系统设置组
         self._sys_group = QGroupBox("系统设置")
@@ -465,6 +493,7 @@ class SettingsDialog(QDialog):
         self._theme_group.setStyleSheet(groupbox_style)
         self._font_group.setStyleSheet(groupbox_style)
         self._hotkey_group.setStyleSheet(groupbox_style)
+        self._writing_group.setStyleSheet(groupbox_style)
         self._sys_group.setStyleSheet(groupbox_style)
 
         # 输入框样式
@@ -482,6 +511,7 @@ class SettingsDialog(QDialog):
         self._popup_style_label.setStyleSheet(label_style)
         self._font_size_label.setStyleSheet(label_style)
         self._hotkey_label.setStyleSheet(label_style)
+        self._writing_hotkey_label.setStyleSheet(label_style)
 
         # 下拉框样式
         combobox_style = get_combobox_style(self._theme)
@@ -507,7 +537,7 @@ class SettingsDialog(QDialog):
         """)
 
         # 快捷键设置
-        self._hotkey_edit.setStyleSheet(f"""
+        hotkey_style = f"""
             QKeySequenceEdit {{
                 background-color: {self._theme['input_bg']};
                 border: 1px solid {self._theme['input_border']};
@@ -519,14 +549,18 @@ class SettingsDialog(QDialog):
             QKeySequenceEdit:focus {{
                 border-color: {self._theme['accent_color']};
             }}
-        """)
+        """
+        self._hotkey_edit.setStyleSheet(hotkey_style)
+        self._writing_hotkey_edit.setStyleSheet(hotkey_style)
 
         # 复选框样式和图标
         checkbox_style = get_checkbox_style(self._theme)
         self._auto_start_check.setStyleSheet(checkbox_style)
+        self._keep_original_check.setStyleSheet(checkbox_style)
         check_icon = self._create_check_icon()
         uncheck_icon = self._create_uncheck_icon()
         self._auto_start_check.setIcon(check_icon if self._auto_start_check.isChecked() else uncheck_icon)
+        self._keep_original_check.setIcon(check_icon if self._keep_original_check.isChecked() else uncheck_icon)
 
         # 底部按钮栏
         self._btn_bar.setStyleSheet("QFrame { background-color: transparent; }")
@@ -663,7 +697,31 @@ class SettingsDialog(QDialog):
         hotkey = self._config.get('hotkey.translator_window', 'Ctrl+Shift+T')
         self._hotkey_edit.setKeySequence(QKeySequence(hotkey))
 
+        # 写作快捷键
+        writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+Shift+W')
+        self._writing_hotkey_edit.setKeySequence(QKeySequence(writing_hotkey))
+
+        # 保留原文选项
+        keep_original = self._config.get('writing.keep_original', False)
+        self._keep_original_check.setChecked(keep_original)
+
         self._auto_start_check.setChecked(self._config.get('startup.auto_start', False))
+
+        # 禁用滚轮事件，避免误触
+        self._disable_wheel_event(self._target_lang_combo)
+        self._disable_wheel_event(self._popup_style_combo)
+        self._disable_wheel_event(self._font_size_spin)
+
+    def _disable_wheel_event(self, widget):
+        """禁用控件的鼠标滚轮事件，防止误触"""
+        widget.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """事件过滤器，用于禁用滚轮事件"""
+        if event.type() == event.Type.Wheel:
+            # 忽略滚轮事件
+            return True
+        return super().eventFilter(obj, event)
 
     def _save_settings(self):
         """保存设置"""
@@ -681,6 +739,14 @@ class SettingsDialog(QDialog):
             pass
 
         try:
+            # 快捷键 - 先获取旧的热键，用于判断是否需要重新注册
+            old_hotkey = self._config.get('hotkey.translator_window', 'Ctrl+Shift+T')
+            new_hotkey = self._hotkey_edit.keySequence().toString()
+
+            # 写作快捷键
+            old_writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+Shift+W')
+            new_writing_hotkey = self._writing_hotkey_edit.keySequence().toString()
+
             self._config.set('translator.api_key', self._api_key_input.text())
             self._config.set('translator.base_url', self._base_url_input.text())
             self._config.set('translator.model', self._model_input.text())
@@ -693,14 +759,34 @@ class SettingsDialog(QDialog):
             self._config.set('font.size', self._font_size_spin.value())
 
             # 快捷键
-            hotkey = self._hotkey_edit.keySequence().toString()
-            self._config.set('hotkey.translator_window', hotkey)
+            self._config.set('hotkey.translator_window', new_hotkey)
+            self._config.set('hotkey.writing', new_writing_hotkey)
+
+            # 写作设置
+            keep_original = self._keep_original_check.isChecked()
+            self._config.set('writing.keep_original', keep_original)
 
             auto_start = self._auto_start_check.isChecked()
             self._config.set('startup.auto_start', auto_start)
             setup_auto_start(auto_start)
 
             self._config.save()
+
+            # 如果热键改变了，重新注册热键
+            hotkey_manager = get_hotkey_manager()
+            if old_hotkey != new_hotkey:
+                try:
+                    hotkey_manager.update_hotkey(new_hotkey, "translator_window")
+                    log_info(f"翻译窗口热键已更新: {old_hotkey} -> {new_hotkey}")
+                except Exception as e:
+                    log_error(f"更新翻译窗口热键失败: {e}")
+
+            if old_writing_hotkey != new_writing_hotkey:
+                try:
+                    hotkey_manager.update_hotkey(new_writing_hotkey, "writing")
+                    log_info(f"写作热键已更新: {old_writing_hotkey} -> {new_writing_hotkey}")
+                except Exception as e:
+                    log_error(f"更新写作热键失败: {e}")
 
             # 更新所有窗口主题
             self._update_all_themes()
@@ -947,6 +1033,7 @@ class MainController(QObject):
         self._translator = get_translator()
         self._text_capture = get_text_capture()
         self._hotkey_manager = get_hotkey_manager()
+        self._writing_service = get_writing_service()
 
         self._current_worker: StreamingTranslationWorker = None
         self._last_text: str = ""
@@ -966,6 +1053,7 @@ class MainController(QObject):
         self._tray_icon.help_requested.connect(self._on_help_requested)
         self._popup_window.closed.connect(self._on_popup_closed)
         self._hotkey_manager.hotkey_triggered.connect(self._on_hotkey_triggered)
+        self._hotkey_manager.writing_hotkey_triggered.connect(self._on_writing_hotkey_triggered)
 
     def _check_config(self):
         """检查 API 配置是否完整"""
@@ -982,10 +1070,15 @@ class MainController(QObject):
 
     def _setup_hotkey(self):
         """设置全局热键"""
+        # 翻译窗口热键
         hotkey = self._config.get('hotkey.translator_window', 'Ctrl+Shift+T')
-        # 只注册热键，不传递回调（回调通过信号连接在第968行）
-        self._hotkey_manager.register_hotkey(hotkey)
-        log_debug(f"已注册热键: {hotkey}")
+        self._hotkey_manager.register_hotkey(hotkey, name="translator_window")
+        log_debug(f"已注册翻译窗口热键: {hotkey}")
+
+        # 写作热键
+        writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+Shift+W')
+        self._hotkey_manager.register_hotkey(writing_hotkey, name="writing")
+        log_debug(f"已注册写作热键: {writing_hotkey}")
 
     def start(self):
         self._selection_detector.start()
@@ -998,6 +1091,10 @@ class MainController(QObject):
 
         # 停止热键监听
         self._hotkey_manager.stop()
+
+        # 停止写作服务
+        if self._writing_service:
+            self._writing_service.stop_writing()
 
         if self._current_worker:
             self._current_worker.cancel()
@@ -1024,6 +1121,166 @@ class MainController(QObject):
         # 显示翻译窗口
         translator_window = get_translator_window()
         translator_window.show_window()
+
+    def _on_writing_hotkey_triggered(self):
+        """写作热键触发时执行写作功能
+
+        获取文本的方式：
+        1. 优先使用 selection-hook 获取用户选中的文本（与划词翻译一致）
+        2. 如果没有选中，则使用 ctrl+a + ctrl+c 获取全文
+        """
+        log_debug("写作热键触发")
+
+        # 检查是否已在写作中
+        if self._writing_service.is_writing:
+            log_debug("写作正在进行中，跳过")
+            return
+
+        # 检查是否启用了翻译功能
+        if not self._tray_icon._is_enabled:
+            log_debug("翻译功能已禁用，跳过写作")
+            return
+
+        try:
+            import keyboard
+
+            # 释放热键相关的按键（Ctrl/Shift 可能仍处于按下状态）
+            keyboard.release('ctrl')
+            keyboard.release('shift')
+            time.sleep(0.05)
+
+            # 方式1：使用 selection-hook 获取选中文本
+            # 检查最近 3 秒内是否有新的选择（用户选中后按热键，时间应该很近）
+            current_time = time.time()
+            selection_threshold = 3.0  # 3秒内认为是"当前选中"
+
+            if self._text_capture.has_new_selection(current_time - selection_threshold):
+                # 有最近的选中内容，直接使用
+                selected_text = self._text_capture.capture_direct()
+                if selected_text and selected_text.strip():
+                    log_info(f"通过 selection-hook 获取选中文本: '{selected_text[:100]}...'")
+                    self._start_writing(selected_text.strip(), has_selection=True)
+                    return
+
+            # 方式2：selection-hook 没有有效选中，尝试获取全文
+            log_info("没有检测到最近的选中文本，尝试获取全文")
+            self._get_all_text_for_writing_async()
+
+        except Exception as e:
+            log_error(f"写作热键处理失败: {e}")
+
+    def _get_all_text_for_writing_async(self):
+        """异步获取全文并开始写作"""
+        try:
+            import keyboard
+            import pyperclip
+
+            # 保存当前剪贴板内容
+            saved_clipboard = ""
+            try:
+                saved_clipboard = pyperclip.paste()
+            except Exception:
+                pass
+
+            # 再次确保按键状态正确
+            keyboard.release('ctrl')
+            keyboard.release('shift')
+            time.sleep(0.05)
+
+            # 全选并复制
+            keyboard.press('ctrl')
+            time.sleep(0.02)
+            keyboard.press('a')
+            time.sleep(0.02)
+            keyboard.release('a')
+            time.sleep(0.02)
+            keyboard.release('ctrl')
+            time.sleep(0.05)
+
+            keyboard.press('ctrl')
+            time.sleep(0.02)
+            keyboard.press('c')
+            time.sleep(0.02)
+            keyboard.release('c')
+            time.sleep(0.02)
+            keyboard.release('ctrl')
+
+            # 等待剪贴板更新
+            QTimer.singleShot(200, lambda: self._process_full_text_for_writing(saved_clipboard))
+
+        except Exception as e:
+            log_error(f"获取全文失败: {e}")
+
+    def _process_full_text_for_writing(self, saved_clipboard: str):
+        """处理全文获取结果并开始写作"""
+        try:
+            import pyperclip
+            import keyboard
+
+            text = pyperclip.paste()
+            log_info(f"全文内容: '{text[:100] if text else '(空)'}'")
+
+            if text and text.strip():
+                # 取消选中（按左箭头移动光标到开头）
+                keyboard.release('ctrl')
+                keyboard.release('shift')
+                time.sleep(0.05)
+                keyboard.press_and_release('left')
+
+                # 延迟恢复剪贴板
+                QTimer.singleShot(500, lambda: self._restore_clipboard(saved_clipboard))
+
+                # 开始写作（全文模式）
+                self._start_writing(text.strip(), has_selection=False)
+            else:
+                self._restore_clipboard(saved_clipboard)
+                log_debug("没有可用的文本进行写作")
+
+        except Exception as e:
+            log_error(f"处理全文失败: {e}")
+            self._restore_clipboard(saved_clipboard)
+
+    def _restore_clipboard(self, saved_clipboard: str):
+        """恢复剪贴板内容"""
+        if saved_clipboard:
+            try:
+                import pyperclip
+                pyperclip.copy(saved_clipboard)
+                log_debug("剪贴板已恢复")
+            except Exception:
+                pass
+
+    def _start_writing(self, text: str, has_selection: bool = True):
+        """开始写作
+
+        Args:
+            text: 待写作的文本
+            has_selection: 是否有选中文本（True=只替换选中，False=替换全部）
+        """
+        if not text or not text.strip():
+            return
+
+        log_info(f"开始写作 - 文本内容: '{text[:100]}...' (has_selection={has_selection})")
+
+        # 获取保留原文设置
+        keep_original = self._config.get('writing.keep_original', False)
+
+        # 不显示 Toast 提示，避免获取焦点导致选中状态消失
+
+        # 开始写作
+        def on_complete(result: WritingResult):
+            if result.error:
+                ToastWidget.show_message("写作失败", result.error, "error")
+            else:
+                ToastWidget.show_message("写作完成", "文本已处理完成", "success")
+                log_info(f"写作完成: {result.source_language} -> {result.target_language}")
+
+        self._writing_service.start_writing(
+            text,
+            has_selection=has_selection,
+            keep_original=keep_original,
+            on_complete=on_complete
+        )
 
     def _on_selection_finished(self):
         if not self._tray_icon._is_enabled:

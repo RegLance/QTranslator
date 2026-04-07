@@ -1,5 +1,6 @@
 """翻译服务模块 - OpenAI API 封装（支持流式翻译、智能语言检测）"""
 import hashlib
+import threading
 from typing import Optional, Dict, Generator, Callable
 from dataclasses import dataclass
 import sys
@@ -22,6 +23,10 @@ except ImportError:
     from utils.language_detector import detect_language, is_chinese_text, get_translation_direction
 
 
+# 语言检测锁，确保线程安全
+_language_detect_lock = threading.Lock()
+
+
 @dataclass
 class TranslationResult:
     """翻译结果"""
@@ -30,6 +35,7 @@ class TranslationResult:
     source_language: Optional[str] = None
     target_language: str = "中文"
     error: Optional[str] = None
+    mode: str = "translate"  # translate, polishing, summarize
 
 
 class Translator:
@@ -146,6 +152,193 @@ Requirements:
         system_prompt, user_prompt = self._build_translation_prompt(text, source_lang, target_lang)
         
         return (system_prompt, user_prompt, source_lang, target_lang)
+
+    def _build_polishing_prompt(self, text: str) -> tuple:
+        """构建润色提示词（参考 nextai-translator）
+
+        Returns:
+            tuple: (system_prompt, user_prompt)
+        """
+        # 检测源语言（使用锁确保线程安全）
+        with _language_detect_lock:
+            source_code, source_lang = detect_language(text)
+
+        system_prompt = 'You are an expert translator, translate directly without explanation.'
+
+        command_prompt = f"""Please edit the following sentences in {source_lang} to improve clarity, conciseness, and coherence, making them match the expression of native speakers. Use Markdown format to highlight the changes: use ~~strikethrough~~ for deleted text and **bold** for added or modified text. Keep the unchanged parts as they are."""
+
+        user_prompt = f"Only reply the result and nothing else. {command_prompt}:\n\n{text.strip()}"
+
+        return (system_prompt, user_prompt)
+
+    def _build_summarize_prompt(self, text: str, target_lang: str = "中文") -> tuple:
+        """构建总结提示词（参考 nextai-translator）
+
+        Args:
+            text: 待总结的文本
+            target_lang: 总结输出语言
+
+        Returns:
+            tuple: (system_prompt, user_prompt)
+        """
+        system_prompt = "You are a professional text summarizer, you can only summarize the text, don't interpret it."
+
+        command_prompt = f"Please summarize this text in the most concise language and must use {target_lang} language!"
+
+        user_prompt = f"Only reply the result and nothing else. {command_prompt}:\n\n{text.strip()}"
+
+        return (system_prompt, user_prompt)
+
+    def polishing_stream(self, text: str,
+                         on_chunk: Callable[[str], None] = None) -> Generator[str, None, None]:
+        """流式润色文本
+
+        Args:
+            text: 待润色的文本
+            on_chunk: 每次收到新内容时的回调函数
+
+        Yields:
+            str: 润色结果的文本片段
+        """
+        if not text or not text.strip():
+            yield ""
+            return
+
+        text = text.strip()
+        system_prompt, user_prompt = self._build_polishing_prompt(text)
+
+        # 检查客户端
+        if self._client is None:
+            config = get_config()
+            api_key = config.get('translator.api_key', '')
+            base_url = config.get('translator.base_url', '')
+            model = config.get('translator.model', '')
+
+            if not api_key:
+                yield "[错误: 请先在设置中配置 API Key]"
+                return
+            if not base_url:
+                yield "[错误: 请先在设置中配置 Base URL]"
+                return
+            if not model:
+                yield "[错误: 请先在设置中配置 Model]"
+                return
+
+            self._init_client()
+            if self._client is None:
+                yield "[错误: API 配置无效，请检查设置]"
+                return
+
+        try:
+            model = get_config().get('translator.model', 'gpt-4o-mini')
+            stream = self._client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=2000,
+                temperature=0.3,
+                stream=True,
+            )
+
+            full_text = ""
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_text += content
+                    if on_chunk:
+                        on_chunk(content)
+                    yield content
+
+        except Exception as e:
+            error_msg = str(e)
+            if "api_key" in error_msg.lower() or "401" in error_msg:
+                error_msg = "API Key 无效或未配置"
+            elif "rate_limit" in error_msg.lower() or "429" in error_msg:
+                error_msg = "请求过于频繁，请稍后重试"
+            elif "connection" in error_msg.lower():
+                error_msg = "网络连接失败"
+            else:
+                error_msg = f"润色失败: {error_msg}"
+
+            yield f"[错误: {error_msg}]"
+
+    def summarize_stream(self, text: str, target_language: str = "中文",
+                         on_chunk: Callable[[str], None] = None) -> Generator[str, None, None]:
+        """流式总结文本
+
+        Args:
+            text: 待总结的文本
+            target_language: 总结输出语言
+            on_chunk: 每次收到新内容时的回调函数
+
+        Yields:
+            str: 总结结果的文本片段
+        """
+        if not text or not text.strip():
+            yield ""
+            return
+
+        text = text.strip()
+        system_prompt, user_prompt = self._build_summarize_prompt(text, target_language)
+
+        # 检查客户端
+        if self._client is None:
+            config = get_config()
+            api_key = config.get('translator.api_key', '')
+            base_url = config.get('translator.base_url', '')
+            model = config.get('translator.model', '')
+
+            if not api_key:
+                yield "[错误: 请先在设置中配置 API Key]"
+                return
+            if not base_url:
+                yield "[错误: 请先在设置中配置 Base URL]"
+                return
+            if not model:
+                yield "[错误: 请先在设置中配置 Model]"
+                return
+
+            self._init_client()
+            if self._client is None:
+                yield "[错误: API 配置无效，请检查设置]"
+                return
+
+        try:
+            model = get_config().get('translator.model', 'gpt-4o-mini')
+            stream = self._client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=1000,
+                temperature=0.3,
+                stream=True,
+            )
+
+            full_text = ""
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_text += content
+                    if on_chunk:
+                        on_chunk(content)
+                    yield content
+
+        except Exception as e:
+            error_msg = str(e)
+            if "api_key" in error_msg.lower() or "401" in error_msg:
+                error_msg = "API Key 无效或未配置"
+            elif "rate_limit" in error_msg.lower() or "429" in error_msg:
+                error_msg = "请求过于频繁，请稍后重试"
+            elif "connection" in error_msg.lower():
+                error_msg = "网络连接失败"
+            else:
+                error_msg = f"总结失败: {error_msg}"
+
+            yield f"[错误: {error_msg}]"
 
     def translate_stream(self, text: str, target_language: str = None,
                          on_chunk: Callable[[str], None] = None,

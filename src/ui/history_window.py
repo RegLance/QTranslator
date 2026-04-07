@@ -85,6 +85,8 @@ class HistoryWindow(QWidget):
                 border: 1px solid {theme['border_color']};
             }}
         """)
+        # 开启鼠标追踪
+        self._content_frame.setMouseTracking(True)
         layout.addWidget(self._content_frame)
 
         # 添加阴影效果
@@ -112,7 +114,8 @@ class HistoryWindow(QWidget):
                 background-color: {theme['button_bg']};
             }}
         """)
-        # 不设置整体光标，在 mouseMoveEvent 中动态控制
+        # 开启鼠标追踪，让鼠标移动事件能传递到主窗口
+        self._title_bar.setMouseTracking(True)
 
         title_layout = QHBoxLayout(self._title_bar)
         title_layout.setContentsMargins(8, 0, 8, 0)
@@ -438,6 +441,11 @@ class HistoryWindow(QWidget):
 
         # 当前选中的历史条目
         self._current_item: Optional[HistoryItem] = None
+
+        # 为标题栏安装事件过滤器，以便处理鼠标移动事件更新光标
+        self._title_bar.installEventFilter(self)
+        self._title_label.installEventFilter(self)
+        self._content_frame.installEventFilter(self)
 
     def update_theme(self):
         """更新主题"""
@@ -924,40 +932,37 @@ class HistoryWindow(QWidget):
 
     def _get_resize_edge(self, pos: QPoint) -> Optional[str]:
         """判断鼠标位置对应的调整边缘（优化灵敏度）"""
-        # 增大边缘检测区域，使整个边框都能触发调整大小
-        # 边缘区域使用较大的 margin (32px)，角落区域使用较小的 margin (16px)
-        edge_margin = 32  # 边缘检测区域 - 覆盖整个边框
-        corner_margin = 16  # 角落检测区域（需要更精确）
+        # 边缘检测区域 - 覆盖整个边框和边框附近的区域
+        edge_margin = 15  # 边缘检测区域宽度
 
         w, h = self.width(), self.height()
         x, y = pos.x(), pos.y()
 
+        # 分别检测四个方向的边缘，不使用 elif 以支持组合
+        on_left = x <= edge_margin
+        on_right = x >= w - edge_margin
+        on_top = y <= edge_margin
+        on_bottom = y >= h - edge_margin
+
+        # 组合边缘检测结果
         edge = None
-
-        # 先检测边缘（优先级高于角落），避免在边缘附近误判为角落
-        if x <= edge_margin:
+        
+        if on_top and on_left:
+            edge = 'top-left'
+        elif on_top and on_right:
+            edge = 'top-right'
+        elif on_bottom and on_left:
+            edge = 'bottom-left'
+        elif on_bottom and on_right:
+            edge = 'bottom-right'
+        elif on_top:
+            edge = 'top'
+        elif on_bottom:
+            edge = 'bottom'
+        elif on_left:
             edge = 'left'
-        elif x >= w - edge_margin:
+        elif on_right:
             edge = 'right'
-
-        if y <= edge_margin:
-            edge = 'top' if edge is None else f'top-{edge}'
-        elif y >= h - edge_margin:
-            edge = 'bottom' if edge is None else f'bottom-{edge}'
-
-        # 重新检查角落区域，确保角落检测更精确
-        # 只在明确进入角落核心区域时才切换为角落调整
-        if edge and ('top' in edge or 'bottom' in edge) and ('left' in edge or 'right' in edge):
-            # 如果已经检测到角落组合，检查是否在角落核心区域内
-            if (x <= corner_margin and y <= corner_margin):
-                edge = 'top-left'
-            elif (x >= w - corner_margin and y <= corner_margin):
-                edge = 'top-right'
-            elif (x <= corner_margin and y >= h - corner_margin):
-                edge = 'bottom-left'
-            elif (x >= w - corner_margin and y >= h - corner_margin):
-                edge = 'bottom-right'
-            # 否则保持边缘检测（例如：在顶边但x=16时，应该检测为'top'而不是'top-left'）
 
         return edge
 
@@ -1018,19 +1023,21 @@ class HistoryWindow(QWidget):
         """鼠标按下事件"""
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
-            title_bar_height = 28
-            # 只有在标题栏的非按钮区域才开始拖动
-            if pos.y() <= title_bar_height and not self._is_over_title_bar_buttons(pos):
-                self._is_dragging = True
-                self._drag_start_pos = event.globalPosition().toPoint()
-                self._drag_window_start_pos = self.pos()
+
+            # 优先检测边缘调整区域（让调整大小优先于拖动）
+            edge = self._get_resize_edge(pos)
+            if edge:
+                self._is_resizing = True
+                self._resize_edge = edge
+                self._resize_start_pos = event.globalPosition().toPoint()
+                self._resize_start_geometry = self.geometry()
             else:
-                edge = self._get_resize_edge(pos)
-                if edge:
-                    self._is_resizing = True
-                    self._resize_edge = edge
-                    self._resize_start_pos = event.globalPosition().toPoint()
-                    self._resize_start_geometry = self.geometry()
+                # 不是边缘区域，检测标题栏拖动
+                title_bar_height = 28
+                if pos.y() <= title_bar_height and not self._is_over_title_bar_buttons(pos):
+                    self._is_dragging = True
+                    self._drag_start_pos = event.globalPosition().toPoint()
+                    self._drag_window_start_pos = self.pos()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
@@ -1099,6 +1106,44 @@ class HistoryWindow(QWidget):
         # 鼠标离开窗口时恢复默认光标
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         super().leaveEvent(event)
+
+    def eventFilter(self, obj, event):
+        """事件过滤器 - 处理子控件的鼠标事件以更新光标"""
+        if event.type() == event.Type.MouseMove:
+            # 获取鼠标在主窗口中的位置
+            pos = self.mapFromGlobal(obj.mapToGlobal(event.position().toPoint()))
+            
+            # 更新光标样式
+            edge = self._get_resize_edge(pos)
+            if edge:
+                self._update_cursor_for_edge(edge)
+                # 同时设置子控件的光标
+                obj.setCursor(QCursor(self._get_cursor_shape_for_edge(edge)))
+            elif pos.y() <= 28 and not self._is_over_title_bar_buttons(pos):
+                self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+                obj.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+            else:
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+                obj.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        
+        elif event.type() == event.Type.Leave:
+            # 子控件鼠标离开时恢复默认光标
+            self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            obj.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        
+        return super().eventFilter(obj, event)
+
+    def _get_cursor_shape_for_edge(self, edge: Optional[str]) -> Qt.CursorShape:
+        """根据边缘获取光标形状"""
+        if edge == 'top-left' or edge == 'bottom-right':
+            return Qt.CursorShape.SizeFDiagCursor
+        elif edge == 'top-right' or edge == 'bottom-left':
+            return Qt.CursorShape.SizeBDiagCursor
+        elif edge == 'left' or edge == 'right':
+            return Qt.CursorShape.SizeHorCursor
+        elif edge == 'top' or edge == 'bottom':
+            return Qt.CursorShape.SizeVerCursor
+        return Qt.CursorShape.ArrowCursor
 
 
 # 全局历史窗口实例

@@ -711,30 +711,41 @@ class TranslatorWindow(QWidget):
         return pos.x() >= buttons_left
 
     def _get_resize_edge(self, pos: QPoint) -> Optional[str]:
-        """判断鼠标位置对应的调整边缘"""
-        # 增大边缘检测区域，提高灵敏度（从8px增加到12px）
-        margin = 12
+        """判断鼠标位置对应的调整边缘（优化灵敏度）"""
+        # 增大边缘检测区域，使整个边框都能触发调整大小
+        # 边缘区域使用较大的 margin (32px)，角落区域使用较小的 margin (16px)
+        edge_margin = 32  # 边缘检测区域 - 覆盖整个边框
+        corner_margin = 16  # 角落检测区域（需要更精确）
+
         w, h = self.width(), self.height()
         x, y = pos.x(), pos.y()
 
         edge = None
 
-        if x <= margin and y <= margin:
-            edge = 'top-left'
-        elif x >= w - margin and y <= margin:
-            edge = 'top-right'
-        elif x <= margin and y >= h - margin:
-            edge = 'bottom-left'
-        elif x >= w - margin and y >= h - margin:
-            edge = 'bottom-right'
-        elif x <= margin:
+        # 先检测边缘（优先级高于角落），避免在边缘附近误判为角落
+        if x <= edge_margin:
             edge = 'left'
-        elif x >= w - margin:
+        elif x >= w - edge_margin:
             edge = 'right'
-        elif y <= margin:
-            edge = 'top'
-        elif y >= h - margin:
-            edge = 'bottom'
+
+        if y <= edge_margin:
+            edge = 'top' if edge is None else f'top-{edge}'
+        elif y >= h - edge_margin:
+            edge = 'bottom' if edge is None else f'bottom-{edge}'
+
+        # 重新检查角落区域，确保角落检测更精确
+        # 只在明确进入角落核心区域时才切换为角落调整
+        if edge and ('top' in edge or 'bottom' in edge) and ('left' in edge or 'right' in edge):
+            # 如果已经检测到角落组合，检查是否在角落核心区域内
+            if (x <= corner_margin and y <= corner_margin):
+                edge = 'top-left'
+            elif (x >= w - corner_margin and y <= corner_margin):
+                edge = 'top-right'
+            elif (x <= corner_margin and y >= h - corner_margin):
+                edge = 'bottom-left'
+            elif (x >= w - corner_margin and y >= h - corner_margin):
+                edge = 'bottom-right'
+            # 否则保持边缘检测（例如：在顶边但x=16时，应该检测为'top'而不是'top-left'）
 
         return edge
 

@@ -91,6 +91,7 @@ class PopupWindow(QWidget):
         config = get_config()
         self._opacity = config.get('popup.opacity', 0.95)
         self._theme_style = config.get('theme.popup_style', 'dark')
+        self._font_size = config.get('font.size', 14)  # 字体大小
 
         # 窗口尺寸限制
         self._min_width = 300
@@ -566,7 +567,7 @@ class PopupWindow(QWidget):
         self._original_label.setStyleSheet(f"""
             QLabel#originalLabel {{
                 color: {theme['original_text']};
-                font-size: 13px;
+                font-size: {self._font_size - 1}px;
                 line-height: 1.5;
             }}
         """)
@@ -606,7 +607,7 @@ class PopupWindow(QWidget):
         self._result_label.setStyleSheet(f"""
             QLabel#resultLabel {{
                 color: {theme['result_text']};
-                font-size: 14px;
+                font-size: {self._font_size}px;
                 line-height: 1.6;
             }}
         """)
@@ -615,7 +616,7 @@ class PopupWindow(QWidget):
         self._loading_label.setStyleSheet(f"""
             QLabel#loadingLabel {{
                 color: {theme['loading_text']};
-                font-size: 13px;
+                font-size: {self._font_size - 1}px;
                 padding: 20px;
             }}
         """)
@@ -624,7 +625,7 @@ class PopupWindow(QWidget):
         self._error_label.setStyleSheet(f"""
             QLabel#errorLabel {{
                 color: {theme['error_text']};
-                font-size: 13px;
+                font-size: {self._font_size - 1}px;
                 padding: 10px;
             }}
         """)
@@ -735,21 +736,29 @@ class PopupWindow(QWidget):
 
         self.move(x, y)
 
+    def update_theme(self):
+        """更新主题和字体大小"""
+        config = get_config()
+        new_theme = config.get('theme.popup_style', 'dark')
+        new_font_size = config.get('font.size', 14)
+
+        # 检查是否需要更新
+        if new_theme != self._theme_style or new_font_size != self._font_size:
+            self._theme_style = new_theme
+            self._font_size = new_font_size
+            self._apply_theme(self._theme_style)
+
     def show_at_mouse(self, mouse_pos: Tuple[int, int] = None):
         """在鼠标位置显示悬浮窗"""
         log_debug("PopupWindow.show_at_mouse() 被调用")
         if mouse_pos is None:
             mouse_pos = (QCursor.pos().x(), QCursor.pos().y())
 
-        # 每次显示时重新加载主题配置
-        config = get_config()
-        new_theme = config.get('theme.popup_style', 'dark')
-        if new_theme != self._theme_style:
-            self._theme_style = new_theme
-            self._apply_theme(self._theme_style)
+        # 每次显示时重新加载主题和字体配置
+        self.update_theme()
 
         self.resize(self._default_width, self._default_height)
-        
+
         # 重置分割器比例
         self._splitter.setSizes([100, 300])
 
@@ -997,30 +1006,41 @@ class PopupWindow(QWidget):
         return relative_x >= buttons_left
 
     def _get_resize_edge(self, pos: QPoint) -> Optional[str]:
-        """判断鼠标位置对应的调整边缘"""
-        # 增大边缘检测区域，提高灵敏度（从8px增加到12px）
-        margin = 12
+        """判断鼠标位置对应的调整边缘（优化灵敏度）"""
+        # 增大边缘检测区域，使整个边框都能触发调整大小
+        # 边缘区域使用较大的 margin (32px)，角落区域使用较小的 margin (16px)
+        edge_margin = 32  # 边缘检测区域 - 覆盖整个边框
+        corner_margin = 16  # 角落检测区域（需要更精确）
+
         w, h = self.width(), self.height()
         x, y = pos.x(), pos.y()
 
         edge = None
 
-        if x <= margin and y <= margin:
-            edge = 'top-left'
-        elif x >= w - margin and y <= margin:
-            edge = 'top-right'
-        elif x <= margin and y >= h - margin:
-            edge = 'bottom-left'
-        elif x >= w - margin and y >= h - margin:
-            edge = 'bottom-right'
-        elif x <= margin:
+        # 先检测边缘（优先级高于角落），避免在边缘附近误判为角落
+        if x <= edge_margin:
             edge = 'left'
-        elif x >= w - margin:
+        elif x >= w - edge_margin:
             edge = 'right'
-        elif y <= margin:
-            edge = 'top'
-        elif y >= h - margin:
-            edge = 'bottom'
+
+        if y <= edge_margin:
+            edge = 'top' if edge is None else f'top-{edge}'
+        elif y >= h - edge_margin:
+            edge = 'bottom' if edge is None else f'bottom-{edge}'
+
+        # 重新检查角落区域，确保角落检测更精确
+        # 只在明确进入角落核心区域时才切换为角落调整
+        if edge and ('top' in edge or 'bottom' in edge) and ('left' in edge or 'right' in edge):
+            # 如果已经检测到角落组合，检查是否在角落核心区域内
+            if (x <= corner_margin and y <= corner_margin):
+                edge = 'top-left'
+            elif (x >= w - corner_margin and y <= corner_margin):
+                edge = 'top-right'
+            elif (x <= corner_margin and y >= h - corner_margin):
+                edge = 'bottom-left'
+            elif (x >= w - corner_margin and y >= h - corner_margin):
+                edge = 'bottom-right'
+            # 否则保持边缘检测（例如：在顶边但x=16时，应该检测为'top'而不是'top-left'）
 
         return edge
 

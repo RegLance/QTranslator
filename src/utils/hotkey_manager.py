@@ -1,7 +1,7 @@
 """全局热键管理模块 - 用于注册和管理全局快捷键"""
 import sys
 from typing import Optional, Callable
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, Qt, QMetaObject, Q_ARG
 
 try:
     from ..utils.logger import log_info, log_error, log_debug
@@ -73,13 +73,27 @@ class HotkeyManager(QObject):
         self._is_listening = False
 
     def _on_hotkey_pressed(self):
-        """热键按下时的处理"""
+        """热键按下时的处理（在 keyboard 钩子线程中调用）"""
         log_debug(f"热键触发: {self._hotkey}")
 
-        # 发射信号
+        # 使用线程安全的方式在主线程中执行回调
+        # 方法1: 通过信号发射（推荐，因为信号是线程安全的）
         self.hotkey_triggered.emit()
 
-        # 调用回调
+        # 方法2: 使用 QMetaObject.invokeMethod 确保回调在主线程执行
+        if self._callback:
+            try:
+                # 使用 Qt.QueuedConnection 确保在主线程执行
+                QMetaObject.invokeMethod(
+                    self,
+                    "_execute_callback",
+                    Qt.ConnectionType.QueuedConnection
+                )
+            except Exception as e:
+                log_error(f"热键回调调度失败: {e}")
+
+    def _execute_callback(self):
+        """在主线程中执行回调函数"""
         if self._callback:
             try:
                 self._callback()

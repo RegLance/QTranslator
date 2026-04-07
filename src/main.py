@@ -983,7 +983,8 @@ class MainController(QObject):
     def _setup_hotkey(self):
         """设置全局热键"""
         hotkey = self._config.get('hotkey.translator_window', 'Ctrl+Shift+T')
-        self._hotkey_manager.register_hotkey(hotkey, self._on_hotkey_triggered)
+        # 只注册热键，不传递回调（回调通过信号连接在第968行）
+        self._hotkey_manager.register_hotkey(hotkey)
         log_debug(f"已注册热键: {hotkey}")
 
     def start(self):
@@ -1050,8 +1051,6 @@ class MainController(QObject):
         except ImportError:
             from core.text_capture import get_last_program_name
             program_name = get_last_program_name()
-
-        log_debug(f"来源程序: {program_name}")
 
         # 强制处理所有待处理事件，确保窗口显示
         from PyQt6.QtWidgets import QApplication

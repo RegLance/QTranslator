@@ -77,8 +77,10 @@ class TranslateButton(QWidget):
         self._last_mouse_pos: Optional[Tuple[int, int]] = None  # 上次鼠标位置
         self._last_mouse_time: float = 0  # 上次鼠标检测时间
 
-        self._setup_ui()
+        # 注意：必须先设置窗口属性，再创建 UI 子控件
+        # 否则 setWindowFlags 会销毁已创建的窗口状态，导致首次显示问题
         self._setup_window_properties()
+        self._setup_ui()
         self._setup_auto_hide_timer()
         self._setup_mouse_check_timer()
         self._setup_delay_timers()
@@ -94,6 +96,12 @@ class TranslateButton(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)  # 显示但不激活
         self.setFixedSize(BUTTON_SIZE, BUTTON_SIZE)
+
+        # 确保窗口在初始化时就被创建，避免首次显示问题
+        self.create()
+        # 强制获取窗口ID，确保底层窗口句柄已创建完成
+        # create() 只是准备创建，winId() 才真正触发底层创建
+        _ = self.winId()
 
     def _setup_ui(self):
         """设置 UI"""
@@ -269,12 +277,17 @@ class TranslateButton(QWidget):
         self.move(new_x, new_y)
         self._is_just_shown = True
 
+        # 确保窗口已创建
+        if not self.winId():
+            self.create()
+
         # 使用 show() 和 raise_() 确保窗口显示并置顶
         self.show()
         self.raise_()
 
-        # 强制更新窗口
-        self.update()
+        # 强制刷新窗口
+        self.repaint()
+        QApplication.processEvents()
 
         # 启动鼠标距离检测
         self._mouse_check_timer.start()
@@ -347,10 +360,16 @@ class TranslateButton(QWidget):
         self.move(new_x, new_y)
         self._is_just_shown = True
 
+        # 确保窗口已创建
+        if not self.winId():
+            self.create()
+
         self.show()
         self.raise_()
 
-        self.update()
+        # 强制刷新窗口
+        self.repaint()
+        QApplication.processEvents()
 
         # 启动鼠标距离检测
         self._mouse_check_timer.start()
@@ -378,8 +397,6 @@ class TranslateButton(QWidget):
 
         # 直接启动延迟显示计时器（简化逻辑，移除鼠标静止检测）
         self._show_delay_timer.start(SHOW_DELAY_MS + MOUSE_STILL_THRESHOLD_MS)
-
-        print(f"[DEBUG] 浏览器延迟显示已启动，等待 {SHOW_DELAY_MS + MOUSE_STILL_THRESHOLD_MS}ms", file=sys.stderr)
 
     def show_at_position_immediate(self, pos: Optional[Tuple[int, int]], selected_text: str = ""):
         """立即显示图标按钮（不经过延迟检测）
@@ -418,10 +435,9 @@ class TranslateButton(QWidget):
         except Exception:
             pass
 
-        print(f"[DEBUG] 翻译按钮立即显示在 ({new_x}, {new_y})", file=sys.stderr)
-
-        # 先隐藏确保重置状态
-        super().hide()
+        # 先隐藏确保重置状态（仅在可见时）
+        if self.isVisible():
+            super().hide()
 
         self.move(new_x, new_y)
         self._is_just_shown = True
@@ -453,7 +469,6 @@ class TranslateButton(QWidget):
 
     def hide(self):
         """隐藏按钮"""
-        print("[DEBUG] TranslateButton.hide() 被调用", file=sys.stderr)
         self._auto_hide_timer.stop()
         self._mouse_check_timer.stop()
         self._show_delay_timer.stop()  # 停止延迟显示
@@ -468,7 +483,6 @@ class TranslateButton(QWidget):
 
     def _on_auto_hide(self):
         """自动隐藏"""
-        print("[DEBUG] _on_auto_hide 触发", file=sys.stderr)
         self.hide()
 
     def enterEvent(self, event):
@@ -488,7 +502,6 @@ class TranslateButton(QWidget):
     def _reset_just_shown(self):
         """重置刚显示状态"""
         self._is_just_shown = False
-        print("[DEBUG] 距离检测已启用", file=sys.stderr)
 
     def mousePressEvent(self, event):
         """鼠标点击事件"""

@@ -1,8 +1,12 @@
 """Translate Copilot - 主入口文件"""
 import sys
+import os
 import time
+import traceback
+import threading
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
@@ -21,6 +25,124 @@ if sys.platform == 'win32':
         ctypes.windll.user32.SetProcessDpiAwareness(2)
     except Exception:
         pass
+
+
+# ============================================================================
+# 全局异常处理器和闪退日志机制
+# ============================================================================
+
+class CrashHandler:
+    """闪退处理和日志记录器"""
+
+    _instance: Optional['CrashHandler'] = None
+    _crash_log_path: Optional[Path] = None
+
+    @classmethod
+    def initialize(cls):
+        """初始化闪退处理器"""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        # 获取崩溃日志路径
+        try:
+            # 尝试从配置获取路径
+            if sys.platform == 'win32':
+                base_dir = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
+                app_dir = base_dir / "Translate Copilot"
+            else:
+                app_dir = Path.home() / ".config" / "translate-copilot"
+
+            app_dir.mkdir(parents=True, exist_ok=True)
+            self._crash_log_path = app_dir / "crash.log"
+        except Exception:
+            # 如果无法创建目录，使用临时目录
+            import tempfile
+            self._crash_log_path = Path(tempfile.gettempdir()) / "translate_copilot_crash.log"
+
+        # 设置全局异常处理器
+        self._setup_exception_hooks()
+
+    def _setup_exception_hooks(self):
+        """设置全局异常钩子"""
+        # 设置 sys.excepthook 处理主线程异常
+        sys.excepthook = self._handle_exception
+
+        # 处理 Qt 信号槽中的异常
+        try:
+            # PyQt6 没有直接的异常钩子，我们需要通过其他方式
+            # 但可以设置线程异常钩子
+            threading.excepthook = self._handle_threading_exception
+        except AttributeError:
+            # Python 3.7 以下版本没有 threading.excepthook
+            pass
+
+    def _handle_exception(self, exc_type, exc_value, exc_traceback):
+        """处理主线程异常"""
+        # 先记录日志
+        self._log_crash(exc_type, exc_value, exc_traceback, "MainThread")
+
+        # 调用默认处理器（显示错误对话框或退出）
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+    def _handle_threading_exception(self, args):
+        """处理线程异常 (Python 3.8+)"""
+        # args 是 threading.ExceptHookArgs 类型
+        self._log_crash(
+            args.exc_type,
+            args.exc_value,
+            args.exc_traceback,
+            args.thread.name if args.thread else "UnknownThread"
+        )
+        # 调用默认处理器
+        threading.__excepthook__(args)
+
+    def _log_crash(self, exc_type, exc_value, exc_traceback, thread_name: str):
+        """记录崩溃日志"""
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # 格式化异常信息
+            exc_info = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+
+            # 写入崩溃日志
+            with open(self._crash_log_path, 'a', encoding='utf-8') as f:
+                f.write(f"\n{'='*60}\n")
+                f.write(f"[{timestamp}] CRASH DETECTED\n")
+                f.write(f"Thread: {thread_name}\n")
+                f.write(f"{'='*60}\n")
+                f.write(exc_info)
+                f.write(f"\n{'='*60}\n")
+
+            print(f"\n崩溃日志已写入: {self._crash_log_path}", file=sys.stderr)
+            print(f"崩溃详情:\n{exc_info}", file=sys.stderr)
+
+        except Exception as e:
+            print(f"写入崩溃日志失败: {e}", file=sys.stderr)
+            print(f"崩溃详情:\n{exc_info}", file=sys.stderr)
+
+    @property
+    def crash_log_path(self) -> Path:
+        return self._crash_log_path
+
+
+def log_exception_safe(message: str, exc: Exception):
+    """安全地记录异常（避免日志记录本身崩溃）"""
+    try:
+        crash_handler = CrashHandler.initialize()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        exc_info = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+        with open(crash_handler.crash_log_path, 'a', encoding='utf-8') as f:
+            f.write(f"\n[{timestamp}] {message}\n")
+            f.write(f"Exception: {exc_info}\n")
+    except Exception:
+        pass
+
+
+# 在导入模块前初始化闪退处理器
+CrashHandler.initialize()
 
 # 支持两种导入方式
 try:

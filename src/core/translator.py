@@ -1,10 +1,12 @@
 """翻译服务模块 - OpenAI API 封装（支持流式翻译、智能语言检测）"""
 import hashlib
 import threading
+import traceback
 from typing import Optional, Dict, Generator, Callable
 from dataclasses import dataclass
 import sys
 from pathlib import Path
+from datetime import datetime
 
 # 添加父目录到路径以支持相对导入
 _parent_dir = Path(__file__).parent.parent
@@ -15,16 +17,39 @@ from openai import OpenAI
 
 try:
     from ..config import get_config
-    from ..utils.logger import log_warning, log_info, log_translation, log_debug
+    from ..utils.logger import log_warning, log_info, log_translation, log_debug, log_error
     from ..utils.language_detector import detect_language, is_chinese_text, get_translation_direction
 except ImportError:
     from config import get_config
-    from utils.logger import log_warning, log_info, log_translation, log_debug
+    from utils.logger import log_warning, log_info, log_translation, log_debug, log_error
     from utils.language_detector import detect_language, is_chinese_text, get_translation_direction
 
 
 # 语言检测锁，确保线程安全
 _language_detect_lock = threading.Lock()
+
+
+def _log_crash_safe(message: str, exc: Exception = None):
+    """安全地记录崩溃日志"""
+    try:
+        # 获取崩溃日志路径
+        if sys.platform == 'win32':
+            import os
+            base_dir = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
+        else:
+            base_dir = Path.home()
+        crash_path = base_dir / "Translate Copilot" / "crash.log"
+        crash_path.parent.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(crash_path, 'a', encoding='utf-8') as f:
+            f.write(f"\n[{timestamp}] Translator: {message}\n")
+            if exc:
+                f.write(f"Exception: {type(exc).__name__}: {exc}\n")
+                f.write(traceback.format_exc())
+            f.write("-" * 40 + "\n")
+    except Exception:
+        pass  # 避免日志写入失败导致程序崩溃
 
 
 @dataclass
@@ -45,17 +70,47 @@ class Translator:
         """初始化翻译服务"""
         self._client: Optional[OpenAI] = None
         self._cache: Dict[str, TranslationResult] = {}
+        self._last_error: Optional[str] = None
         self._init_client()
 
     def _init_client(self):
         """初始化 OpenAI 客户端"""
-        config = get_config()
-        api_key = config.get('translator.api_key', '')
+        try:
+            config = get_config()
+            api_key = config.get('translator.api_key', '')
+            base_url = config.get('translator.base_url', '')
+            timeout = config.get('translator.timeout', 60)
 
-        if not api_key:
-            log_warning("未配置 OpenAI API Key，请在 config.yaml 中设置")
+            if not api_key:
+                log_warning("未配置 API Key，请在设置中配置")
+                self._client = None
+                self._last_error = "未配置 API Key"
+                return
+
+            if not base_url:
+                log_warning("未配置 Base URL，请在设置中配置")
+                self._client = None
+                self._last_error = "未配置 Base URL"
+                return
+
+            # 尝试创建客户端
+            self._client = OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=timeout,
+            )
+            self._last_error = None
+            log_info(f"翻译客户端已初始化: base_url={base_url}")
+
+        except Exception as e:
+            log_error(f"初始化翻译客户端失败: {e}")
+            _log_crash_safe("初始化翻译客户端失败", e)
             self._client = None
-            return
+            self._last_error = str(e)
+
+    def get_last_error(self) -> Optional[str]:
+        """获取最后的错误信息"""
+        return self._last_error
 
         self._client = OpenAI(
             api_key=api_key,
@@ -406,6 +461,10 @@ Requirements:
 
         try:
             model = get_config().get('translator.model', 'gpt-4o-mini')
+            if not model:
+                yield "[错误: 请先在设置中配置 Model]"
+                return
+
             stream = self._client.chat.completions.create(
                 model=model,
                 messages=[
@@ -436,16 +495,25 @@ Requirements:
             self._cache[cache_key] = result
 
         except Exception as e:
+            # 记录崩溃日志
+            _log_crash_safe(f"流式翻译失败 (model={model})", e)
+
             error_msg = str(e)
+            # 识别常见错误类型并给出友好提示
             if "api_key" in error_msg.lower() or "401" in error_msg:
                 error_msg = "API Key 无效或未配置"
+            elif "404" in error_msg:
+                error_msg = "API URL 无效或模型不存在，请检查 Base URL 和 Model 配置"
             elif "rate_limit" in error_msg.lower() or "429" in error_msg:
                 error_msg = "请求过于频繁，请稍后重试"
-            elif "connection" in error_msg.lower():
-                error_msg = "网络连接失败"
+            elif "connection" in error_msg.lower() or "timeout" in error_msg.lower():
+                error_msg = "网络连接失败或超时，请检查网络"
+            elif "model" in error_msg.lower():
+                error_msg = "模型不存在或不可用，请检查 Model 配置"
             else:
                 error_msg = f"翻译失败: {error_msg}"
 
+            self._last_error = error_msg
             yield f"[错误: {error_msg}]"
 
     def translate_sync(self, text: str, target_language: str = None,

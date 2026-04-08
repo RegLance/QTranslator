@@ -1,4 +1,5 @@
 """独立翻译窗口模块 - Translate Copilot（无边框风格，支持主题切换、纯文本显示）"""
+import sys
 from typing import Optional
 from pathlib import Path
 from PyQt6.QtWidgets import (
@@ -149,6 +150,7 @@ class TranslatorWindow(QWidget):
 
         # 窗口状态
         self._is_maximized = False
+        self._is_minimized = False  # 最小化状态
         self._normal_geometry: Optional[QRect] = None
 
         # 拖动状态
@@ -188,11 +190,37 @@ class TranslatorWindow(QWidget):
         # 设置窗口图标（任务栏图标）
         self._set_window_icon()
 
+        # 在 Windows 上启用任务栏点击最小化功能
+        self._enable_taskbar_minimize()
+
     def _set_window_icon(self):
         """设置窗口图标（任务栏图标）"""
         icon_path = Path(__file__).parent.parent.parent / "assets" / "icon.png"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
+
+    def _enable_taskbar_minimize(self):
+        """在 Windows 上启用任务栏点击最小化功能"""
+        if sys.platform != 'win32':
+            return
+
+        try:
+            import ctypes
+            # 获取窗口句柄
+            hwnd = int(self.winId())
+
+            # 获取当前窗口样式
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, -16)  # GWL_STYLE = -16
+
+            # 添加 WS_MINIMIZEBOX 样式（允许最小化）
+            WS_MINIMIZEBOX = 0x00020000
+            WS_SYSMENU = 0x00080000
+            new_style = style | WS_MINIMIZEBOX | WS_SYSMENU
+
+            # 设置新样式
+            ctypes.windll.user32.SetWindowLongW(hwnd, -16, new_style)
+        except Exception:
+            pass
 
     def _setup_ui(self):
         """设置 UI"""
@@ -369,7 +397,7 @@ class TranslatorWindow(QWidget):
 
         # 翻译按钮
         self._translate_btn = QPushButton("翻译")
-        self._translate_btn.setFixedHeight(28)
+        self._translate_btn.setFixedSize(60, 28)  # 固定宽度60px，防止状态文字变化导致宽度改变
         self._translate_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._translate_btn.setStyleSheet(f"""
             QPushButton {{
@@ -394,7 +422,7 @@ class TranslatorWindow(QWidget):
 
         # 润色按钮
         self._polishing_btn = QPushButton("润色")
-        self._polishing_btn.setFixedHeight(28)
+        self._polishing_btn.setFixedSize(50, 28)  # 固定宽度50px
         self._polishing_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._polishing_btn.setStyleSheet(f"""
             QPushButton {{
@@ -418,7 +446,7 @@ class TranslatorWindow(QWidget):
 
         # 总结按钮
         self._summarize_btn = QPushButton("总结")
-        self._summarize_btn.setFixedHeight(28)
+        self._summarize_btn.setFixedSize(50, 28)  # 固定宽度50px
         self._summarize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._summarize_btn.setStyleSheet(f"""
             QPushButton {{
@@ -515,45 +543,52 @@ class TranslatorWindow(QWidget):
         self._output_button_layout.addStretch()
 
         # 朗读按钮（朗读译文）
-        self._speak_output_btn = QPushButton("🔊")
+        self._speak_output_btn = QPushButton("▶")
         self._speak_output_btn.setObjectName("speakOutputBtn")
-        self._speak_output_btn.setFixedSize(24, 24)
+        self._speak_output_btn.setFixedSize(20, 20)
         self._speak_output_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._speak_output_btn.setToolTip("朗读译文")
-        self._speak_output_btn.setStyleSheet(f"""
-            QPushButton#speakOutputBtn {{
+        self._speak_output_btn.setStyleSheet("""
+            QPushButton#speakOutputBtn {
                 background-color: transparent;
-                color: {theme['text_muted']};
+                color: #888888;
                 border: none;
-                border-radius: 4px;
-                font-size: 12px;
-            }}
-            QPushButton#speakOutputBtn:hover {{
-                background-color: {theme['button_hover']};
-                color: {theme['text_primary']};
-            }}
+                border-radius: 3px;
+                font-size: 10px;
+                font-weight: bold;
+            }
+            QPushButton#speakOutputBtn:hover {
+                background-color: transparent;
+                color: #333333;
+            }
+            QPushButton#speakOutputBtn:pressed {
+                background-color: rgba(0, 0, 0, 0.1);
+            }
         """)
         self._speak_output_btn.clicked.connect(self._speak_output)
         self._output_button_layout.addWidget(self._speak_output_btn)
 
-        # 复制按钮（复制原文和译文）
-        self._copy_output_btn = QPushButton("📋")
+        # 复制按钮
+        self._copy_output_btn = QPushButton("⎘")
         self._copy_output_btn.setObjectName("copyOutputBtn")
-        self._copy_output_btn.setFixedSize(24, 24)
+        self._copy_output_btn.setFixedSize(20, 20)
         self._copy_output_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._copy_output_btn.setToolTip("复制原文和译文")
-        self._copy_output_btn.setStyleSheet(f"""
-            QPushButton#copyOutputBtn {{
+        self._copy_output_btn.setToolTip("复制译文")
+        self._copy_output_btn.setStyleSheet("""
+            QPushButton#copyOutputBtn {
                 background-color: transparent;
-                color: {theme['text_muted']};
+                color: #888888;
                 border: none;
-                border-radius: 4px;
-                font-size: 12px;
-            }}
-            QPushButton#copyOutputBtn:hover {{
-                background-color: {theme['button_hover']};
-                color: {theme['text_primary']};
-            }}
+                border-radius: 3px;
+                font-size: 11px;
+            }
+            QPushButton#copyOutputBtn:hover {
+                background-color: transparent;
+                color: #333333;
+            }
+            QPushButton#copyOutputBtn:pressed {
+                background-color: rgba(0, 0, 0, 0.1);
+            }
         """)
         self._copy_output_btn.clicked.connect(self._copy_all_text)
         self._output_button_layout.addWidget(self._copy_output_btn)
@@ -573,7 +608,19 @@ class TranslatorWindow(QWidget):
 
     def _on_minimize(self):
         """最小化窗口"""
-        self.showMinimized()
+        self._is_minimized = True
+        self.showMinimized()  # 使用系统最小化
+
+    def is_minimized(self) -> bool:
+        """检查窗口是否最小化"""
+        return self._is_minimized or self.windowState() & Qt.WindowState.WindowMinimized
+
+    def restore_from_minimized(self):
+        """从最小化状态恢复"""
+        self._is_minimized = False
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     def _on_maximize(self):
         """最大化/还原窗口"""
@@ -810,12 +857,15 @@ class TranslatorWindow(QWidget):
                 background-color: transparent;
                 color: {theme['text_muted']};
                 border: none;
-                border-radius: 4px;
-                font-size: 12px;
+                border-radius: 3px;
+                font-size: 11px;
             }}
             QPushButton#copyOutputBtn:hover {{
-                background-color: {theme['button_hover']};
+                background-color: transparent;
                 color: {theme['text_primary']};
+            }}
+            QPushButton#copyOutputBtn:pressed {{
+                background-color: rgba(0, 0, 0, 0.1);
             }}
         """)
 
@@ -825,27 +875,25 @@ class TranslatorWindow(QWidget):
                 background-color: transparent;
                 color: {theme['text_muted']};
                 border: none;
-                border-radius: 4px;
-                font-size: 12px;
+                border-radius: 3px;
+                font-size: 10px;
+                font-weight: bold;
             }}
             QPushButton#speakOutputBtn:hover {{
-                background-color: {theme['button_hover']};
+                background-color: transparent;
                 color: {theme['text_primary']};
+            }}
+            QPushButton#speakOutputBtn:pressed {{
+                background-color: rgba(0, 0, 0, 0.1);
             }}
         """)
 
     def _copy_all_text(self):
-        """复制原文和译文"""
+        """复制译文"""
         clipboard = QApplication.clipboard()
-        original_text = self._input_text.toPlainText()
         translated_text = self._output_text.toPlainText()
-        if original_text and translated_text:
-            text = f"原文：\n{original_text}\n\n译文：\n{translated_text}"
-            clipboard.setText(text)
-        elif translated_text:
+        if translated_text:
             clipboard.setText(translated_text)
-        elif original_text:
-            clipboard.setText(original_text)
 
     def _speak_output(self):
         """朗读译文"""
@@ -878,9 +926,8 @@ class TranslatorWindow(QWidget):
         self._output_text.clear()
         self._streaming_text = ""
 
-        # 禁用按钮
+        # 禁用按钮（按钮文字保持不变，通过禁用状态表示正在处理）
         self._translate_btn.setEnabled(False)
-        self._translate_btn.setText("翻译中...")
         self._polishing_btn.setEnabled(False)
         self._summarize_btn.setEnabled(False)
 
@@ -916,7 +963,6 @@ class TranslatorWindow(QWidget):
         """实际执行翻译完成操作"""
         try:
             self._translate_btn.setEnabled(True)
-            self._translate_btn.setText("翻译")
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
             self._current_worker = None
@@ -950,7 +996,6 @@ class TranslatorWindow(QWidget):
         try:
             self._output_text.setPlainText(f"翻译失败: {error}")
             self._translate_btn.setEnabled(True)
-            self._translate_btn.setText("翻译")
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
             self._current_worker = None
@@ -974,10 +1019,9 @@ class TranslatorWindow(QWidget):
         self._output_text.clear()
         self._streaming_text = ""
 
-        # 禁用所有操作按钮
+        # 禁用所有操作按钮（按钮文字保持不变，通过禁用状态表示正在处理）
         self._translate_btn.setEnabled(False)
         self._polishing_btn.setEnabled(False)
-        self._polishing_btn.setText("润色中...")
         self._summarize_btn.setEnabled(False)
 
         # 启动润色线程
@@ -998,7 +1042,6 @@ class TranslatorWindow(QWidget):
         try:
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
-            self._polishing_btn.setText("润色")
             self._summarize_btn.setEnabled(True)
             self._current_worker = None
 
@@ -1029,7 +1072,6 @@ class TranslatorWindow(QWidget):
             self._output_text.setPlainText(f"润色失败: {error}")
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
-            self._polishing_btn.setText("润色")
             self._summarize_btn.setEnabled(True)
             self._current_worker = None
         except RuntimeError:
@@ -1052,11 +1094,10 @@ class TranslatorWindow(QWidget):
         self._output_text.clear()
         self._streaming_text = ""
 
-        # 禁用所有操作按钮
+        # 禁用所有操作按钮（按钮文字保持不变，通过禁用状态表示正在处理）
         self._translate_btn.setEnabled(False)
         self._polishing_btn.setEnabled(False)
         self._summarize_btn.setEnabled(False)
-        self._summarize_btn.setText("总结中...")
 
         # 获取目标语言（用于总结输出的语言）
         target_language = self._lang_combo.currentText()
@@ -1081,7 +1122,6 @@ class TranslatorWindow(QWidget):
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
-            self._summarize_btn.setText("总结")
             self._current_worker = None
 
             # 保存总结历史
@@ -1115,7 +1155,6 @@ class TranslatorWindow(QWidget):
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
-            self._summarize_btn.setText("总结")
             self._current_worker = None
         except RuntimeError:
             # 窗口已被销毁，忽略
@@ -1396,6 +1435,17 @@ class TranslatorWindow(QWidget):
             return Qt.CursorShape.SizeVerCursor
         return Qt.CursorShape.ArrowCursor
 
+    def changeEvent(self, event):
+        """窗口状态变化事件"""
+        if event.type() == event.Type.WindowStateChange:
+            if self.windowState() & Qt.WindowState.WindowMinimized:
+                # 窗口被最小化
+                self._is_minimized = True
+            elif self._is_minimized and not (self.windowState() & Qt.WindowState.WindowMinimized):
+                # 窗口从最小化恢复
+                self._is_minimized = False
+        super().changeEvent(event)
+
     def closeEvent(self, event):
         """窗口关闭事件"""
         if self._current_worker and self._current_worker.isRunning():
@@ -1408,6 +1458,7 @@ class TranslatorWindow(QWidget):
 
     def show_window(self):
         """显示窗口"""
+        self._is_minimized = False  # 清除最小化状态
         self.update_theme()
 
         screen = QApplication.primaryScreen()

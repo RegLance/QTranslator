@@ -1,13 +1,16 @@
 """系统托盘模块 - Translate Copilot"""
 import sys
+import os
+import traceback
 import base64
 from typing import Optional
 from pathlib import Path
 from io import BytesIO
+from datetime import datetime
 
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
-from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QFont, QPen
-from PyQt6.QtCore import pyqtSignal, QObject, Qt, QBuffer
+from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QFont, QPen, QCursor
+from PyQt6.QtCore import pyqtSignal, QObject, Qt, QBuffer, QTimer
 
 try:
     from ..config import get_config, APP_NAME
@@ -189,9 +192,9 @@ class TrayIcon(QObject):
     def _create_tray(self):
         """创建托盘图标"""
         self._tray = QSystemTrayIcon(self._icon)
-        self._tray.setContextMenu(self._menu)
         self._tray.setToolTip(f"{APP_NAME}")
 
+        # 连接信号
         self._tray.activated.connect(self._on_tray_activated)
 
     def show(self):
@@ -269,33 +272,82 @@ class TrayIcon(QObject):
 
     def _on_enable_toggle(self):
         """启用/禁用切换"""
-        self.set_enabled(self._enable_action.isChecked())
-        self._update_action_icon()  # 立即更新图标
+        try:
+            self.set_enabled(self._enable_action.isChecked())
+            self._update_action_icon()  # 立即更新图标
+        except Exception as e:
+            self._log_error("_on_enable_toggle", e)
 
     def _on_settings(self):
         """打开设置"""
-        self.settings_requested.emit()
+        try:
+            self.settings_requested.emit()
+        except Exception as e:
+            self._log_error("_on_settings", e)
 
     def _on_translator_window(self):
         """打开翻译窗口"""
-        self.translator_window_requested.emit()
+        try:
+            self.translator_window_requested.emit()
+        except Exception as e:
+            self._log_error("_on_translator_window", e)
 
     def _on_history(self):
         """打开历史窗口"""
-        self.history_requested.emit()
+        try:
+            self.history_requested.emit()
+        except Exception as e:
+            self._log_error("_on_history", e)
 
     def _on_help(self):
         """打开帮助窗口"""
-        self.help_requested.emit()
+        try:
+            self.help_requested.emit()
+        except Exception as e:
+            self._log_error("_on_help", e)
 
     def _on_exit(self):
         """退出应用"""
-        self.exit_requested.emit()
+        try:
+            self.exit_requested.emit()
+        except Exception as e:
+            self._log_error("_on_exit", e)
 
     def _on_tray_activated(self, reason):
         """托盘图标激活事件"""
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self.translator_window_requested.emit()
+        try:
+            if reason == QSystemTrayIcon.ActivationReason.Context:
+                # 右键点击：显示菜单
+                self._menu.exec(QCursor.pos())
+            elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+                # 双击：显示翻译窗口
+                self.translator_window_requested.emit()
+        except Exception as e:
+            self._log_error("_on_tray_activated", e)
+
+    def _log_error(self, method_name: str, exc: Exception):
+        """安全地记录错误"""
+        try:
+            error_msg = f"TrayIcon.{method_name} 错误: {exc}\n{traceback.format_exc()}"
+            print(error_msg, file=sys.stderr)
+            # 尝试写入崩溃日志
+            from datetime import datetime
+            try:
+                from config import get_config
+                crash_path = get_config().app_dir / "crash.log"
+            except Exception:
+                if sys.platform == 'win32':
+                    base_dir = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
+                else:
+                    base_dir = Path.home()
+                crash_path = base_dir / "Translate Copilot" / "crash.log"
+                crash_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(crash_path, 'a', encoding='utf-8') as f:
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"\n[{timestamp}] {error_msg}\n")
+        except Exception:
+            pass  # 避免日志写入失败导致程序崩溃
 
     def show_message(self, title: str, message: str, icon_type: str = "info"):
         """显示托盘消息"""

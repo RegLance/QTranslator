@@ -23,3 +23,9 @@ langdetect>=1.0.9
 
 # 全局热键
 keyboard>=0.13.5
+
+# 文字转语音 (TTS)
+pyttsx3>=2.90
+
+# Windows API (用于 TTS SAPI)
+pywin32>=300

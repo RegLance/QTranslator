@@ -36,6 +36,11 @@ def get_spec_content() -> str:
         "langdetect",
         "langdetect.lang_detect_exception",
         "keyboard",
+        # TTS 相关依赖
+        "pyttsx3",
+        "win32com.client",
+        "pythoncom",
+        "pywin32",
     ]
 
     # 添加所有 src 目录下的模块
@@ -151,6 +156,11 @@ a = Analysis(
         "langdetect",
         "langdetect.lang_detect_exception",
         "keyboard",
+        # TTS 相关依赖
+        "pyttsx3",
+        "win32com.client",
+        "pythoncom",
+        "pywin32",
         # 核心模块
         "src.config",
         "src.main",
@@ -159,6 +169,7 @@ a = Analysis(
         "src.core.selection_detector",
         "src.core.text_capture",
         "src.core.translator",
+        "src.core.writing",  # 新增：写作服务模块
         "src.core.__init__",
         # UI 模块
         "src.ui.history_window",
@@ -166,14 +177,15 @@ a = Analysis(
         "src.ui.translate_button",
         "src.ui.translator_window",
         "src.ui.tray_icon",
-        "src.ui.help_window",  # 新增
+        "src.ui.help_window",
         "src.ui.__init__",
         # 工具模块
         "src.utils.history",
         "src.utils.logger",
-        "src.utils.language_detector",  # 新增
-        "src.utils.hotkey_manager",  # 新增
-        "src.utils.theme",  # 新增
+        "src.utils.language_detector",
+        "src.utils.hotkey_manager",
+        "src.utils.theme",
+        "src.utils.tts",  # 新增：TTS 模块
         "src.utils.__init__",
     ],
     hookspath=[],

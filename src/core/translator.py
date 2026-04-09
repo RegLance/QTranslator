@@ -66,6 +66,13 @@ class TranslationResult:
 class Translator:
     """翻译服务类"""
 
+    # ==================== API 配置（硬编码） ====================
+    _api_key: str = ""       # API Key
+    _base_url: str = ""      # API Base URL
+    _model: str = ""         # 模型名称
+    _timeout: int = 60       # 请求超时时间（秒）
+    _no_proxy: str = ""      # 不使用代理的地址，多个用逗号分隔，如：localhost,127.0.0.1,*.internal
+
     def __init__(self):
         """初始化翻译服务"""
         self._client: Optional[OpenAI] = None
@@ -76,28 +83,21 @@ class Translator:
     def _init_client(self):
         """初始化 OpenAI 客户端"""
         try:
-            # 硬编码的 API 配置
-            api_key = ""
-            base_url = ""
-            model = ""
-            timeout = 60
-            no_proxy = ""  # 不使用代理的地址，多个用逗号分隔，如：localhost,127.0.0.1,*.internal
-
             # 设置 no_proxy 环境变量（用于控制不使用代理的地址）
-            if no_proxy:
+            if self._no_proxy:
                 import os
-                os.environ['NO_PROXY'] = no_proxy
-                os.environ['no_proxy'] = no_proxy
-                log_debug(f"已设置 NO_PROXY: {no_proxy}")
+                os.environ['NO_PROXY'] = self._no_proxy
+                os.environ['no_proxy'] = self._no_proxy
+                log_debug(f"已设置 NO_PROXY: {self._no_proxy}")
 
             # 创建客户端
             self._client = OpenAI(
-                api_key=api_key,
-                base_url=base_url,
-                timeout=timeout,
+                api_key=self._api_key,
+                base_url=self._base_url,
+                timeout=self._timeout,
             )
             self._last_error = None
-            log_info(f"翻译客户端已初始化: base_url={base_url}")
+            log_info(f"翻译客户端已初始化: base_url={self._base_url}, model={self._model}")
 
         except Exception as e:
             log_error(f"初始化翻译客户端失败: {e}")
@@ -261,9 +261,8 @@ Requirements:
                 return
 
         try:
-            model = "qwen3-coder-plus"
             stream = self._client.chat.completions.create(
-                model=model,
+                model=self._model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -322,9 +321,8 @@ Requirements:
                 return
 
         try:
-            model = "qwen3-coder-plus"
             stream = self._client.chat.completions.create(
-                model=model,
+                model=self._model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -406,10 +404,8 @@ Requirements:
                 return
 
         try:
-            model = "qwen3-coder-plus"
-
             stream = self._client.chat.completions.create(
-                model=model,
+                model=self._model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -439,7 +435,7 @@ Requirements:
 
         except Exception as e:
             # 记录崩溃日志
-            _log_crash_safe(f"流式翻译失败 (model={model})", e)
+            _log_crash_safe(f"流式翻译失败 (model={self._model})", e)
 
             error_msg = str(e)
             # 识别常见错误类型并给出友好提示
@@ -501,9 +497,8 @@ Requirements:
                 )
 
         try:
-            model = "qwen3-coder-plus"
             response = self._client.chat.completions.create(
-                model=model,
+                model=self._model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}

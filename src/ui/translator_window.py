@@ -138,7 +138,16 @@ class StreamingSummarizeWorker(QThread):
 
 
 class TranslatorWindow(QWidget):
-    """独立翻译窗口（无边框，支持调整大小、主题切换、纯文本显示）"""
+    """独立翻译窗口（无边框，支持调整大小、主题切换、纯文本显示）
+
+    同时支持：
+    1. 手动输入翻译模式
+    2. 划词自动翻译模式（自动填充原文并翻译）
+    """
+
+    # 信号
+    closed = pyqtSignal()
+    translation_completed = pyqtSignal(str, str)  # 原文, 译文 - 翻译完成信号
 
     def __init__(self):
         super().__init__()
@@ -166,9 +175,13 @@ class TranslatorWindow(QWidget):
 
         # 加载主题
         self._theme_style = get_config().get('theme.popup_style', 'dark')
-        
+
         # 字体大小
         self._font_size = get_config().get('font.size', 14)
+
+        # 划词翻译相关
+        self._auto_mode = False  # 是否处于自动翻译模式
+        self._pending_original_text = ""  # 待翻译的原文
 
         self._setup_window_properties()
         self._setup_ui()
@@ -633,7 +646,10 @@ class TranslatorWindow(QWidget):
         else:
             # 最大化
             self._normal_geometry = self.geometry()
-            screen = QApplication.primaryScreen()
+            # 获取窗口当前所在的屏幕（而不是主屏幕）
+            screen = QApplication.screenAt(self.geometry().center())
+            if screen is None:
+                screen = QApplication.primaryScreen()
             if screen:
                 self.setGeometry(screen.availableGeometry())
             self._is_maximized = True
@@ -909,6 +925,8 @@ class TranslatorWindow(QWidget):
         """清空所有内容"""
         self._input_text.clear()
         self._output_text.clear()
+        self._auto_mode = False
+        self._pending_original_text = ""
 
     def _start_translation(self):
         """开始翻译"""
@@ -965,6 +983,12 @@ class TranslatorWindow(QWidget):
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
+
+            # 发出翻译完成信号（用于划词翻译模式）
+            if self._auto_mode:
+                original_text = self._pending_original_text or self._input_text.toPlainText()
+                self.translation_completed.emit(original_text, result)
+
             self._current_worker = None
 
             # 保存翻译历史
@@ -978,10 +1002,13 @@ class TranslatorWindow(QWidget):
                         self._input_text.toPlainText(),
                         result,
                         target_lang,
-                        "manual"
+                        "selection" if self._auto_mode else "manual"
                     )
                 except Exception:
                     pass
+
+            # 重置自动翻译模式
+            self._auto_mode = False
         except RuntimeError:
             # 窗口已被销毁，忽略
             pass
@@ -999,6 +1026,8 @@ class TranslatorWindow(QWidget):
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
             self._current_worker = None
+            # 重置自动翻译模式
+            self._auto_mode = False
         except RuntimeError:
             # 窗口已被销毁，忽略
             pass
@@ -1267,7 +1296,7 @@ class TranslatorWindow(QWidget):
 
         # 组合边缘检测结果
         edge = None
-        
+
         if on_top and on_left:
             edge = 'top-left'
         elif on_top and on_right:
@@ -1453,12 +1482,20 @@ class TranslatorWindow(QWidget):
             self._current_worker.wait(1000)
             self._current_worker = None
 
+        # 重置自动翻译模式
+        self._auto_mode = False
+        self._pending_original_text = ""
+
         event.ignore()
         self.hide()
 
     def show_window(self):
         """显示窗口"""
-        self._is_minimized = False  # 清除最小化状态
+        # 如果窗口处于最小化状态，先恢复正常
+        if self.isMinimized():
+            self.showNormal()
+
+        self._is_minimized = False
         self.update_theme()
 
         screen = QApplication.primaryScreen()
@@ -1468,7 +1505,8 @@ class TranslatorWindow(QWidget):
             y = (screen_geo.height() - self.height()) // 2
             self.move(x, y)
 
-        self.show()
+        if not self.isVisible():
+            self.show()
         self.raise_()
         self.activateWindow()
         self._input_text.setFocus()
@@ -1485,6 +1523,174 @@ class TranslatorWindow(QWidget):
                 return
 
         super().keyPressEvent(event)
+
+    # ==================== 划词翻译模式支持 ====================
+
+    def _get_screen_bounds(self):
+        """获取屏幕可用区域"""
+        try:
+            screen = QApplication.primaryScreen()
+            if screen:
+                geo = screen.availableVirtualGeometry()
+                return (geo.x(), geo.y(), geo.width(), geo.height())
+        except Exception:
+            pass
+        return (0, 0, 1920, 1080)
+
+    def _calculate_position(self, mouse_pos):
+        """计算悬浮窗位置"""
+        x, y = mouse_pos
+        screen_x, screen_y, screen_w, screen_h = self._get_screen_bounds()
+
+        win_w = self.width()
+        win_h = self.height()
+
+        new_x = x + 15
+        new_y = y + 15
+
+        if new_x + win_w > screen_x + screen_w - 10:
+            new_x = x - win_w - 15
+
+        if new_y + win_h > screen_y + screen_h - 10:
+            new_y = y - win_h - 15
+
+        if new_x < screen_x + 10:
+            new_x = screen_x + 10
+
+        if new_y < screen_y + 10:
+            new_y = screen_y + 10
+
+        return (new_x, new_y)
+
+    def show_at_mouse(self, mouse_pos=None, text=None):
+        """在鼠标位置显示窗口并自动翻译（划词翻译模式）
+
+        Args:
+            mouse_pos: 鼠标位置元组 (x, y)，如果为 None 则使用当前鼠标位置
+            text: 要翻译的文本，如果为 None 则使用输入框中的文本
+        """
+        if mouse_pos is None:
+            mouse_pos = (QCursor.pos().x(), QCursor.pos().y())
+
+        # 每次显示时重新加载主题和字体配置
+        self.update_theme()
+
+        # 如果窗口处于最小化状态，先恢复正常状态
+        if self.isMinimized():
+            self.showNormal()
+            self._is_maximized = False
+            self._maximize_btn.setText("□")
+
+        # 重置窗口大小
+        self.resize(500, 400)
+
+        # 计算并移动到鼠标位置
+        x, y = self._calculate_position(mouse_pos)
+        self.move(x, y)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+        # 如果提供了文本，自动填充并翻译
+        if text:
+            self.auto_translate(text)
+
+    def auto_translate(self, text: str):
+        """自动翻译选中的文本
+
+        Args:
+            text: 要翻译的文本
+        """
+        if not text or not text.strip():
+            return
+
+        # 保存原文
+        self._pending_original_text = text.strip()
+        self._auto_mode = True
+
+        # 填充输入框
+        self._input_text.setPlainText(self._pending_original_text)
+
+        # 清空输出框
+        self._output_text.clear()
+        self._streaming_text = ""
+
+        # 自动触发翻译
+        self._start_translation()
+
+    def show_loading(self, original_text: str = None):
+        """显示加载状态
+
+        Args:
+            original_text: 原文内容，如果提供则显示在输入框中
+        """
+        if original_text:
+            self._input_text.setPlainText(original_text)
+        self._output_text.setPlainText("正在翻译...")
+
+    def show_streaming_start(self, original_text: str = None):
+        """开始流式翻译显示
+
+        Args:
+            original_text: 原文内容，如果提供则显示在输入框中
+        """
+        self._streaming_text = ""
+
+        if original_text:
+            self._input_text.setPlainText(original_text)
+
+        self._output_text.clear()
+
+        # 启用按钮
+        self._translate_btn.setEnabled(True)
+        self._polishing_btn.setEnabled(True)
+        self._summarize_btn.setEnabled(True)
+
+    def append_translation_text(self, chunk: str):
+        """追加流式翻译文本
+
+        Args:
+            chunk: 翻译文本片段
+        """
+        if not hasattr(self, '_streaming_text'):
+            self._streaming_text = ""
+        self._streaming_text += chunk
+        self._output_text.setPlainText(self._streaming_text)
+
+    def finish_streaming(self):
+        """完成流式翻译"""
+        # 滚动到顶部
+        self._input_text.verticalScrollBar().setValue(0)
+        self._output_text.verticalScrollBar().setValue(0)
+
+    def show_result(self, result):
+        """显示翻译结果（非流式）
+
+        Args:
+            result: TranslationResult 对象
+        """
+        if result.error:
+            self._output_text.setPlainText(f"翻译失败: {result.error}")
+        else:
+            self._input_text.setPlainText(result.original_text)
+            self._output_text.setPlainText(result.translated_text)
+
+    def hide(self):
+        """隐藏窗口"""
+        # 重置自动翻译模式状态
+        self._auto_mode = False
+        self._pending_original_text = ""
+
+        super().hide()
+        self.closed.emit()
+
+    def is_auto_mode(self) -> bool:
+        """检查是否处于自动翻译模式"""
+        return self._auto_mode
+
+    def get_pending_text(self) -> str:
+        """获取待翻译的原文"""
+        return self._pending_original_text
 
 
 # 全局翻译窗口实例

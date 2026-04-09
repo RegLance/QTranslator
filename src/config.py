@@ -48,43 +48,27 @@ class Config:
 
         # 加载配置
         if self._config_path.exists():
-            print(f"加载配置文件: {self._config_path}", file=sys.stderr)
             self._config = self._load_config(str(self._config_path))
             # 验证加载的配置是否有效（至少包含基本结构）
             if not self._validate_config(self._config):
                 print("配置文件验证失败，尝试从备份恢复", file=sys.stderr)
                 self._restore_from_backup()
-            else:
-                print(f"配置加载成功", file=sys.stderr)
-                # 打印关键配置信息（调试用）
-                api_key = self._config.get('translator', {}).get('api_key', '')
-                base_url = self._config.get('translator', {}).get('base_url', '')
-                model = self._config.get('translator', {}).get('model', '')
-                print(f"  - API Key: {'已配置' if api_key else '未配置'}", file=sys.stderr)
-                print(f"  - Base URL: {base_url}", file=sys.stderr)
-                print(f"  - Model: {model}", file=sys.stderr)
         else:
-            # 使用默认配置
-            print(f"配置文件不存在，创建默认配置", file=sys.stderr)
-            self._config = self._get_default_config()
-            self.save()
+            # 尝试从旧位置迁移
+            self._migrate_from_old_location()
+            if not self._config_path.exists():
+                self._config = self._get_default_config()
+                self.save()
 
     def _validate_config(self, config: Dict[str, Any]) -> bool:
         """验证配置是否有效"""
         if config is None:
             return False
-        # 检查必需的配置结构
-        required_keys = ['translator', 'target_language', 'theme']
+        # 检查必需的配置结构（translator 不再必需，已硬编码）
+        required_keys = ['target_language', 'theme']
         for key in required_keys:
             if key not in config:
                 print(f"配置缺少必需字段: {key}", file=sys.stderr)
-                return False
-        # 检查 translator 子配置
-        if 'translator' in config:
-            translator_config = config['translator']
-            # api_key, base_url, model 可以为空（用户未配置），但字段必须存在
-            if not isinstance(translator_config, dict):
-                print("translator 配置格式错误", file=sys.stderr)
                 return False
         return True
 
@@ -105,6 +89,22 @@ class Config:
         self._config = self._get_default_config()
         self.save()
 
+    def _migrate_from_old_location(self):
+        """从旧位置迁移配置"""
+        src_dir = Path(__file__).parent
+        project_dir = src_dir.parent
+        old_config = project_dir / "config.yaml"
+
+        if old_config.exists():
+            try:
+                import shutil
+                shutil.copy(str(old_config), str(self._config_path))
+                print(f"已迁移配置文件到: {self._config_path}", file=sys.stderr)
+                self._config = self._load_config(str(self._config_path))
+            except Exception as e:
+                print(f"迁移配置文件失败: {e}", file=sys.stderr)
+                self._config = self._get_default_config()
+
     def _load_config(self, path: str) -> Dict[str, Any]:
         """加载配置文件"""
         try:
@@ -116,6 +116,16 @@ class Config:
                 config = yaml.safe_load(content)
                 if config is None:
                     return self._get_default_config()
+                
+                # 清理硬编码的配置项（不再从配置文件读取）
+                if 'translator' in config and isinstance(config['translator'], dict):
+                    for key in ['api_key', 'base_url', 'model', 'timeout', 'no_proxy']:
+                        if key in config['translator']:
+                            del config['translator'][key]
+                # 如果 translator 为空，删除整个键
+                if 'translator' in config and isinstance(config['translator'], dict) and not config['translator']:
+                    del config['translator']
+                
                 return self._merge_with_defaults(config)
         except yaml.YAMLError as e:
             print(f"YAML解析错误: {e}", file=sys.stderr)
@@ -125,14 +135,8 @@ class Config:
             return self._get_default_config()
 
     def _get_default_config(self) -> Dict[str, Any]:
-        """获取默认配置（不包含 API 配置，用户需要自己填写）"""
+        """获取默认配置（API 配置已硬编码）"""
         return {
-            'translator': {
-                'api_key': '',
-                'model': '',
-                'base_url': '',
-                'timeout': 30,
-            },
             'target_language': '中文',
             'theme': {
                 'popup_style': 'dark',  # 'dark' 或 'light'
@@ -160,11 +164,14 @@ class Config:
         """合并用户配置与默认配置"""
         defaults = self._get_default_config()
 
-        def merge_dict(base: dict, override: dict) -> dict:
+        def merge_dict(base: dict, override: dict, parent_key: str = '') -> dict:
             result = base.copy()
             for key, value in override.items():
+                # 跳过硬编码的配置项（在 translator 下）
+                if parent_key == 'translator' and key in ('api_key', 'base_url', 'model', 'timeout', 'no_proxy'):
+                    continue
                 if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                    result[key] = merge_dict(result[key], value)
+                    result[key] = merge_dict(result[key], value, key)
                 else:
                     result[key] = value
             return result

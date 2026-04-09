@@ -1,4 +1,17 @@
-"""悬浮窗模块 - 翻译结果显示（支持滚动、拖动、调整大小、深色/浅色主题）"""
+"""
+悬浮窗模块 - 翻译结果显示（支持滚动、拖动、调整大小、深色/浅色主题）
+
+[已弃用] 此模块已被 translator_window.py 替代。
+划词翻译功能现已集成到 translator_window.py 中，使用 auto_translate() 方法实现。
+本文件保留用于兼容性目的，不再用于实际翻译功能。
+"""
+import warnings
+warnings.warn(
+    "popup_window.py 已被弃用，请使用 translator_window.py 代替划词翻译功能",
+    DeprecationWarning,
+    stacklevel=2
+)
+
 from typing import Optional, Tuple
 import sys
 from pathlib import Path
@@ -815,7 +828,10 @@ class PopupWindow(QWidget):
         else:
             # 最大化
             self._normal_geometry = self.geometry()
-            screen = QApplication.primaryScreen()
+            # 获取窗口当前所在的屏幕（而不是主屏幕）
+            screen = QApplication.screenAt(self.geometry().center())
+            if screen is None:
+                screen = QApplication.primaryScreen()
             if screen:
                 self.setGeometry(screen.availableGeometry())
             self._is_maximized = True

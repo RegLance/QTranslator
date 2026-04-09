@@ -76,35 +76,28 @@ class Translator:
     def _init_client(self):
         """初始化 OpenAI 客户端"""
         try:
-            config = get_config()
-            api_key = config.get('translator.api_key', '')
-            base_url = config.get('translator.base_url', '')
-            model = config.get('translator.model', '')
-            timeout = config.get('translator.timeout', 60)
+            # 硬编码的 API 配置
+            api_key = ""
+            base_url = ""
+            model = ""
+            timeout = 60
+            no_proxy = ""  # 不使用代理的地址，多个用逗号分隔，如：localhost,127.0.0.1,*.internal
 
-            # 调试日志：打印读取到的配置
-            log_info(f"初始化翻译客户端 - API Key: {'已配置' if api_key else '未配置'}, Base URL: {base_url}, Model: {model}")
+            # 设置 no_proxy 环境变量（用于控制不使用代理的地址）
+            if no_proxy:
+                import os
+                os.environ['NO_PROXY'] = no_proxy
+                os.environ['no_proxy'] = no_proxy
+                log_debug(f"已设置 NO_PROXY: {no_proxy}")
 
-            if not api_key:
-                log_warning("未配置 API Key，请在设置中配置")
-                self._client = None
-                self._last_error = "未配置 API Key"
-                return
-
-            if not base_url:
-                log_warning("未配置 Base URL，请在设置中配置")
-                self._client = None
-                self._last_error = "未配置 Base URL"
-                return
-
-            # 尝试创建客户端
+            # 创建客户端
             self._client = OpenAI(
                 api_key=api_key,
                 base_url=base_url,
                 timeout=timeout,
             )
             self._last_error = None
-            log_info(f"翻译客户端已初始化成功: base_url={base_url}")
+            log_info(f"翻译客户端已初始化: base_url={base_url}")
 
         except Exception as e:
             log_error(f"初始化翻译客户端失败: {e}")
@@ -262,28 +255,13 @@ Requirements:
 
         # 检查客户端
         if self._client is None:
-            config = get_config()
-            api_key = config.get('translator.api_key', '')
-            base_url = config.get('translator.base_url', '')
-            model = config.get('translator.model', '')
-
-            if not api_key:
-                yield "[错误: 请先在设置中配置 API Key]"
-                return
-            if not base_url:
-                yield "[错误: 请先在设置中配置 Base URL]"
-                return
-            if not model:
-                yield "[错误: 请先在设置中配置 Model]"
-                return
-
             self._init_client()
             if self._client is None:
-                yield "[错误: API 配置无效，请检查设置]"
+                yield "[错误: API 客户端初始化失败]"
                 return
 
         try:
-            model = get_config().get('translator.model', 'gpt-4o-mini')
+            model = "qwen3-coder-plus"
             stream = self._client.chat.completions.create(
                 model=model,
                 messages=[
@@ -338,28 +316,13 @@ Requirements:
 
         # 检查客户端
         if self._client is None:
-            config = get_config()
-            api_key = config.get('translator.api_key', '')
-            base_url = config.get('translator.base_url', '')
-            model = config.get('translator.model', '')
-
-            if not api_key:
-                yield "[错误: 请先在设置中配置 API Key]"
-                return
-            if not base_url:
-                yield "[错误: 请先在设置中配置 Base URL]"
-                return
-            if not model:
-                yield "[错误: 请先在设置中配置 Model]"
-                return
-
             self._init_client()
             if self._client is None:
-                yield "[错误: API 配置无效，请检查设置]"
+                yield "[错误: API 客户端初始化失败]"
                 return
 
         try:
-            model = get_config().get('translator.model', 'gpt-4o-mini')
+            model = "qwen3-coder-plus"
             stream = self._client.chat.completions.create(
                 model=model,
                 messages=[
@@ -437,31 +400,13 @@ Requirements:
 
         # 检查客户端
         if self._client is None:
-            config = get_config()
-            api_key = config.get('translator.api_key', '')
-            base_url = config.get('translator.base_url', '')
-            model = config.get('translator.model', '')
-
-            if not api_key:
-                yield "[错误: 请先在设置中配置 API Key]"
-                return
-            if not base_url:
-                yield "[错误: 请先在设置中配置 Base URL]"
-                return
-            if not model:
-                yield "[错误: 请先在设置中配置 Model]"
-                return
-
             self._init_client()
             if self._client is None:
-                yield "[错误: API 配置无效，请检查设置]"
+                yield "[错误: API 客户端初始化失败]"
                 return
 
         try:
-            model = get_config().get('translator.model', 'gpt-4o-mini')
-            if not model:
-                yield "[错误: 请先在设置中配置 Model]"
-                return
+            model = "qwen3-coder-plus"
 
             stream = self._client.chat.completions.create(
                 model=model,
@@ -546,44 +491,17 @@ Requirements:
 
         # 检查客户端
         if self._client is None:
-            config = get_config()
-            api_key = config.get('translator.api_key', '')
-            base_url = config.get('translator.base_url', '')
-            model = config.get('translator.model', '')
-
-            if not api_key:
-                return TranslationResult(
-                    original_text=text,
-                    translated_text="",
-                    error="请先在设置中配置 API Key",
-                    target_language=target_lang
-                )
-            if not base_url:
-                return TranslationResult(
-                    original_text=text,
-                    translated_text="",
-                    error="请先在设置中配置 Base URL",
-                    target_language=target_lang
-                )
-            if not model:
-                return TranslationResult(
-                    original_text=text,
-                    translated_text="",
-                    error="请先在设置中配置 Model",
-                    target_language=target_lang
-                )
-
             self._init_client()
             if self._client is None:
                 return TranslationResult(
                     original_text=text,
                     translated_text="",
-                    error="API 配置无效，请检查设置",
+                    error="API 客户端初始化失败",
                     target_language=target_lang
                 )
 
         try:
-            model = get_config().get('translator.model', 'gpt-4o-mini')
+            model = "qwen3-coder-plus"
             response = self._client.chat.completions.create(
                 model=model,
                 messages=[

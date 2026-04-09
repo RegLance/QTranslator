@@ -150,7 +150,7 @@ try:
     from .core.text_capture import get_text_capture, capture_text_direct
     from .core.selection_detector import get_selection_detector
     from .core.hover_detector import get_hover_detector
-    from .core.translator import get_translator, TranslationResult
+    from .core.translator import get_translator
     from .core.writing import get_writing_service, WritingResult
     from .ui.popup_window import get_popup_window
     from .ui.translate_button import get_translate_button
@@ -167,7 +167,7 @@ except ImportError:
     from core.text_capture import get_text_capture, capture_text_direct
     from core.selection_detector import get_selection_detector
     from core.hover_detector import get_hover_detector
-    from core.translator import get_translator, TranslationResult
+    from core.translator import get_translator
     from core.writing import get_writing_service, WritingResult
     from ui.popup_window import get_popup_window
     from ui.translate_button import get_translate_button
@@ -318,34 +318,6 @@ class SettingsDialog(QDialog):
         scroll_layout = QVBoxLayout(self._scroll_content)
         scroll_layout.setSpacing(16)
         scroll_layout.setContentsMargins(8, 8, 8, 8)
-
-        # API 设置组
-        self._api_group = QGroupBox("API 设置")
-        api_layout = QFormLayout(self._api_group)
-        api_layout.setSpacing(10)
-        api_layout.setContentsMargins(12, 20, 12, 12)
-        api_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
-        self._api_key_input = QLineEdit()
-        self._api_key_input.setPlaceholderText("输入 API Key")
-        self._api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)
-        self._api_key_input.setMinimumHeight(32)
-        self._api_key_label = QLabel("API Key:")
-        api_layout.addRow(self._api_key_label, self._api_key_input)
-
-        self._base_url_input = QLineEdit()
-        self._base_url_input.setPlaceholderText("例如: https://api.openai.com/v1")
-        self._base_url_input.setMinimumHeight(32)
-        self._base_url_label = QLabel("Base URL:")
-        api_layout.addRow(self._base_url_label, self._base_url_input)
-
-        self._model_input = QLineEdit()
-        self._model_input.setPlaceholderText("模型名称")
-        self._model_input.setMinimumHeight(32)
-        self._model_label = QLabel("模型:")
-        api_layout.addRow(self._model_label, self._model_input)
-
-        scroll_layout.addWidget(self._api_group)
 
         # 翻译设置组
         self._trans_group = QGroupBox("翻译设置")
@@ -528,6 +500,28 @@ class SettingsDialog(QDialog):
             }}
         """
 
+    def _create_check_icon(self) -> QIcon:
+        """创建勾选图标"""
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(QColor(0, 0, 0, 0))
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # 绘制蓝色圆角背景
+        painter.setBrush(QColor(self._theme['accent_color']))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(0, 0, 18, 18, 4, 4)
+
+        # 绘制白色勾选符号 ✓
+        painter.setPen(QPen(QColor(255, 255, 255), 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.drawLine(4, 9, 7, 14)  # 左下到中下
+        painter.drawLine(7, 14, 14, 5)  # 中下到右上
+
+        painter.end()
+
+        return QIcon(pixmap)
+
     def _apply_theme(self):
         """应用主题样式"""
         # 内容容器
@@ -588,7 +582,6 @@ class SettingsDialog(QDialog):
 
         # 分组框样式
         groupbox_style = self._get_groupbox_style()
-        self._api_group.setStyleSheet(groupbox_style)
         self._trans_group.setStyleSheet(groupbox_style)
         self._theme_group.setStyleSheet(groupbox_style)
         self._font_group.setStyleSheet(groupbox_style)
@@ -596,17 +589,8 @@ class SettingsDialog(QDialog):
         self._writing_group.setStyleSheet(groupbox_style)
         self._sys_group.setStyleSheet(groupbox_style)
 
-        # 输入框样式
-        lineedit_style = get_lineedit_style(self._theme)
-        self._api_key_input.setStyleSheet(lineedit_style)
-        self._base_url_input.setStyleSheet(lineedit_style)
-        self._model_input.setStyleSheet(lineedit_style)
-
         # 标签样式
         label_style = f"color: {self._theme['text_secondary']}; font-size: 13px;"
-        self._api_key_label.setStyleSheet(label_style)
-        self._base_url_label.setStyleSheet(label_style)
-        self._model_label.setStyleSheet(label_style)
         self._target_lang_label.setStyleSheet(label_style)
         self._popup_style_label.setStyleSheet(label_style)
         self._font_size_label.setStyleSheet(label_style)
@@ -777,10 +761,6 @@ class SettingsDialog(QDialog):
 
     def _load_settings(self):
         """加载设置"""
-        self._api_key_input.setText(self._config.get('translator.api_key', ''))
-        self._base_url_input.setText(self._config.get('translator.base_url', ''))
-        self._model_input.setText(self._config.get('translator.model', ''))
-
         target_lang = self._config.get('target_language', '中文')
         index = self._target_lang_combo.findText(target_lang)
         if index >= 0:
@@ -847,9 +827,6 @@ class SettingsDialog(QDialog):
             old_writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+Shift+W')
             new_writing_hotkey = self._writing_hotkey_edit.keySequence().toString()
 
-            self._config.set('translator.api_key', self._api_key_input.text())
-            self._config.set('translator.base_url', self._base_url_input.text())
-            self._config.set('translator.model', self._model_input.text())
             self._config.set('target_language', self._target_lang_combo.currentText())
 
             popup_style = 'dark' if self._popup_style_combo.currentIndex() == 0 else 'light'
@@ -871,18 +848,6 @@ class SettingsDialog(QDialog):
             setup_auto_start(auto_start)
 
             self._config.save()
-
-            # 重新初始化翻译器客户端（使用新的 API 配置）
-            try:
-                from .core.translator import reinitialize_translator
-                reinitialize_translator()
-                log_info("翻译器客户端已重新初始化")
-            except ImportError:
-                from core.translator import reinitialize_translator
-                reinitialize_translator()
-                log_info("翻译器客户端已重新初始化")
-            except Exception as e:
-                log_error(f"重新初始化翻译器失败: {e}")
 
             # 如果热键改变了，重新注册热键
             hotkey_manager = get_hotkey_manager()
@@ -1093,44 +1058,6 @@ class ToastWidget(QWidget):
         toast.show()
 
 
-class StreamingTranslationWorker(QThread):
-    """流式翻译工作线程"""
-
-    # 信号
-    chunk_received = pyqtSignal(str)  # 收到翻译片段
-    translation_finished = pyqtSignal(str, str)  # 翻译完成 (原文, 译文)
-    translation_error = pyqtSignal(str, str)  # 翻译错误 (原文, 错误信息)
-
-    def __init__(self, text: str):
-        super().__init__()
-        self._text = text
-        self._is_cancelled = False
-
-    def run(self):
-        try:
-            translator = get_translator()
-            full_text = ""
-
-            for chunk in translator.translate_stream(self._text):
-                if self._is_cancelled:
-                    return
-
-                if chunk:
-                    full_text += chunk
-                    self.chunk_received.emit(chunk)
-
-            if not self._is_cancelled:
-                self.translation_finished.emit(self._text, full_text)
-
-        except Exception as e:
-            if not self._is_cancelled:
-                self.translation_error.emit(self._text, str(e))
-
-    def cancel(self):
-        """取消翻译"""
-        self._is_cancelled = True
-
-
 class MainController(QObject):
     """主控制器"""
 
@@ -1139,6 +1066,7 @@ class MainController(QObject):
 
         self._config = get_config()
         self._selection_detector = get_selection_detector()
+        # 保持 popup_window 引用但不再用于划词翻译
         self._popup_window = get_popup_window()
         self._translate_button = get_translate_button()
         self._tray_icon = get_tray_icon()
@@ -1147,7 +1075,9 @@ class MainController(QObject):
         self._hotkey_manager = get_hotkey_manager()
         self._writing_service = get_writing_service()
 
-        self._current_worker: StreamingTranslationWorker = None
+        # 翻译窗口实例
+        self._translator_window = get_translator_window()
+        self._current_worker = None
         self._last_text: str = ""
 
         self._connect_signals()
@@ -1163,22 +1093,14 @@ class MainController(QObject):
         self._tray_icon.translator_window_requested.connect(self._on_translator_window_requested)
         self._tray_icon.history_requested.connect(self._on_history_requested)
         self._tray_icon.help_requested.connect(self._on_help_requested)
-        self._popup_window.closed.connect(self._on_popup_closed)
+        # 翻译窗口关闭信号
+        self._translator_window.closed.connect(self._on_translator_window_closed)
         self._hotkey_manager.hotkey_triggered.connect(self._on_hotkey_triggered)
         self._hotkey_manager.writing_hotkey_triggered.connect(self._on_writing_hotkey_triggered)
 
     def _check_config(self):
-        """检查 API 配置是否完整"""
-        api_key = self._config.get('translator.api_key', '')
-        base_url = self._config.get('translator.base_url', '')
-        model = self._config.get('translator.model', '')
-
-        if not api_key or not base_url or not model:
-            self._tray_icon.show_message(
-                "配置提示",
-                "请先在托盘图标右键菜单中打开设置，填写 API Key、Base URL 和 Model",
-                "warning"
-            )
+        """检查配置（API 配置已硬编码，无需检查）"""
+        pass
 
     def _setup_hotkey(self):
         """设置全局热键"""
@@ -1214,6 +1136,8 @@ class MainController(QObject):
             self._current_worker = None
 
         self._translate_button.hide()
+        # 隐藏翻译窗口
+        self._translator_window.hide()
         self._popup_window.hide()
         self._popup_window.destroy()
         self._tray_icon.hide()
@@ -1226,13 +1150,12 @@ class MainController(QObject):
         """热键触发时显示翻译窗口"""
         log_debug("热键触发，显示翻译窗口")
         # 先隐藏划词翻译相关窗口
-        self._popup_window.hide()
+        self._translator_window.hide()
         self._translate_button.hide()
         self._last_text = ""
 
         # 显示翻译窗口
-        translator_window = get_translator_window()
-        translator_window.show_window()
+        self._translator_window.show_window()
 
     def _on_writing_hotkey_triggered(self):
         """写作热键触发时执行写作功能
@@ -1395,6 +1318,7 @@ class MainController(QObject):
         )
 
     def _on_selection_finished(self):
+        """划词选择完成 - 显示翻译图标按钮"""
         if not self._tray_icon._is_enabled:
             return
 
@@ -1404,6 +1328,7 @@ class MainController(QObject):
             self._translate_button.hide()
             return
 
+        # 获取鼠标位置
         mouse_pos = self._selection_detector.get_last_position()
 
         if mouse_pos is None:
@@ -1411,9 +1336,7 @@ class MainController(QObject):
             cursor = QCursor.pos()
             mouse_pos = (cursor.x(), cursor.y())
 
-        self._translate_button.set_selected_text(text.strip())
-
-        # 获取来源程序名（用于判断是否是浏览器）
+        # 获取来源程序名（用于判断是否是浏览器，决定图标显示延迟）
         try:
             from .core.text_capture import get_last_program_name
             program_name = get_last_program_name()
@@ -1425,61 +1348,38 @@ class MainController(QObject):
         from PyQt6.QtWidgets import QApplication
         QApplication.processEvents()
 
-        # 传递程序名，让按钮根据环境决定显示方式
-        self._translate_button.show_at_position(mouse_pos, text.strip(), program_name)
+        # 保存选中文本
+        self._last_text = text.strip()
+        self._translate_button.set_selected_text(self._last_text)
+
+        # 显示翻译图标按钮（统一方式）
+        self._translate_button.show_at_position(mouse_pos, self._last_text, program_name)
 
         # 再次强制处理事件
         QApplication.processEvents()
 
     def _on_translate_button_clicked(self):
-        if self._current_worker and self._current_worker.isRunning():
-            return
-
+        """翻译按钮点击 - 使用 translator_window 进行翻译"""
         text = self._translate_button.get_selected_text()
         if not text or not text.strip():
             return
 
-        if text == self._last_text and self._popup_window.isVisible():
+        # 检查是否已经有相同的文本正在翻译
+        if text == self._last_text and self._translator_window.isVisible() and self._translator_window.is_auto_mode():
             return
 
-        self._last_text = text
+        self._last_text = text.strip()
 
+        # 获取按钮位置
         button_pos = self._translate_button.pos()
         mouse_pos = (button_pos.x() + 20, button_pos.y() + 20)
 
-        # 使用流式翻译
-        self._popup_window.show_at_mouse(mouse_pos)
-        self._popup_window.show_streaming_start(text[:200])
+        # 使用 translator_window 的自动翻译功能
+        self._translator_window.show_at_mouse(mouse_pos, self._last_text)
 
-        self._current_worker = StreamingTranslationWorker(text)
-        self._current_worker.chunk_received.connect(self._on_translation_chunk)
-        self._current_worker.translation_finished.connect(self._on_translation_finished)
-        self._current_worker.translation_error.connect(self._on_translation_error)
-        self._current_worker.start()
-
-    def _on_translation_chunk(self, chunk: str):
-        """收到翻译片段"""
-        self._popup_window.append_translation_text(chunk)
-
-    def _on_translation_finished(self, original_text: str, translated_text: str):
-        """翻译完成"""
-        self._popup_window.finish_streaming()
-        self._current_worker = None
-
-        # 保存翻译历史
-        if translated_text:
-            target_lang = self._config.get('target_language', '中文')
-            add_translation_history(original_text, translated_text, target_lang, "selection")
-
-    def _on_translation_error(self, original_text: str, error: str):
-        """翻译错误"""
-        result = TranslationResult(
-            original_text=original_text,
-            translated_text="",
-            error=error
-        )
-        self._popup_window.show_result(result)
-        self._current_worker = None
+    def _on_translator_window_closed(self):
+        """翻译窗口关闭"""
+        self._last_text = ""
 
     def _on_enabled_changed(self, enabled: bool):
         self._selection_detector.set_enabled(enabled)
@@ -1489,10 +1389,12 @@ class MainController(QObject):
         else:
             self._tray_icon.show_message(APP_NAME, "已禁用", "info")
             self._translate_button.hide()
+            self._translator_window.hide()
             self._popup_window.hide()
 
     def _on_popup_closed(self):
-        self._last_text = ""
+        """PopupWindow 关闭（保留用于兼容性）"""
+        pass
 
     def _on_settings_requested(self):
         dialog = SettingsDialog(self._popup_window)
@@ -1501,18 +1403,17 @@ class MainController(QObject):
     def _on_translator_window_requested(self):
         """双击托盘显示翻译窗口"""
         # 先隐藏划词翻译相关窗口
-        self._popup_window.hide()
+        self._translator_window.hide()
         self._translate_button.hide()
         self._last_text = ""
 
         # 显示翻译窗口
-        translator_window = get_translator_window()
-        translator_window.show_window()
+        self._translator_window.show_window()
 
     def _on_history_requested(self):
         """显示翻译历史窗口"""
         # 先隐藏其他窗口
-        self._popup_window.hide()
+        self._translator_window.hide()
         self._translate_button.hide()
         self._last_text = ""
 
@@ -1523,7 +1424,7 @@ class MainController(QObject):
     def _on_help_requested(self):
         """显示帮助窗口"""
         # 先隐藏其他窗口
-        self._popup_window.hide()
+        self._translator_window.hide()
         self._translate_button.hide()
 
         # 显示帮助窗口

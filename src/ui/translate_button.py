@@ -1,4 +1,4 @@
-"""翻译图标按钮组件 - Translate Copilot
+"""翻译图标按钮组件 - QTranslator
 
 优化：解决与网站原生悬浮窗冲突的问题
 - 添加延迟显示机制，等待网站悬浮窗消失
@@ -17,8 +17,8 @@ try:
     from ..config import get_config
     from ..core.text_capture import is_browser_program
 except ImportError:
-    from config import get_config
-    from core.text_capture import is_browser_program
+    from src.config import get_config
+    from src.core.text_capture import is_browser_program
 
 
 # 按钮尺寸（18px）

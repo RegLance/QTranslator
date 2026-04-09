@@ -1,4 +1,4 @@
-"""配置管理模块 - Translate Copilot"""
+"""配置管理模块 - QTranslator"""
 import os
 import sys
 import yaml
@@ -10,23 +10,23 @@ from datetime import datetime
 
 
 # 应用名称
-APP_NAME = "Translate Copilot"
-APP_ID = "com.translate.copilot"
+APP_NAME = "QTranslator"
+APP_ID = "com.qtranslator.app"
 
 
 def get_app_data_dir() -> Path:
     """获取应用数据目录（在用户AppData目录下）"""
     if sys.platform == 'win32':
-        # Windows: C:\Users\用户名\AppData\Local\Translate Copilot
+        # Windows: C:\Users\用户名\AppData\Local\QTranslator
         base_dir = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
         app_dir = Path(base_dir) / APP_NAME
     elif sys.platform == 'darwin':
-        # macOS: ~/Library/Application Support/Translate Copilot
+        # macOS: ~/Library/Application Support/QTranslator
         app_dir = Path.home() / "Library" / "Application Support" / APP_NAME
     else:
-        # Linux: ~/.config/translate-copilot
-        app_dir = Path.home() / ".config" / "translate-copilot"
-    
+        # Linux: ~/.config/qtranslator
+        app_dir = Path.home() / ".config" / "qtranslator"
+
     # 确保目录存在
     app_dir.mkdir(parents=True, exist_ok=True)
     return app_dir
@@ -146,8 +146,8 @@ class Config:
                 'size': 14,  # 字体大小
             },
             'hotkey': {
-                'translator_window': 'Ctrl+Shift+T',  # 唤醒翻译窗口的快捷键
-                'writing': 'Ctrl+Shift+W',  # 写作快捷键
+                'translator_window': 'Ctrl+O',  # 唤醒翻译窗口的快捷键
+                'writing': 'Ctrl+I',  # 写作快捷键
             },
             'startup': {
                 'auto_start': False,  # 开机自启

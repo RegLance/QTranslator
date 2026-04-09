@@ -21,10 +21,13 @@ try:
     from ..config import get_config
     from ..utils.logger import log_info, log_error, log_debug, log_warning
     from ..utils.language_detector import detect_language, is_chinese_text, get_translation_direction
+    from .api_config import *
 except ImportError:
-    from config import get_config
-    from utils.logger import log_info, log_error, log_debug, log_warning
-    from utils.language_detector import detect_language, is_chinese_text, get_translation_direction
+    # 打包后或直接运行时的导入路径
+    from src.config import get_config
+    from src.utils.logger import log_info, log_error, log_debug, log_warning
+    from src.utils.language_detector import detect_language, is_chinese_text, get_translation_direction
+    from src.core.api_config import *
 
 
 @dataclass
@@ -60,7 +63,7 @@ class WritingService:
                 from .translator import get_translator
                 self._translator = get_translator()
             except ImportError:
-                from translator import get_translator
+                from src.core.translator import get_translator
                 self._translator = get_translator()
         return self._translator
 
@@ -122,6 +125,13 @@ Requirements:
         log_info(f"语言检测: 源语言={source_lang}, 目标语言={target_lang}")
         return (source_lang, target_lang)
 
+    # ==================== API 配置（硬编码，与 Translator 保持一致） ====================
+    _api_key: str = config_api_key
+    _base_url: str = config_base_url
+    _model: str = config_model
+    _timeout: int = 60
+    _no_proxy: str = config_no_proxy  # 不使用代理的地址
+
     def writing_stream(self, text: str,
                        on_chunk: Callable[[str], None] = None) -> Generator[str, None, None]:
         """流式写作翻译
@@ -146,31 +156,27 @@ Requirements:
         # 构建提示词
         system_prompt, user_prompt = self._build_writing_prompt(text, source_lang, target_lang)
 
-        # 获取翻译器并进行流式翻译
-        config = get_config()
-
-        # 检查 API 配置
-        api_key = config.get('translator.api_key', '')
-        base_url = config.get('translator.base_url', '')
-        model = config.get('translator.model', '')
-
-        if not api_key:
-            yield "[错误: 请先在设置中配置 API Key]"
-            return
-        if not base_url:
-            yield "[错误: 请先在设置中配置 Base URL]"
-            return
-        if not model:
-            yield "[错误: 请先在设置中配置 Model]"
-            return
+        # 使用硬编码的 API 配置（与 Translator 保持一致）
+        api_key = self._api_key
+        base_url = self._base_url
+        model = self._model
+        timeout = self._timeout
 
         # 使用翻译器进行流式翻译
         try:
             from openai import OpenAI
+            import os
+
+            # 设置 no_proxy 环境变量（用于控制不使用代理的地址）
+            if self._no_proxy:
+                os.environ['NO_PROXY'] = self._no_proxy
+                os.environ['no_proxy'] = self._no_proxy
+                log_debug(f"写作服务已设置 NO_PROXY: {self._no_proxy}")
+
             client = OpenAI(
                 api_key=api_key,
                 base_url=base_url,
-                timeout=config.get('translator.timeout', 60),
+                timeout=timeout,
             )
 
             stream = client.chat.completions.create(
@@ -179,8 +185,7 @@ Requirements:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=2000,
-                temperature=0.3,
+                temperature=0,
                 stream=True,
             )
 

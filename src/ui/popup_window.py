@@ -29,10 +29,10 @@ try:
     from ..utils.logger import log_debug, log_error
     from ..utils.tts import get_tts
 except ImportError:
-    from config import get_config
-    from core.translator import TranslationResult
-    from utils.logger import log_debug, log_error
-    from utils.tts import get_tts
+    from src.config import get_config
+    from src.core.translator import TranslationResult
+    from src.utils.logger import log_debug, log_error
+    from src.utils.tts import get_tts
 
 
 # 主题样式定义

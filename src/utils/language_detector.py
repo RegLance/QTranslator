@@ -6,7 +6,7 @@ from langdetect import detect, LangDetectException
 try:
     from ..utils.logger import log_debug, log_warning
 except ImportError:
-    from utils.logger import log_debug, log_warning
+    from src.utils.logger import log_debug, log_warning
 
 
 # 中文语言代码列表

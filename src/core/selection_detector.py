@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QApplication
 try:
     from ..config import get_config, APP_NAME
 except ImportError:
-    from config import get_config, APP_NAME
+    from src.config import get_config, APP_NAME
 
 
 @dataclass
@@ -67,7 +67,7 @@ class SelectionDetector(QObject):
                 from .text_capture import get_text_capture
                 self._text_capture = get_text_capture()
             except ImportError:
-                from core.text_capture import get_text_capture
+                from src.core.text_capture import get_text_capture
                 self._text_capture = get_text_capture()
         return self._text_capture
 
@@ -99,20 +99,28 @@ class SelectionDetector(QObject):
                        'PopupWindow' in str(type(widget)):
                         return True
             
-            # 使用 Windows API 检查前台窗口标题
+            # 使用 Windows API 检查前台窗口是否是应用自己的窗口
+            # 注意：不再使用窗口标题判断，因为会导致误判（如 PyCharm 打开 QTranslator 项目）
             if sys.platform == 'win32':
                 try:
                     import ctypes
                     hwnd = ctypes.windll.user32.GetForegroundWindow()
                     if hwnd:
-                        # 获取窗口标题
-                        length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
-                        if length > 0:
-                            buffer = ctypes.create_unicode_buffer(length + 1)
-                            ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
-                            title = buffer.value
-                            # 如果窗口标题包含我们的应用名，忽略
-                            if APP_NAME in title or "翻译" in title or "历史" in title or "设置" in title:
+                        # 获取窗口类名来判断是否是我们的 PyQt 窗口
+                        # PyQt6 窗口类名通常包含 "Qt6" 或 "QWidget"
+                        class_name_buffer = ctypes.create_unicode_buffer(256)
+                        ctypes.windll.user32.GetClassNameW(hwnd, class_name_buffer, 256)
+                        class_name = class_name_buffer.value
+
+                        # 检查是否是 Qt 窗口类（我们的应用窗口）
+                        # PyQt6 主窗口类名通常是 "Qt6QWindowIcon" 或类似
+                        if class_name and ('Qt6' in class_name or 'QWidget' in class_name):
+                            # 进一步检查：获取窗口进程ID，确认是否是我们自己的进程
+                            process_id = ctypes.c_ulong()
+                            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+                            current_pid = ctypes.windll.kernel32.GetCurrentProcessId()
+                            # 只有进程ID也匹配，才是我们自己的窗口
+                            if process_id.value == current_pid:
                                 return True
                 except Exception:
                     pass

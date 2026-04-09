@@ -11,7 +11,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, Qt, QMetaObject
 try:
     from ..utils.logger import log_info, log_error, log_debug
 except ImportError:
-    from utils.logger import log_info, log_error, log_debug
+    from src.utils.logger import log_info, log_error, log_debug
 
 
 class HotkeyManager(QObject):
@@ -31,7 +31,7 @@ class HotkeyManager(QObject):
         """注册全局热键
 
         Args:
-            hotkey: 热键字符串，如 "Ctrl+Shift+T"
+            hotkey: 热键字符串，如 "Ctrl+O"
             callback: 热键触发时的回调函数（可选，建议使用信号）
             name: 热键名称，用于标识不同的热键
 
@@ -47,7 +47,7 @@ class HotkeyManager(QObject):
             import keyboard
 
             # 转换热键格式
-            # PyQt格式: Ctrl+Shift+T -> keyboard格式: ctrl+shift+t
+            # PyQt格式: Ctrl+O -> keyboard格式: ctrl+o
             kb_hotkey = hotkey.lower()
 
             # 根据热键名称选择回调

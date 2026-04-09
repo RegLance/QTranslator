@@ -8,7 +8,7 @@ from typing import Optional
 try:
     from ..config import get_config, APP_NAME
 except ImportError:
-    from config import get_config, APP_NAME
+    from src.config import get_config, APP_NAME
 
 
 class FileLogHandler(logging.Handler):

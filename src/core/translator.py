@@ -19,10 +19,13 @@ try:
     from ..config import get_config
     from ..utils.logger import log_warning, log_info, log_translation, log_debug, log_error
     from ..utils.language_detector import detect_language, is_chinese_text, get_translation_direction
+    from .api_config import *
 except ImportError:
-    from config import get_config
-    from utils.logger import log_warning, log_info, log_translation, log_debug, log_error
-    from utils.language_detector import detect_language, is_chinese_text, get_translation_direction
+    # 打包后或直接运行时的导入路径
+    from src.config import get_config
+    from src.utils.logger import log_warning, log_info, log_translation, log_debug, log_error
+    from src.utils.language_detector import detect_language, is_chinese_text, get_translation_direction
+    from src.core.api_config import *
 
 
 # 语言检测锁，确保线程安全
@@ -38,7 +41,7 @@ def _log_crash_safe(message: str, exc: Exception = None):
             base_dir = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
         else:
             base_dir = Path.home()
-        crash_path = base_dir / "Translate Copilot" / "crash.log"
+        crash_path = base_dir / "QTranslator" / "crash.log"
         crash_path.parent.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -67,11 +70,11 @@ class Translator:
     """翻译服务类"""
 
     # ==================== API 配置（硬编码） ====================
-    _api_key: str = ""       # API Key
-    _base_url: str = ""      # API Base URL
-    _model: str = ""         # 模型名称
+    _api_key: str = config_api_key       # API Key
+    _base_url: str = config_base_url      # API Base URL
+    _model: str = config_model        # 模型名称
     _timeout: int = 60       # 请求超时时间（秒）
-    _no_proxy: str = ""      # 不使用代理的地址，多个用逗号分隔，如：localhost,127.0.0.1,*.internal
+    _no_proxy: str = config_no_proxy      # 不使用代理的地址，多个用逗号分隔，如：localhost,127.0.0.1,*.internal
 
     def __init__(self):
         """初始化翻译服务"""
@@ -267,8 +270,7 @@ Requirements:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=2000,
-                temperature=0.3,
+                temperature=0,
                 stream=True,
             )
 
@@ -327,8 +329,7 @@ Requirements:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=1000,
-                temperature=0.3,
+                temperature=0,
                 stream=True,
             )
 
@@ -410,8 +411,7 @@ Requirements:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=1000,
-                temperature=0.3,
+                temperature=0,
                 stream=True,
             )
 
@@ -503,8 +503,7 @@ Requirements:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=1000,
-                temperature=0.3,
+                temperature=0,
             )
 
             translated_text = response.choices[0].message.content.strip()

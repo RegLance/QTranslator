@@ -1,5 +1,5 @@
 """
-PyInstaller 打包脚本 - Translate Copilot
+PyInstaller 打包脚本 - QTranslator
 包含 native 目录以支持 selection-hook 文本选择捕获
 """
 import os
@@ -14,7 +14,7 @@ NATIVE_DIR = PROJECT_ROOT / "native"
 
 # 输出版本信息
 VERSION = "1.0.0"
-APP_NAME = "Translate Copilot"
+APP_NAME = "QTranslator"
 
 def get_spec_content() -> str:
     """生成 .spec 文件内容"""
@@ -51,7 +51,7 @@ def get_spec_content() -> str:
     hidden_imports_str = "\n    ".join(f'"{x}",' for x in hidden_imports)
 
     return f'''# -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec file for Translate Copilot
+# PyInstaller spec file for QTranslator
 
 import sys
 from pathlib import Path
@@ -112,7 +112,7 @@ exe = EXE(
 
 def create_spec_file():
     """创建 .spec 文件"""
-    spec_path = PROJECT_ROOT / "translate_copilot.spec"
+    spec_path = PROJECT_ROOT / "qtranslator.spec"
 
     # 绝对路径 - 使用正斜杠
     icon_path = str(PROJECT_ROOT / "assets" / "icon.ico").replace("\\", "/")
@@ -120,7 +120,7 @@ def create_spec_file():
     assets_path = str(PROJECT_ROOT / "assets").replace("\\", "/")
 
     content = rf'''# -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec file for Translate Copilot
+# PyInstaller spec file for QTranslator
 
 import sys
 from pathlib import Path
@@ -170,6 +170,7 @@ a = Analysis(
         "src.core.text_capture",
         "src.core.translator",
         "src.core.writing",  # 新增：写作服务模块
+        "src.core.api_config",  # 新增：API 配置模块
         "src.core.__init__",
         # UI 模块
         "src.ui.history_window",
@@ -251,7 +252,7 @@ def build_exe():
     print("=" * 50)
 
     PyInstaller.__main__.run([
-        str(PROJECT_ROOT / "translate_copilot.spec"),
+        str(PROJECT_ROOT / "qtranslator.spec"),
         "--clean",
         "--noconfirm",
     ])
@@ -263,7 +264,7 @@ def build_exe():
 
 def main():
     """主函数"""
-    print(f"Translate Copilot 打包脚本 v{VERSION}")
+    print(f"QTranslator 打包脚本 v{VERSION}")
     print(f"项目目录: {PROJECT_ROOT}")
     print()
 

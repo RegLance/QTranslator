@@ -1,4 +1,4 @@
-"""Translate Copilot - 主入口文件"""
+"""QTranslator - 主入口文件"""
 import sys
 import os
 import time
@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QKeySequenceEdit
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect
-from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence
+from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence, QPalette
 
 # 设置高 DPI 支持
 if sys.platform == 'win32':
@@ -50,16 +50,16 @@ class CrashHandler:
             # 尝试从配置获取路径
             if sys.platform == 'win32':
                 base_dir = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
-                app_dir = base_dir / "Translate Copilot"
+                app_dir = base_dir / "QTranslator"
             else:
-                app_dir = Path.home() / ".config" / "translate-copilot"
+                app_dir = Path.home() / ".config" / "qtranslator"
 
             app_dir.mkdir(parents=True, exist_ok=True)
             self._crash_log_path = app_dir / "crash.log"
         except Exception:
             # 如果无法创建目录，使用临时目录
             import tempfile
-            self._crash_log_path = Path(tempfile.gettempdir()) / "translate_copilot_crash.log"
+            self._crash_log_path = Path(tempfile.gettempdir()) / "qtranslator_crash.log"
 
         # 设置全局异常处理器
         self._setup_exception_hooks()
@@ -163,22 +163,23 @@ try:
     from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style
     from .utils.hotkey_manager import get_hotkey_manager
 except ImportError:
-    from config import get_config, APP_NAME
-    from core.text_capture import get_text_capture, capture_text_direct
-    from core.selection_detector import get_selection_detector
-    from core.hover_detector import get_hover_detector
-    from core.translator import get_translator
-    from core.writing import get_writing_service, WritingResult
-    from ui.popup_window import get_popup_window
-    from ui.translate_button import get_translate_button
-    from ui.tray_icon import get_tray_icon
-    from ui.translator_window import get_translator_window
-    from ui.history_window import get_history_window
-    from ui.help_window import get_help_window
-    from utils.logger import get_logger, log_info, log_error, log_debug
-    from utils.history import add_translation_history
-    from utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style
-    from utils.hotkey_manager import get_hotkey_manager
+    # 打包后的导入路径
+    from src.config import get_config, APP_NAME
+    from src.core.text_capture import get_text_capture, capture_text_direct
+    from src.core.selection_detector import get_selection_detector
+    from src.core.hover_detector import get_hover_detector
+    from src.core.translator import get_translator
+    from src.core.writing import get_writing_service, WritingResult
+    from src.ui.popup_window import get_popup_window
+    from src.ui.translate_button import get_translate_button
+    from src.ui.tray_icon import get_tray_icon
+    from src.ui.translator_window import get_translator_window
+    from src.ui.history_window import get_history_window
+    from src.ui.help_window import get_help_window
+    from src.utils.logger import get_logger, log_info, log_error, log_debug
+    from src.utils.history import add_translation_history
+    from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style
+    from src.utils.hotkey_manager import get_hotkey_manager
 
 
 def setup_auto_start(enable: bool):
@@ -373,18 +374,31 @@ class SettingsDialog(QDialog):
         hotkey_layout.setContentsMargins(12, 20, 12, 12)
         hotkey_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        self._hotkey_edit = QKeySequenceEdit()
-        self._hotkey_edit.setMinimumHeight(32)
-        self._hotkey_edit.setKeySequence(QKeySequence("Ctrl+Shift+T"))
+        # 翻译窗口快捷键按钮
+        self._hotkey_btn = QPushButton("Ctrl+O")
+        self._hotkey_btn.setMinimumHeight(32)
+        self._hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._hotkey_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._hotkey_btn.setToolTip("点击后按下新的快捷键组合")
         self._hotkey_label = QLabel("唤醒翻译窗口:")
-        hotkey_layout.addRow(self._hotkey_label, self._hotkey_edit)
+        hotkey_layout.addRow(self._hotkey_label, self._hotkey_btn)
 
-        # 写作快捷键
-        self._writing_hotkey_edit = QKeySequenceEdit()
-        self._writing_hotkey_edit.setMinimumHeight(32)
-        self._writing_hotkey_edit.setKeySequence(QKeySequence("Ctrl+Shift+W"))
+        # 写作快捷键按钮
+        self._writing_hotkey_btn = QPushButton("Ctrl+I")
+        self._writing_hotkey_btn.setMinimumHeight(32)
+        self._writing_hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._writing_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._writing_hotkey_btn.setToolTip("点击后按下新的快捷键组合")
         self._writing_hotkey_label = QLabel("划词写作:")
-        hotkey_layout.addRow(self._writing_hotkey_label, self._writing_hotkey_edit)
+        hotkey_layout.addRow(self._writing_hotkey_label, self._writing_hotkey_btn)
+
+        # 存储当前快捷键值
+        self._hotkey_value = "Ctrl+O"
+        self._writing_hotkey_value = "Ctrl+I"
+
+        # 监听按钮点击
+        self._hotkey_btn.clicked.connect(lambda: self._start_hotkey_capture("translator"))
+        self._writing_hotkey_btn.clicked.connect(lambda: self._start_hotkey_capture("writing"))
 
         scroll_layout.addWidget(self._hotkey_group)
 
@@ -620,22 +634,28 @@ class SettingsDialog(QDialog):
             }}
         """)
 
-        # 快捷键设置
-        hotkey_style = f"""
-            QKeySequenceEdit {{
+        # 快捷键按钮样式
+        hotkey_btn_style = f"""
+            QPushButton {{
                 background-color: {self._theme['input_bg']};
                 border: 1px solid {self._theme['input_border']};
                 border-radius: 4px;
-                padding: 4px 8px;
+                padding: 4px 12px;
                 color: {self._theme['text_primary']};
                 font-size: 13px;
+                text-align: left;
             }}
-            QKeySequenceEdit:focus {{
+            QPushButton:hover {{
                 border-color: {self._theme['accent_color']};
             }}
+            QPushButton:focus {{
+                border-color: {self._theme['accent_color']};
+                background-color: {self._theme['accent_color']};
+                color: #ffffff;
+            }}
         """
-        self._hotkey_edit.setStyleSheet(hotkey_style)
-        self._writing_hotkey_edit.setStyleSheet(hotkey_style)
+        self._hotkey_btn.setStyleSheet(hotkey_btn_style)
+        self._writing_hotkey_btn.setStyleSheet(hotkey_btn_style)
 
         # 复选框样式和图标
         checkbox_style = get_checkbox_style(self._theme)
@@ -679,6 +699,57 @@ class SettingsDialog(QDialog):
                 background-color: {self._theme['accent_hover']};
             }}
         """)
+
+    def _start_hotkey_capture(self, target: str):
+        """开始捕获快捷键"""
+        if target == "translator":
+            self._hotkey_btn.setText("请按下快捷键...")
+            self._hotkey_btn.setFocus()
+            self._capturing_hotkey_target = "translator"
+        else:
+            self._writing_hotkey_btn.setText("请按下快捷键...")
+            self._writing_hotkey_btn.setFocus()
+            self._capturing_hotkey_target = "writing"
+
+    def keyPressEvent(self, event):
+        """键盘事件处理 - 用于捕获快捷键"""
+        if hasattr(self, '_capturing_hotkey_target') and self._capturing_hotkey_target:
+            key = event.key()
+            modifiers = event.modifiers()
+
+            # 忽略单独的功能键
+            if key in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+                return
+
+            # 构建快捷键字符串
+            key_sequence_parts = []
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                key_sequence_parts.append("Ctrl")
+            if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                key_sequence_parts.append("Shift")
+            if modifiers & Qt.KeyboardModifier.AltModifier:
+                key_sequence_parts.append("Alt")
+            if modifiers & Qt.KeyboardModifier.MetaModifier:
+                key_sequence_parts.append("Meta")
+
+            # 获取按键名称
+            key_name = QKeySequence(key).toString()
+            key_sequence_parts.append(key_name)
+
+            hotkey = "+".join(key_sequence_parts)
+
+            # 更新对应的快捷键
+            if self._capturing_hotkey_target == "translator":
+                self._hotkey_value = hotkey
+                self._hotkey_btn.setText(hotkey)
+            else:
+                self._writing_hotkey_value = hotkey
+                self._writing_hotkey_btn.setText(hotkey)
+
+            self._capturing_hotkey_target = None
+            return
+
+        super().keyPressEvent(event)
 
     def _on_checkbox_toggled(self, checked: bool):
         """复选框状态改变时更新图标"""
@@ -774,12 +845,14 @@ class SettingsDialog(QDialog):
         self._font_size_spin.setValue(font_size)
 
         # 快捷键
-        hotkey = self._config.get('hotkey.translator_window', 'Ctrl+Shift+T')
-        self._hotkey_edit.setKeySequence(QKeySequence(hotkey))
+        hotkey = self._config.get('hotkey.translator_window', 'Ctrl+O')
+        self._hotkey_value = hotkey
+        self._hotkey_btn.setText(hotkey)
 
         # 写作快捷键
-        writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+Shift+W')
-        self._writing_hotkey_edit.setKeySequence(QKeySequence(writing_hotkey))
+        writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+I')
+        self._writing_hotkey_value = writing_hotkey
+        self._writing_hotkey_btn.setText(writing_hotkey)
 
         # 保留原文选项
         keep_original = self._config.get('writing.keep_original', False)
@@ -820,12 +893,12 @@ class SettingsDialog(QDialog):
 
         try:
             # 快捷键 - 先获取旧的热键，用于判断是否需要重新注册
-            old_hotkey = self._config.get('hotkey.translator_window', 'Ctrl+Shift+T')
-            new_hotkey = self._hotkey_edit.keySequence().toString()
+            old_hotkey = self._config.get('hotkey.translator_window', 'Ctrl+O')
+            new_hotkey = self._hotkey_value
 
             # 写作快捷键
-            old_writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+Shift+W')
-            new_writing_hotkey = self._writing_hotkey_edit.keySequence().toString()
+            old_writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+I')
+            new_writing_hotkey = self._writing_hotkey_value
 
             self._config.set('target_language', self._target_lang_combo.currentText())
 
@@ -1105,12 +1178,12 @@ class MainController(QObject):
     def _setup_hotkey(self):
         """设置全局热键"""
         # 翻译窗口热键
-        hotkey = self._config.get('hotkey.translator_window', 'Ctrl+Shift+T')
+        hotkey = self._config.get('hotkey.translator_window', 'Ctrl+O')
         self._hotkey_manager.register_hotkey(hotkey, name="translator_window")
         log_debug(f"已注册翻译窗口热键: {hotkey}")
 
         # 写作热键
-        writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+Shift+W')
+        writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+I')
         self._hotkey_manager.register_hotkey(writing_hotkey, name="writing")
         log_debug(f"已注册写作热键: {writing_hotkey}")
 
@@ -1147,15 +1220,28 @@ class MainController(QObject):
         log_info(f"{APP_NAME} 已停止")
 
     def _on_hotkey_triggered(self):
-        """热键触发时显示翻译窗口"""
-        log_debug("热键触发，显示翻译窗口")
+        """热键触发时显示/隐藏翻译窗口（实现切换功能）"""
+        log_debug("热键触发")
+
+        # 如果翻译窗口已经可见，则隐藏它
+        if self._translator_window.isVisible() and not self._translator_window.is_minimized():
+            log_debug("翻译窗口已可见，隐藏窗口")
+            self._translator_window.hide()
+            self._last_text = ""
+            return
+
         # 先隐藏划词翻译相关窗口
-        self._translator_window.hide()
         self._translate_button.hide()
         self._last_text = ""
 
-        # 显示翻译窗口
-        self._translator_window.show_window()
+        # 如果窗口最小化了，恢复窗口
+        if self._translator_window.is_minimized():
+            log_debug("翻译窗口最小化状态，恢复窗口")
+            self._translator_window.restore_from_minimized()
+        else:
+            # 显示翻译窗口
+            log_debug("显示翻译窗口")
+            self._translator_window.show_window()
 
     def _on_writing_hotkey_triggered(self):
         """写作热键触发时执行写作功能
@@ -1341,7 +1427,7 @@ class MainController(QObject):
             from .core.text_capture import get_last_program_name
             program_name = get_last_program_name()
         except ImportError:
-            from core.text_capture import get_last_program_name
+            from src.core.text_capture import get_last_program_name
             program_name = get_last_program_name()
 
         # 强制处理所有待处理事件，确保窗口显示
@@ -1487,7 +1573,10 @@ class SingleInstance:
 
 def main():
     # 单实例检查
-    from config import APP_ID
+    try:
+        from .config import APP_ID
+    except ImportError:
+        from src.config import APP_ID
     single_instance = SingleInstance(APP_ID)
 
     if not single_instance.try_lock():

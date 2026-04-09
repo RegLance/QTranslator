@@ -1,4 +1,4 @@
-# Translate Copilot
+# QTranslator
 
 一款智能翻译助手，基于大语言模型提供高质量的翻译服务。
 
@@ -47,7 +47,7 @@
 
 ### 划词写作
 
-1. 选中文本后按 `Ctrl+Shift+W`
+1. 选中文本后按 `Ctrl+I`
 2. 翻译结果直接替换原文
 3. 可在设置中开启"保留原文"，译文将插入在原文下方
 
@@ -57,10 +57,10 @@
 
 | 功能 | 快捷键 |
 |------|--------|
-| 呼出翻译窗口 | `Ctrl+Shift+T` |
-| 划词写作 | `Ctrl+Shift+W` |
+| 呼出翻译窗口 | `Ctrl+O` |
+| 划词写作 | `Ctrl+I` |
 | 关闭窗口 | `Esc` |
-| 快速翻译 | `Ctrl+Enter` |
+| 快速翻译 | `Enter` |
 
 ## 配置说明
 
@@ -85,8 +85,8 @@ font:
 
 # 快捷键配置
 hotkey:
-  translator_window: "Ctrl+Shift+T"
-  writing: "Ctrl+Shift+W"
+  translator_window: "Ctrl+O"
+  writing: "Ctrl+I"
 
 # 写作配置
 writing:
@@ -108,7 +108,7 @@ startup:
 ## 目录结构
 
 ```
-Translate-Copilot/
+QTranslator/
 ├── src/
 │   ├── main.py              # 主入口
 │   ├── config.py            # 配置管理

@@ -1,4 +1,4 @@
-"""全局主题管理模块 - Translate Copilot"""
+"""全局主题管理模块 - QTranslator"""
 from typing import Dict, Any
 
 # 主题样式定义
@@ -123,10 +123,10 @@ def get_theme(theme_name: str = None) -> Dict[str, Any]:
     """
     if theme_name is None:
         try:
-            from config import get_config
+            from ..config import get_config
             theme_name = get_config().get('theme.popup_style', 'dark')
         except ImportError:
-            from ..config import get_config
+            from src.config import get_config
             theme_name = get_config().get('theme.popup_style', 'dark')
 
     return THEMES.get(theme_name, THEMES['dark'])
@@ -135,10 +135,10 @@ def get_theme(theme_name: str = None) -> Dict[str, Any]:
 def get_theme_name() -> str:
     """获取当前主题名称"""
     try:
-        from config import get_config
+        from ..config import get_config
         return get_config().get('theme.popup_style', 'dark')
     except ImportError:
-        from ..config import get_config
+        from src.config import get_config
         return get_config().get('theme.popup_style', 'dark')
 
 

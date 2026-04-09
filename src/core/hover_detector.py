@@ -18,7 +18,7 @@ from PyQt6.QtCore import QTimer, QObject, pyqtSignal, QMetaObject, Qt
 try:
     from ..config import get_config
 except ImportError:
-    from config import get_config
+    from src.config import get_config
 
 
 @dataclass

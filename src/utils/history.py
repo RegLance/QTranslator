@@ -9,8 +9,8 @@ try:
     from ..config import get_config, APP_NAME
     from ..utils.logger import log_info, log_error, log_debug
 except ImportError:
-    from config import get_config, APP_NAME
-    from utils.logger import log_info, log_error, log_debug
+    from src.config import get_config, APP_NAME
+    from src.utils.logger import log_info, log_error, log_debug
 
 
 @dataclass

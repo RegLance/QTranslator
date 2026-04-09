@@ -16,10 +16,10 @@ try:
     from ..config import APP_NAME, get_config
     from ..utils.tts import get_tts
 except ImportError:
-    from utils.history import get_history, HistoryItem
-    from utils.theme import get_theme, get_scrollbar_style, get_splitter_style
-    from config import APP_NAME, get_config
-    from utils.tts import get_tts
+    from src.utils.history import get_history, HistoryItem
+    from src.utils.theme import get_theme, get_scrollbar_style, get_splitter_style
+    from src.config import APP_NAME, get_config
+    from src.utils.tts import get_tts
 
 
 class HistoryWindow(QWidget):

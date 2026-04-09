@@ -1,4 +1,4 @@
-"""独立翻译窗口模块 - Translate Copilot（无边框风格，支持主题切换、纯文本显示）"""
+"""独立翻译窗口模块 - QTranslator（无边框风格，支持主题切换、纯文本显示）"""
 import sys
 from typing import Optional
 from pathlib import Path
@@ -7,17 +7,17 @@ from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QComboBox, QFrame,
     QGraphicsDropShadowEffect, QApplication, QSplitter
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect
-from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QKeySequence, QIcon, QFont
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect, QPointF
+from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QKeySequence, QIcon, QFont, QPixmap, QPainter, QPen
 
 try:
     from ..utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style
     from ..config import get_config
     from ..utils.tts import get_tts
 except ImportError:
-    from utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style
-    from config import get_config
-    from utils.tts import get_tts
+    from src.utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style
+    from src.config import get_config
+    from src.utils.tts import get_tts
 
 
 class StreamingTranslationWorker(QThread):
@@ -35,7 +35,7 @@ class StreamingTranslationWorker(QThread):
 
     def run(self):
         try:
-            from core.translator import get_translator
+            from src.core.translator import get_translator
             translator = get_translator()
             full_text = ""
 
@@ -74,7 +74,7 @@ class StreamingPolishingWorker(QThread):
 
     def run(self):
         try:
-            from core.translator import get_translator
+            from src.core.translator import get_translator
             translator = get_translator()
             full_text = ""
 
@@ -113,7 +113,7 @@ class StreamingSummarizeWorker(QThread):
 
     def run(self):
         try:
-            from core.translator import get_translator
+            from src.core.translator import get_translator
             translator = get_translator()
             full_text = ""
 
@@ -183,6 +183,12 @@ class TranslatorWindow(QWidget):
         self._auto_mode = False  # 是否处于自动翻译模式
         self._pending_original_text = ""  # 待翻译的原文
 
+        # 流式翻译高度调整相关
+        self._height_animation = None  # 高度调整动画
+        self._last_adjusted_height = 0  # 上一次调整的高度（避免重复调整）
+        self._height_adjust_timer = None  # 高度调整定时器（延迟调整，减少频繁更新）
+        self._is_streaming = False  # 是否正在流式输出
+
         self._setup_window_properties()
         self._setup_ui()
 
@@ -234,6 +240,59 @@ class TranslatorWindow(QWidget):
             ctypes.windll.user32.SetWindowLongW(hwnd, -16, new_style)
         except Exception:
             pass
+
+    def _create_copy_icon(self, theme: dict) -> QIcon:
+        """创建复制图标（两个重叠的空心文档）"""
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(QColor(0, 0, 0, 0))
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # 图标颜色使用主题的 muted 文本颜色
+        icon_color = QColor(theme.get('text_muted', '#888888'))
+        pen = QPen(icon_color, 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+
+        # 不填充，只绘制边框
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(pen)
+
+        # 绘制后面的文档（偏移位置，稍微小一点）
+        painter.drawRoundedRect(6, 1, 10, 13, 2, 2)
+
+        # 绘制前面的文档（主位置）
+        painter.drawRoundedRect(2, 4, 10, 13, 2, 2)
+
+        painter.end()
+
+        return QIcon(pixmap)
+
+    def _create_speak_icon(self, theme: dict) -> QIcon:
+        """创建朗读图标（播放三角形）"""
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(QColor(0, 0, 0, 0))
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # 图标颜色使用主题的 muted 文本颜色
+        icon_color = QColor(theme.get('text_muted', '#888888'))
+
+        # 绘制播放三角形
+        painter.setBrush(icon_color)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        # 三角形的三个顶点
+        triangle = [
+            QPointF(5, 3),    # 左上
+            QPointF(5, 15),   # 左下
+            QPointF(15, 9),   # 右中
+        ]
+        painter.drawPolygon(*triangle)
+
+        painter.end()
+
+        return QIcon(pixmap)
 
     def _setup_ui(self):
         """设置 UI"""
@@ -290,7 +349,7 @@ class TranslatorWindow(QWidget):
         title_layout.setContentsMargins(8, 0, 8, 0)
 
         # 标题文字
-        self._title_label = QLabel("翻译窗口")
+        self._title_label = QLabel("QTranslator")
         self._title_label.setStyleSheet(f"""
             QLabel {{
                 color: {theme['text_muted']};
@@ -510,23 +569,24 @@ class TranslatorWindow(QWidget):
         self._input_text.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._input_text.customContextMenuRequested.connect(self._show_input_context_menu)
         self._input_text.setAcceptRichText(False)  # 禁用富文本
+        self._input_text.installEventFilter(self)  # 安装事件过滤器以处理回车键
         self._splitter.addWidget(self._input_text)
 
-        # 翻译结果显示区域 - 包装在容器中以支持右下角按钮
+        # 翻译结果显示区域 - 包装在容器中以支持右下角悬浮按钮
         self._output_container = QWidget()
         self._output_container.setStyleSheet(f"""
             QWidget {{
-                background-color: transparent;
+                background-color: {theme['bg_secondary']};
                 border: 1px solid {theme['border_color']};
                 border-radius: 4px;
             }}
         """)
-        self._output_layout = QVBoxLayout(self._output_container)
-        self._output_layout.setContentsMargins(0, 0, 0, 0)
-        self._output_layout.setSpacing(0)
+        # 不使用布局，使用绝对定位放置文本框和悬浮按钮
+        self._output_container.setMinimumHeight(60)
 
         # 翻译结果文本框
         self._output_text = QTextEdit()
+        self._output_text.setParent(self._output_container)
         self._output_text.setReadOnly(True)
         self._output_text.setFont(QFont("Microsoft YaHei", self._font_size))
         self._output_text.setTextInteractionFlags(
@@ -548,71 +608,79 @@ class TranslatorWindow(QWidget):
         self._output_text.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._output_text.customContextMenuRequested.connect(self._show_output_context_menu)
         self._output_text.setAcceptRichText(False)  # 禁用富文本
-        self._output_layout.addWidget(self._output_text, 1)
 
-        # 底部按钮区域
-        self._output_button_layout = QHBoxLayout()
-        self._output_button_layout.setContentsMargins(8, 0, 8, 4)
-        self._output_button_layout.addStretch()
+        # 悬浮按钮容器（右下角）- 完全透明，无边框
+        self._floating_buttons_frame = QFrame()
+        self._floating_buttons_frame.setParent(self._output_container)
+        self._floating_buttons_frame.setObjectName("floatingButtonsFrame")
+        self._floating_buttons_frame.setStyleSheet(f"""
+            QFrame#floatingButtonsFrame {{
+                background-color: transparent;
+                border: none;
+                border-radius: 4px;
+            }}
+        """)
+        self._floating_buttons_layout = QHBoxLayout(self._floating_buttons_frame)
+        self._floating_buttons_layout.setContentsMargins(4, 2, 4, 2)
+        self._floating_buttons_layout.setSpacing(2)
 
-        # 朗读按钮（朗读译文）
-        self._speak_output_btn = QPushButton("▶")
+        # 朗读按钮（朗读译文）- 使用绘制的播放图标
+        self._speak_output_btn = QPushButton()
         self._speak_output_btn.setObjectName("speakOutputBtn")
-        self._speak_output_btn.setFixedSize(20, 20)
+        self._speak_output_btn.setFixedSize(28, 28)
         self._speak_output_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._speak_output_btn.setToolTip("朗读译文")
-        self._speak_output_btn.setStyleSheet("""
-            QPushButton#speakOutputBtn {
+        self._speak_output_btn.setIcon(self._create_speak_icon(theme))
+        self._speak_output_btn.setStyleSheet(f"""
+            QPushButton#speakOutputBtn {{
                 background-color: transparent;
-                color: #888888;
                 border: none;
-                border-radius: 3px;
-                font-size: 10px;
-                font-weight: bold;
-            }
-            QPushButton#speakOutputBtn:hover {
-                background-color: transparent;
-                color: #333333;
-            }
-            QPushButton#speakOutputBtn:pressed {
+                border-radius: 4px;
+            }}
+            QPushButton#speakOutputBtn:hover {{
                 background-color: rgba(0, 0, 0, 0.1);
-            }
+            }}
+            QPushButton#speakOutputBtn:pressed {{
+                background-color: rgba(0, 0, 0, 0.2);
+            }}
         """)
         self._speak_output_btn.clicked.connect(self._speak_output)
-        self._output_button_layout.addWidget(self._speak_output_btn)
+        self._floating_buttons_layout.addWidget(self._speak_output_btn)
 
-        # 复制按钮
-        self._copy_output_btn = QPushButton("⎘")
+        # 复制按钮 - 使用绘制的复制图标
+        self._copy_output_btn = QPushButton()
         self._copy_output_btn.setObjectName("copyOutputBtn")
-        self._copy_output_btn.setFixedSize(20, 20)
+        self._copy_output_btn.setFixedSize(28, 28)
         self._copy_output_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._copy_output_btn.setToolTip("复制译文")
-        self._copy_output_btn.setStyleSheet("""
-            QPushButton#copyOutputBtn {
+        self._copy_output_btn.setIcon(self._create_copy_icon(theme))
+        self._copy_output_btn.setStyleSheet(f"""
+            QPushButton#copyOutputBtn {{
                 background-color: transparent;
-                color: #888888;
                 border: none;
-                border-radius: 3px;
-                font-size: 11px;
-            }
-            QPushButton#copyOutputBtn:hover {
-                background-color: transparent;
-                color: #333333;
-            }
-            QPushButton#copyOutputBtn:pressed {
+                border-radius: 4px;
+            }}
+            QPushButton#copyOutputBtn:hover {{
                 background-color: rgba(0, 0, 0, 0.1);
-            }
+            }}
+            QPushButton#copyOutputBtn:pressed {{
+                background-color: rgba(0, 0, 0, 0.2);
+            }}
         """)
         self._copy_output_btn.clicked.connect(self._copy_all_text)
-        self._output_button_layout.addWidget(self._copy_output_btn)
+        self._floating_buttons_layout.addWidget(self._copy_output_btn)
 
-        self._output_layout.addLayout(self._output_button_layout)
+        # 固定悬浮按钮容器大小
+        self._floating_buttons_frame.setFixedSize(70, 34)
 
         self._splitter.addWidget(self._output_container)
 
-        # 设置分割器初始比例
-        self._splitter.setSizes([150, 150])
+        # 设置分割器初始比例（输出框稍微高一些）
+        self._splitter.setSizes([120, 180])
         content_layout.addWidget(self._splitter, 1)
+
+        # 为输出容器安装事件过滤器，以便处理 resize 事件更新悬浮按钮位置
+        self._output_container.installEventFilter(self)
 
         # 为标题栏安装事件过滤器，以便处理鼠标移动事件更新光标
         self._title_bar.installEventFilter(self)
@@ -847,7 +915,7 @@ class TranslatorWindow(QWidget):
         # 更新输出框容器
         self._output_container.setStyleSheet(f"""
             QWidget {{
-                background-color: transparent;
+                background-color: {theme['bg_secondary']};
                 border: 1px solid {theme['border_color']};
                 border-radius: 4px;
             }}
@@ -867,40 +935,52 @@ class TranslatorWindow(QWidget):
             {get_scrollbar_style(theme)}
         """)
 
-        # 更新复制按钮样式
-        self._copy_output_btn.setStyleSheet(f"""
-            QPushButton#copyOutputBtn {{
+        # 更新悬浮按钮容器样式 - 完全透明，无边框
+        self._floating_buttons_frame.setStyleSheet(f"""
+            QFrame#floatingButtonsFrame {{
                 background-color: transparent;
-                color: {theme['text_muted']};
                 border: none;
-                border-radius: 3px;
-                font-size: 11px;
-            }}
-            QPushButton#copyOutputBtn:hover {{
-                background-color: transparent;
-                color: {theme['text_primary']};
-            }}
-            QPushButton#copyOutputBtn:pressed {{
-                background-color: rgba(0, 0, 0, 0.1);
+                border-radius: 4px;
             }}
         """)
 
-        # 更新朗读按钮样式
+        # 根据主题设置悬停/点击效果
+        if self._theme_style == 'dark':
+            hover_bg = "rgba(255, 255, 255, 0.15)"
+            pressed_bg = "rgba(255, 255, 255, 0.25)"
+        else:
+            hover_bg = "rgba(0, 0, 0, 0.1)"
+            pressed_bg = "rgba(0, 0, 0, 0.2)"
+
+        # 更新复制按钮样式和图标
+        self._copy_output_btn.setIcon(self._create_copy_icon(theme))
+        self._copy_output_btn.setStyleSheet(f"""
+            QPushButton#copyOutputBtn {{
+                background-color: transparent;
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton#copyOutputBtn:hover {{
+                background-color: {hover_bg};
+            }}
+            QPushButton#copyOutputBtn:pressed {{
+                background-color: {pressed_bg};
+            }}
+        """)
+
+        # 更新朗读按钮样式和图标
+        self._speak_output_btn.setIcon(self._create_speak_icon(theme))
         self._speak_output_btn.setStyleSheet(f"""
             QPushButton#speakOutputBtn {{
                 background-color: transparent;
-                color: {theme['text_muted']};
                 border: none;
-                border-radius: 3px;
-                font-size: 10px;
-                font-weight: bold;
+                border-radius: 4px;
             }}
             QPushButton#speakOutputBtn:hover {{
-                background-color: transparent;
-                color: {theme['text_primary']};
+                background-color: {hover_bg};
             }}
             QPushButton#speakOutputBtn:pressed {{
-                background-color: rgba(0, 0, 0, 0.1);
+                background-color: {pressed_bg};
             }}
         """)
 
@@ -927,6 +1007,8 @@ class TranslatorWindow(QWidget):
         self._output_text.clear()
         self._auto_mode = False
         self._pending_original_text = ""
+        # 重置高度状态
+        self._reset_window_height()
 
     def _start_translation(self):
         """开始翻译"""
@@ -994,7 +1076,7 @@ class TranslatorWindow(QWidget):
             # 保存翻译历史
             if result:
                 try:
-                    from utils.history import add_translation_history
+                    from src.utils.history import add_translation_history
                     target_lang = self._lang_combo.currentText()
                     if target_lang == "自动检测":
                         target_lang = "中文"  # 默认
@@ -1077,7 +1159,7 @@ class TranslatorWindow(QWidget):
             # 保存润色历史
             if result:
                 try:
-                    from utils.history import add_translation_history
+                    from src.utils.history import add_translation_history
                     add_translation_history(
                         self._input_text.toPlainText(),
                         result,
@@ -1156,7 +1238,7 @@ class TranslatorWindow(QWidget):
             # 保存总结历史
             if result:
                 try:
-                    from utils.history import add_translation_history
+                    from src.utils.history import add_translation_history
                     target_lang = self._lang_combo.currentText()
                     if target_lang == "自动检测":
                         target_lang = "中文"
@@ -1431,7 +1513,25 @@ class TranslatorWindow(QWidget):
         super().leaveEvent(event)
 
     def eventFilter(self, obj, event):
-        """事件过滤器 - 处理子控件的鼠标事件以更新光标"""
+        """事件过滤器 - 处理子控件的鼠标事件和输入框的键盘事件"""
+        # 处理输出容器的 resize 事件（确保属性已存在）
+        if hasattr(self, '_output_container') and obj == self._output_container and event.type() == event.Type.Resize:
+            self._update_output_layout()
+            return False  # 不拦截，让事件继续传播
+
+        # 处理输入框的键盘事件
+        if obj == self._input_text and event.type() == event.Type.KeyPress:
+            key = event.key()
+            # 处理回车键
+            if key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
+                # Shift+回车：换行（不拦截，让 QTextEdit 处理）
+                if event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+                    return False  # 不拦截，让事件继续传播
+                # 回车（无修饰）：触发翻译
+                if self._input_text.toPlainText().strip():
+                    self._start_translation()
+                    return True  # 拦截事件，阻止换行
+
         if event.type() == event.Type.MouseMove:
             # 获取鼠标在主窗口中的位置
             pos = self.mapFromGlobal(obj.mapToGlobal(event.position().toPoint()))
@@ -1451,6 +1551,30 @@ class TranslatorWindow(QWidget):
             obj.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
         return super().eventFilter(obj, event)
+
+    def _update_output_layout(self):
+        """更新输出区域的布局（文本框和悬浮按钮位置）"""
+        try:
+            container_width = self._output_container.width()
+            container_height = self._output_container.height()
+
+            # 更新文本框大小（填充整个容器）
+            self._output_text.setGeometry(0, 0, container_width, container_height)
+
+            # 更新悬浮按钮位置（右下角，留出一定边距）
+            button_width = self._floating_buttons_frame.width()
+            button_height = self._floating_buttons_frame.height()
+            margin = 6
+
+            # 悬浮按钮位置：右下角，考虑边距
+            button_x = container_width - button_width - margin
+            button_y = container_height - button_height - margin
+
+            self._floating_buttons_frame.move(button_x, button_y)
+
+        except RuntimeError:
+            # 窗口已被销毁，忽略
+            pass
 
     def _get_cursor_shape_for_edge(self, edge: Optional[str]) -> Qt.CursorShape:
         """根据边缘获取光标形状"""
@@ -1517,8 +1641,10 @@ class TranslatorWindow(QWidget):
             self.hide()
             return
 
+        # 当焦点不在输入框时，回车键触发翻译
+        # 输入框的回车键由事件过滤器处理（回车=翻译，Shift+回车=换行）
         if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
-            if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            if not self._input_text.hasFocus() and self._input_text.toPlainText().strip():
                 self._start_translation()
                 return
 
@@ -1581,8 +1707,8 @@ class TranslatorWindow(QWidget):
             self._is_maximized = False
             self._maximize_btn.setText("□")
 
-        # 重置窗口大小
-        self.resize(500, 400)
+        # 重置窗口大小和高度状态
+        self._reset_window_height()
 
         # 计算并移动到鼠标位置
         x, y = self._calculate_position(mouse_pos)
@@ -1635,6 +1761,8 @@ class TranslatorWindow(QWidget):
             original_text: 原文内容，如果提供则显示在输入框中
         """
         self._streaming_text = ""
+        self._is_streaming = True  # 设置流式状态
+        self._last_adjusted_height = 0  # 重置高度记录
 
         if original_text:
             self._input_text.setPlainText(original_text)
@@ -1657,11 +1785,184 @@ class TranslatorWindow(QWidget):
         self._streaming_text += chunk
         self._output_text.setPlainText(self._streaming_text)
 
+        # 触发高度调整（延迟执行，避免频繁更新）
+        if self._is_streaming:
+            self._schedule_height_adjust()
+
     def finish_streaming(self):
         """完成流式翻译"""
+        self._is_streaming = False
+        # 清理定时器
+        if self._height_adjust_timer:
+            self._height_adjust_timer.stop()
+            self._height_adjust_timer = None
         # 滚动到顶部
         self._input_text.verticalScrollBar().setValue(0)
         self._output_text.verticalScrollBar().setValue(0)
+
+    def _calculate_required_height(self) -> int:
+        """计算显示当前内容所需的窗口高度
+
+        Returns:
+            所需的窗口高度（像素）
+        """
+        try:
+            screen_x, screen_y, screen_w, screen_h = self._get_screen_bounds()
+            # 最大允许高度（屏幕高度的60%）
+            max_height = int(screen_h * 0.6)
+
+            from PyQt6.QtGui import QFontMetrics, QTextDocument
+
+            # 计算输出文本高度
+            output_font = self._output_text.font()
+            output_text = self._output_text.toPlainText()
+
+            if output_text:
+                # 获取输出区域的可用宽度（减去边距）
+                output_width = self._output_text.width() - 20
+
+                # 使用 QTextDocument 计算精确高度
+                doc = QTextDocument()
+                doc.setDefaultFont(output_font)
+                doc.setTextWidth(output_width)
+                doc.setPlainText(output_text)
+                output_height = int(doc.size().height()) + 20
+                # 确保最小高度
+                output_height = max(60, output_height)
+            else:
+                output_height = 60
+
+            # 计算输入文本高度（限制最大高度）
+            input_text = self._input_text.toPlainText()
+            if input_text:
+                input_font = self._input_text.font()
+                input_width = self._input_text.width() - 20
+                input_doc = QTextDocument()
+                input_doc.setDefaultFont(input_font)
+                input_doc.setTextWidth(input_width)
+                input_doc.setPlainText(input_text)
+                input_height = int(input_doc.size().height()) + 20
+                input_height = max(60, min(input_height, 150))
+            else:
+                input_height = 60
+
+            # 总高度 = 标题栏 + 控制栏 + 边距 + 输入区 + 分割条 + 输出区
+            title_height = 28
+            control_height = 38
+            splitter_height = 6
+            margin = 40
+
+            total_height = title_height + control_height + margin + input_height + splitter_height + output_height
+
+            # 限制在合理范围内
+            min_window_height = 350
+            total_height = max(min_window_height, min(total_height, max_height))
+
+            return total_height
+
+        except Exception:
+            return 400
+
+    def _smooth_adjust_height(self, target_height: int, immediate: bool = False):
+        """平滑调整窗口高度
+
+        Args:
+            target_height: 目标高度
+            immediate: 是否立即调整（不使用动画）
+        """
+        try:
+            current_height = self.height()
+
+            # 如果高度差异太小，不调整
+            if abs(target_height - current_height) < 10:
+                return
+
+            # 如果目标高度比当前高度小，不调整（避免缩小）
+            if target_height < current_height:
+                return
+
+            self._last_adjusted_height = target_height
+
+            if immediate or not self.isVisible():
+                self.resize(self.width(), target_height)
+                return
+
+            # 使用动画平滑调整
+            from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QSize
+
+            if self._height_animation is None:
+                self._height_animation = QPropertyAnimation(self, "size")
+                self._height_animation.setDuration(150)
+                self._height_animation.setEasingCurve(QEasingCurve.Type.OutQuad)
+
+            # 停止正在进行的动画
+            if self._height_animation.state() == QPropertyAnimation.State.Running:
+                self._height_animation.stop()
+
+            current_size = self.size()
+            target_size = QSize(self.width(), target_height)
+
+            self._height_animation.setStartValue(current_size)
+            self._height_animation.setEndValue(target_size)
+            self._height_animation.start()
+
+        except RuntimeError:
+            pass
+        except Exception:
+            try:
+                self.resize(self.width(), target_height)
+            except:
+                pass
+
+    def _schedule_height_adjust(self):
+        """调度高度调整（延迟执行，避免频繁更新）"""
+        try:
+            if self._height_adjust_timer is not None and self._height_adjust_timer.isActive():
+                return
+
+            from PyQt6.QtCore import QTimer
+            if self._height_adjust_timer is None:
+                self._height_adjust_timer = QTimer(self)
+                self._height_adjust_timer.setSingleShot(True)
+                self._height_adjust_timer.timeout.connect(self._do_height_adjust)
+
+            self._height_adjust_timer.start(50)
+
+        except RuntimeError:
+            pass
+
+    def _do_height_adjust(self):
+        """执行高度调整"""
+        try:
+            if not self._is_streaming or not self.isVisible():
+                return
+
+            target_height = self._calculate_required_height()
+
+            if target_height != self._last_adjusted_height:
+                self._smooth_adjust_height(target_height)
+
+        except RuntimeError:
+            pass
+
+    def _reset_window_height(self):
+        """重置窗口高度到默认值"""
+        try:
+            self._last_adjusted_height = 0
+            self._is_streaming = False
+
+            if self._height_adjust_timer:
+                self._height_adjust_timer.stop()
+                self._height_adjust_timer = None
+
+            from PyQt6.QtCore import QPropertyAnimation
+            if self._height_animation and self._height_animation.state() == QPropertyAnimation.State.Running:
+                self._height_animation.stop()
+
+            self.resize(500, 400)
+
+        except RuntimeError:
+            pass
 
     def show_result(self, result):
         """显示翻译结果（非流式）

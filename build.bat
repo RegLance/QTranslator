@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
-title Translate Copilot 打包工具
+title QTranslator 打包工具
 
 echo ========================================
-echo   Translate Copilot 一键打包工具
+echo   QTranslator 一键打包工具
 echo ========================================
 echo.
 
@@ -26,7 +26,7 @@ echo.
 echo ========================================
 echo   打包完成!
 echo ========================================
-echo 输出文件: dist\Translate Copilot.exe
+echo 输出文件: dist\QTranslator.exe
 echo.
 
 pause

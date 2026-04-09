@@ -1,0 +1,104 @@
+# -*- mode: python ; coding: utf-8 -*-
+# PyInstaller spec file for QTranslator
+
+import sys
+from pathlib import Path
+
+block_cipher = None
+
+# 项目根目录
+project_root = Path(SPECPATH)
+
+a = Analysis(
+    ["run.py"],
+    pathex=[str(project_root)],
+    binaries=[],
+    datas=[
+        # 添加 native 目录 - 包含 selection-hook Node.js 服务
+        ("E:/qoder/QTranslator/native", "native"),
+        # 添加 assets 目录 - 包含应用图标
+        ("E:/qoder/QTranslator/assets", "assets"),
+    ],
+    hiddenimports=[
+        "PyQt6.QtCore",
+        "PyQt6.QtGui",
+        "PyQt6.QtWidgets",
+        "pynput.keyboard._win32",
+        "pynput.mouse._win32",
+        "pyperclip",
+        "openai",
+        "comtypes",
+        "comtypes.client",
+        "yaml",
+        "yaml.safe_load",
+        # 新增依赖包
+        "langdetect",
+        "langdetect.lang_detect_exception",
+        "keyboard",
+        # TTS 相关依赖
+        "pyttsx3",
+        "win32com.client",
+        "pythoncom",
+        "pywin32",
+        # 核心模块
+        "src.config",
+        "src.main",
+        "src.__init__",
+        "src.core.hover_detector",
+        "src.core.selection_detector",
+        "src.core.text_capture",
+        "src.core.translator",
+        "src.core.writing",  # 新增：写作服务模块
+        "src.core.api_config",  # 新增：API 配置模块
+        "src.core.__init__",
+        # UI 模块
+        "src.ui.history_window",
+        "src.ui.popup_window",
+        "src.ui.translate_button",
+        "src.ui.translator_window",
+        "src.ui.tray_icon",
+        "src.ui.help_window",
+        "src.ui.__init__",
+        # 工具模块
+        "src.utils.history",
+        "src.utils.logger",
+        "src.utils.language_detector",
+        "src.utils.hotkey_manager",
+        "src.utils.theme",
+        "src.utils.tts",  # 新增：TTS 模块
+        "src.utils.__init__",
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name="QTranslator",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,  # 不显示控制台窗口
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon="E:/qoder/QTranslator/assets/icon.ico",  # 应用图标
+)

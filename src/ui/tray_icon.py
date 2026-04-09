@@ -1,4 +1,4 @@
-"""系统托盘模块 - Translate Copilot"""
+"""系统托盘模块 - QTranslator"""
 import sys
 import os
 import traceback
@@ -16,8 +16,8 @@ try:
     from ..config import get_config, APP_NAME
     from ..utils.theme import get_theme, get_menu_style
 except ImportError:
-    from config import get_config, APP_NAME
-    from utils.theme import get_theme, get_menu_style
+    from src.config import get_config, APP_NAME
+    from src.utils.theme import get_theme, get_menu_style
 
 
 class TrayIcon(QObject):
@@ -333,14 +333,14 @@ class TrayIcon(QObject):
             # 尝试写入崩溃日志
             from datetime import datetime
             try:
-                from config import get_config
+                from src.config import get_config
                 crash_path = get_config().app_dir / "crash.log"
             except Exception:
                 if sys.platform == 'win32':
                     base_dir = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
                 else:
                     base_dir = Path.home()
-                crash_path = base_dir / "Translate Copilot" / "crash.log"
+                crash_path = base_dir / "QTranslator" / "crash.log"
                 crash_path.parent.mkdir(parents=True, exist_ok=True)
 
             with open(crash_path, 'a', encoding='utf-8') as f:

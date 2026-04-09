@@ -12,8 +12,8 @@ try:
     from ..config import get_config, APP_NAME
     from ..utils.theme import get_theme, get_scrollbar_style
 except ImportError:
-    from config import get_config, APP_NAME
-    from utils.theme import get_theme, get_scrollbar_style
+    from src.config import get_config, APP_NAME
+    from src.utils.theme import get_theme, get_scrollbar_style
 
 
 class HelpWindow(QWidget):
@@ -166,16 +166,16 @@ class HelpWindow(QWidget):
 3. 翻译窗口
    • 右键托盘图标 → 翻译窗口，或双击托盘图标
    • 输入文本后点击"翻译"、"润色"或"总结"按钮
-   • 支持 Ctrl+Enter 快捷翻译
+   • 按 Enter 快捷翻译，Shift+Enter 换行
 
 4. 划词写作
-   • 选中文本后按 Ctrl+Shift+W
+   • 选中文本后按 Ctrl+I
    • 翻译结果会直接替换原文或插入在原文下方
    • 可在设置中开启"保留原文"选项
 
 5. 快捷键（可在设置中自定义）
-   • Ctrl+Shift+T：唤醒翻译窗口
-   • Ctrl+Shift+W：划词写作
+   • Ctrl+O：唤醒翻译窗口
+   • Ctrl+I：划词写作
    • Esc：关闭窗口
         """, theme)
 

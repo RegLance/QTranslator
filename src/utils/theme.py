@@ -155,39 +155,51 @@ def get_scrollbar_style(theme: Dict[str, Any]) -> str:
             background-color: {theme['scrollbar_bg']};
             width: 8px;
             border-radius: 4px;
+            border: none;
+            margin: 0px;
         }}
         QScrollBar::handle:vertical {{
             background-color: {theme['scrollbar_handle']};
             border-radius: 4px;
             min-height: 20px;
+            border: none;
         }}
         QScrollBar::handle:vertical:hover {{
             background-color: {theme['scrollbar_hover']};
         }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
             height: 0px;
+            background-color: transparent;
+            border: none;
         }}
         QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
             background-color: transparent;
+            border: none;
         }}
         QScrollBar:horizontal {{
             background-color: {theme['scrollbar_bg']};
             height: 8px;
             border-radius: 4px;
+            border: none;
+            margin: 0px;
         }}
         QScrollBar::handle:horizontal {{
             background-color: {theme['scrollbar_handle']};
             border-radius: 4px;
             min-width: 20px;
+            border: none;
         }}
         QScrollBar::handle:horizontal:hover {{
             background-color: {theme['scrollbar_hover']};
         }}
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
             width: 0px;
+            background-color: transparent;
+            border: none;
         }}
         QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
             background-color: transparent;
+            border: none;
         }}
     """
 

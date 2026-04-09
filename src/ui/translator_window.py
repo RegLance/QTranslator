@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QComboBox, QFrame,
     QGraphicsDropShadowEffect, QApplication, QSplitter
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect, QPointF
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect, QPointF, QTimer
 from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QKeySequence, QIcon, QFont, QPixmap, QPainter, QPen
 
 try:
@@ -675,8 +675,8 @@ class TranslatorWindow(QWidget):
 
         self._splitter.addWidget(self._output_container)
 
-        # 设置分割器初始比例（输出框稍微高一些）
-        self._splitter.setSizes([120, 180])
+        # 设置分割器初始比例（原文框100px，译文框200px）
+        self._splitter.setSizes([100, 200])
         content_layout.addWidget(self._splitter, 1)
 
         # 为输出容器安装事件过滤器，以便处理 resize 事件更新悬浮按钮位置
@@ -1026,6 +1026,10 @@ class TranslatorWindow(QWidget):
         self._output_text.clear()
         self._streaming_text = ""
 
+        # 初始化流式状态
+        self._is_streaming = True
+        self._last_adjusted_height = 0
+
         # 禁用按钮（按钮文字保持不变，通过禁用状态表示正在处理）
         self._translate_btn.setEnabled(False)
         self._polishing_btn.setEnabled(False)
@@ -1048,8 +1052,14 @@ class TranslatorWindow(QWidget):
         try:
             if not hasattr(self, '_streaming_text'):
                 self._streaming_text = ""
+                self._is_streaming = True
+                self._last_adjusted_height = 0
             self._streaming_text += chunk
             self._output_text.setPlainText(self._streaming_text)
+
+            # 触发高度调整（延迟执行，避免频繁更新）
+            if self._is_streaming:
+                self._schedule_height_adjust()
         except RuntimeError:
             # 窗口已被销毁，忽略
             pass
@@ -1062,9 +1072,20 @@ class TranslatorWindow(QWidget):
     def _do_translation_finished(self, result: str):
         """实际执行翻译完成操作"""
         try:
+            self._is_streaming = False
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
+
+            # 最终高度调整
+            QTimer.singleShot(100, self._final_height_adjust)
+
+            # 调试输出
+            try:
+                from src.utils.logger import log_debug
+                log_debug(f"翻译完成，最终高度调整已调度")
+            except:
+                pass
 
             # 发出翻译完成信号（用于划词翻译模式）
             if self._auto_mode:
@@ -1130,6 +1151,10 @@ class TranslatorWindow(QWidget):
         self._output_text.clear()
         self._streaming_text = ""
 
+        # 初始化流式状态
+        self._is_streaming = True
+        self._last_adjusted_height = 0
+
         # 禁用所有操作按钮（按钮文字保持不变，通过禁用状态表示正在处理）
         self._translate_btn.setEnabled(False)
         self._polishing_btn.setEnabled(False)
@@ -1151,10 +1176,14 @@ class TranslatorWindow(QWidget):
     def _do_polishing_finished(self, result: str):
         """实际执行润色完成操作（在主线程中）"""
         try:
+            self._is_streaming = False
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
             self._current_worker = None
+
+            # 最终高度调整
+            QTimer.singleShot(100, self._final_height_adjust)
 
             # 保存润色历史
             if result:
@@ -1180,6 +1209,7 @@ class TranslatorWindow(QWidget):
     def _do_polishing_error(self, error: str):
         """实际执行润色错误操作（在主线程中）"""
         try:
+            self._is_streaming = False
             self._output_text.setPlainText(f"润色失败: {error}")
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
@@ -1204,6 +1234,10 @@ class TranslatorWindow(QWidget):
         # 清空输出
         self._output_text.clear()
         self._streaming_text = ""
+
+        # 初始化流式状态
+        self._is_streaming = True
+        self._last_adjusted_height = 0
 
         # 禁用所有操作按钮（按钮文字保持不变，通过禁用状态表示正在处理）
         self._translate_btn.setEnabled(False)
@@ -1230,10 +1264,14 @@ class TranslatorWindow(QWidget):
     def _do_summarize_finished(self, result: str):
         """实际执行总结完成操作"""
         try:
+            self._is_streaming = False
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
             self._current_worker = None
+
+            # 最终高度调整
+            QTimer.singleShot(100, self._final_height_adjust)
 
             # 保存总结历史
             if result:
@@ -1262,6 +1300,7 @@ class TranslatorWindow(QWidget):
     def _do_summarize_error(self, error: str):
         """实际执行总结错误操作"""
         try:
+            self._is_streaming = False
             self._output_text.setPlainText(f"总结失败: {error}")
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
@@ -1664,25 +1703,57 @@ class TranslatorWindow(QWidget):
         return (0, 0, 1920, 1080)
 
     def _calculate_position(self, mouse_pos):
-        """计算悬浮窗位置"""
+        """计算悬浮窗位置（考虑最大高度限制和屏幕边界）
+
+        窗口位置计算策略：
+        1. 默认显示在鼠标右下方
+        2. 如果右侧空间不足，显示在左侧
+        3. 如果下方空间不足（考虑最大高度70%），显示在上方
+        4. 确保窗口不会超出屏幕边界
+        """
         x, y = mouse_pos
-        screen_x, screen_y, screen_w, screen_h = self._get_screen_bounds()
+        # 使用鼠标位置所在的屏幕
+        try:
+            screen = QApplication.screenAt(QPoint(x, y))
+            if screen is None:
+                screen = QApplication.primaryScreen()
+            if screen:
+                geo = screen.availableGeometry()
+                screen_x, screen_y, screen_w, screen_h = geo.x(), geo.y(), geo.width(), geo.height()
+            else:
+                screen_x, screen_y, screen_w, screen_h = 0, 0, 1920, 1080
+        except Exception:
+            screen_x, screen_y, screen_w, screen_h = self._get_screen_bounds()
 
         win_w = self.width()
         win_h = self.height()
 
+        # 计算最大可能高度（屏幕高度的70%），用于判断位置是否安全
+        max_potential_height = int(screen_h * 0.7)
+
         new_x = x + 15
         new_y = y + 15
 
+        # 检查水平方向：如果右侧空间不足，放到左边
         if new_x + win_w > screen_x + screen_w - 10:
             new_x = x - win_w - 15
 
-        if new_y + win_h > screen_y + screen_h - 10:
-            new_y = y - win_h - 15
+        # 检查垂直方向：考虑最大可能高度
+        # 如果当前窗口底部加上最大可能高度会超出屏幕，则放到上面
+        if new_y + max_potential_height > screen_y + screen_h - 10:
+            # 尝试放在鼠标上方
+            potential_y = y - max_potential_height - 15
+            if potential_y >= screen_y + 10:
+                new_y = potential_y
+            else:
+                # 如果上方也放不下，就贴着屏幕底部放置
+                new_y = screen_y + screen_h - max_potential_height - 10
 
+        # 确保不超出左边界
         if new_x < screen_x + 10:
             new_x = screen_x + 10
 
+        # 确保不超出上边界
         if new_y < screen_y + 10:
             new_y = screen_y + 10
 
@@ -1799,52 +1870,82 @@ class TranslatorWindow(QWidget):
         # 滚动到顶部
         self._input_text.verticalScrollBar().setValue(0)
         self._output_text.verticalScrollBar().setValue(0)
+        # 最终高度调整和屏幕边界检查
+        QTimer.singleShot(100, self._final_height_adjust)
+
+    def _final_height_adjust(self):
+        """流式翻译结束后的最终高度调整"""
+        try:
+            # 计算最终所需高度
+            target_height = self._calculate_required_height()
+            # 立即调整高度（不使用动画）
+            self._smooth_adjust_height(target_height, immediate=True)
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
+
+    def _get_current_screen_bounds(self) -> tuple:
+        """获取窗口当前所在屏幕的可用区域
+
+        Returns:
+            tuple: (screen_x, screen_y, screen_w, screen_h)
+        """
+        try:
+            # 优先使用窗口当前所在的屏幕
+            screen = QApplication.screenAt(self.geometry().center())
+            if screen is None:
+                screen = QApplication.screenAt(self.pos())
+            if screen is None:
+                screen = QApplication.primaryScreen()
+            if screen:
+                geo = screen.availableGeometry()
+                return (geo.x(), geo.y(), geo.width(), geo.height())
+        except Exception:
+            pass
+        return self._get_screen_bounds()
 
     def _calculate_required_height(self) -> int:
         """计算显示当前内容所需的窗口高度
+
+        保持用户手动调整的原文框高度，只根据译文内容动态调整窗口高度
 
         Returns:
             所需的窗口高度（像素）
         """
         try:
-            screen_x, screen_y, screen_w, screen_h = self._get_screen_bounds()
-            # 最大允许高度（屏幕高度的60%）
-            max_height = int(screen_h * 0.6)
+            # 使用当前窗口所在屏幕
+            screen_x, screen_y, screen_w, screen_h = self._get_current_screen_bounds()
+            # 最大允许高度（屏幕高度的70%）
+            max_height = int(screen_h * 0.7)
 
             from PyQt6.QtGui import QFontMetrics, QTextDocument
+
+            # 使用窗口宽度计算（输出区域占满窗口宽度减去边距）
+            # 窗口内边距 12px * 2 = 24px，输出框内边距 8px * 2 = 16px
+            output_width = self.width() - 24 - 16 - 20  # 额外20px余量
+            output_width = max(200, output_width)  # 确保最小宽度
 
             # 计算输出文本高度
             output_font = self._output_text.font()
             output_text = self._output_text.toPlainText()
 
             if output_text:
-                # 获取输出区域的可用宽度（减去边距）
-                output_width = self._output_text.width() - 20
-
                 # 使用 QTextDocument 计算精确高度
                 doc = QTextDocument()
                 doc.setDefaultFont(output_font)
                 doc.setTextWidth(output_width)
                 doc.setPlainText(output_text)
-                output_height = int(doc.size().height()) + 20
+                output_height = int(doc.size().height()) + 30  # 额外30px边距
                 # 确保最小高度
-                output_height = max(60, output_height)
+                output_height = max(80, output_height)
             else:
-                output_height = 60
+                output_height = 80
 
-            # 计算输入文本高度（限制最大高度）
-            input_text = self._input_text.toPlainText()
-            if input_text:
-                input_font = self._input_text.font()
-                input_width = self._input_text.width() - 20
-                input_doc = QTextDocument()
-                input_doc.setDefaultFont(input_font)
-                input_doc.setTextWidth(input_width)
-                input_doc.setPlainText(input_text)
-                input_height = int(input_doc.size().height()) + 20
-                input_height = max(60, min(input_height, 150))
-            else:
-                input_height = 60
+            # 获取当前分割器的原文框高度（用户可能手动调整过）
+            current_sizes = self._splitter.sizes()
+            input_height = current_sizes[0] if current_sizes else 100
+            input_height = max(60, input_height)  # 确保最小高度
 
             # 总高度 = 标题栏 + 控制栏 + 边距 + 输入区 + 分割条 + 输出区
             title_height = 28
@@ -1863,28 +1964,109 @@ class TranslatorWindow(QWidget):
         except Exception:
             return 400
 
+    def _ensure_within_screen(self):
+        """确保窗口完全在屏幕范围内"""
+        try:
+            screen_x, screen_y, screen_w, screen_h = self._get_current_screen_bounds()
+            x, y = self.x(), self.y()
+            w, h = self.width(), self.height()
+
+            # 检查右边界
+            if x + w > screen_x + screen_w:
+                x = screen_x + screen_w - w
+            # 检查下边界
+            if y + h > screen_y + screen_h:
+                y = screen_y + screen_h - h
+            # 检查左边界
+            if x < screen_x:
+                x = screen_x
+            # 检查上边界
+            if y < screen_y:
+                y = screen_y
+
+            # 如果位置需要调整，则移动窗口
+            if x != self.x() or y != self.y():
+                self.move(x, y)
+
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
+
+    def _calculate_max_height_for_position(self) -> int:
+        """根据当前窗口位置计算最大允许高度
+
+        确保窗口不会超出屏幕下边界
+
+        Returns:
+            最大允许高度（像素）
+        """
+        try:
+            screen_x, screen_y, screen_w, screen_h = self._get_current_screen_bounds()
+            current_y = self.y()
+
+            # 计算从当前位置到底部屏幕边界的可用空间
+            available_height = screen_y + screen_h - current_y
+
+            # 但也不能超过屏幕高度的70%
+            max_by_screen_percent = int(screen_h * 0.7)
+
+            return min(available_height, max_by_screen_percent)
+
+        except Exception:
+            return int(QApplication.primaryScreen().availableGeometry().height() * 0.7)
+
     def _smooth_adjust_height(self, target_height: int, immediate: bool = False):
         """平滑调整窗口高度
+
+        在调整窗口高度时保持原文框高度不变，只改变译文框高度
 
         Args:
             target_height: 目标高度
             immediate: 是否立即调整（不使用动画）
         """
         try:
+            # 首先根据窗口位置计算最大允许高度（确保不超出屏幕下边界）
+            max_height_for_position = self._calculate_max_height_for_position()
+
+            # 限制目标高度不超过位置限制
+            target_height = min(target_height, max_height_for_position)
+
             current_height = self.height()
 
+            # 调试输出
+            try:
+                from src.utils.logger import log_debug
+                log_debug(f"平滑调整高度: 当前={current_height}, 目标={target_height}, 最大={max_height_for_position}")
+            except:
+                pass
+
             # 如果高度差异太小，不调整
-            if abs(target_height - current_height) < 10:
+            if abs(target_height - current_height) < 5:
                 return
 
-            # 如果目标高度比当前高度小，不调整（避免缩小）
-            if target_height < current_height:
+            # 如果目标高度比当前高度小很多（超过20px），才缩小
+            # 这样可以避免小幅度的抖动，但允许窗口增长
+            if target_height < current_height - 20:
                 return
 
             self._last_adjusted_height = target_height
 
+            # 获取当前原文框高度（用户可能手动调整过）
+            current_sizes = self._splitter.sizes()
+            current_input_height = current_sizes[0] if current_sizes else 100
+
+            # 计算译文框目标高度
+            # 总高度 = 标题栏(28) + 控制栏(38) + 边距(40) + 原文框 + 分割条(6) + 译文框
+            target_output_height = target_height - 28 - 38 - 40 - current_input_height - 6
+            target_output_height = max(80, target_output_height)  # 确保最小高度
+
             if immediate or not self.isVisible():
                 self.resize(self.width(), target_height)
+                # 保持原文框高度不变
+                self._splitter.setSizes([current_input_height, target_output_height])
+                # 确保窗口在屏幕范围内
+                self._ensure_within_screen()
                 return
 
             # 使用动画平滑调整
@@ -1906,11 +2088,18 @@ class TranslatorWindow(QWidget):
             self._height_animation.setEndValue(target_size)
             self._height_animation.start()
 
+            # 保持原文框高度不变
+            self._splitter.setSizes([current_input_height, target_output_height])
+
+            # 动画完成后检查屏幕边界
+            QTimer.singleShot(200, self._ensure_within_screen)
+
         except RuntimeError:
             pass
         except Exception:
             try:
                 self.resize(self.width(), target_height)
+                self._ensure_within_screen()
             except:
                 pass
 
@@ -1934,19 +2123,36 @@ class TranslatorWindow(QWidget):
     def _do_height_adjust(self):
         """执行高度调整"""
         try:
+            # 调试输出
+            try:
+                from src.utils.logger import log_debug
+                log_debug(f"_do_height_adjust: _is_streaming={self._is_streaming}, isVisible={self.isVisible()}")
+            except:
+                pass
+
             if not self._is_streaming or not self.isVisible():
                 return
 
             target_height = self._calculate_required_height()
 
-            if target_height != self._last_adjusted_height:
-                self._smooth_adjust_height(target_height)
+            # 调试输出
+            try:
+                from src.utils.logger import log_debug
+                log_debug(f"高度调整: 当前={self.height()}, 目标={target_height}, 上次={self._last_adjusted_height}")
+            except:
+                pass
+
+            # 只要目标高度不同就尝试调整（让 _smooth_adjust_height 决定是否真正调整）
+            self._smooth_adjust_height(target_height)
+
+            # 确保窗口在屏幕范围内
+            self._ensure_within_screen()
 
         except RuntimeError:
             pass
 
     def _reset_window_height(self):
-        """重置窗口高度到默认值"""
+        """重置窗口高度到默认值（不重置分割器比例）"""
         try:
             self._last_adjusted_height = 0
             self._is_streaming = False
@@ -1960,6 +2166,9 @@ class TranslatorWindow(QWidget):
                 self._height_animation.stop()
 
             self.resize(500, 400)
+
+            # 确保窗口在屏幕范围内
+            self._ensure_within_screen()
 
         except RuntimeError:
             pass

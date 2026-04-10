@@ -344,3 +344,49 @@ def get_checkbox_style(theme: Dict[str, Any]) -> str:
             height: 0px;
         }}
     """
+
+
+def get_hidden_scrollbar_style(theme: Dict[str, Any]) -> str:
+    """获取隐藏滚动条的样式（用于流式输出时）"""
+    return f"""
+        QScrollBar:vertical {{
+            background-color: transparent;
+            width: 0px;
+            border: none;
+            margin: 0px;
+        }}
+        QScrollBar::handle:vertical {{
+            background-color: transparent;
+            border: none;
+            min-height: 0px;
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            height: 0px;
+            background-color: transparent;
+            border: none;
+        }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+            background-color: transparent;
+            border: none;
+        }}
+        QScrollBar:horizontal {{
+            background-color: transparent;
+            height: 0px;
+            border: none;
+            margin: 0px;
+        }}
+        QScrollBar::handle:horizontal {{
+            background-color: transparent;
+            border: none;
+            min-width: 0px;
+        }}
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+            width: 0px;
+            background-color: transparent;
+            border: none;
+        }}
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+            background-color: transparent;
+            border: none;
+        }}
+    """

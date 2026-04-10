@@ -11,11 +11,11 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect, QPointF, QTimer
 from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QKeySequence, QIcon, QFont, QPixmap, QPainter, QPen
 
 try:
-    from ..utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style
+    from ..utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style, get_hidden_scrollbar_style
     from ..config import get_config
     from ..utils.tts import get_tts
 except ImportError:
-    from src.utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style
+    from src.utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style, get_hidden_scrollbar_style
     from src.config import get_config
     from src.utils.tts import get_tts
 
@@ -188,6 +188,7 @@ class TranslatorWindow(QWidget):
         self._last_adjusted_height = 0  # 上一次调整的高度（避免重复调整）
         self._height_adjust_timer = None  # 高度调整定时器（延迟调整，减少频繁更新）
         self._is_streaming = False  # 是否正在流式输出
+        self._scrollbar_hidden = False  # 滚动条是否被隐藏（流式输出高度增长时）
 
         self._setup_window_properties()
         self._setup_ui()
@@ -1029,6 +1030,10 @@ class TranslatorWindow(QWidget):
         # 初始化流式状态
         self._is_streaming = True
         self._last_adjusted_height = 0
+        self._scrollbar_hidden = False  # 重置滚动条隐藏状态
+
+        # 流式输出开始时隐藏滚动条
+        self._hide_output_scrollbar()
 
         # 禁用按钮（按钮文字保持不变，通过禁用状态表示正在处理）
         self._translate_btn.setEnabled(False)
@@ -1144,6 +1149,10 @@ class TranslatorWindow(QWidget):
     def _do_translation_error(self, error: str):
         """实际执行翻译错误操作"""
         try:
+            self._is_streaming = False
+            self._scrollbar_hidden = False
+            # 恢复滚动条显示
+            self._show_output_scrollbar()
             self._output_text.setPlainText(f"翻译失败: {error}")
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
@@ -1174,6 +1183,10 @@ class TranslatorWindow(QWidget):
         # 初始化流式状态
         self._is_streaming = True
         self._last_adjusted_height = 0
+        self._scrollbar_hidden = False
+
+        # 流式输出开始时隐藏滚动条
+        self._hide_output_scrollbar()
 
         # 禁用所有操作按钮（按钮文字保持不变，通过禁用状态表示正在处理）
         self._translate_btn.setEnabled(False)
@@ -1230,6 +1243,9 @@ class TranslatorWindow(QWidget):
         """实际执行润色错误操作（在主线程中）"""
         try:
             self._is_streaming = False
+            self._scrollbar_hidden = False
+            # 恢复滚动条显示
+            self._show_output_scrollbar()
             self._output_text.setPlainText(f"润色失败: {error}")
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
@@ -1258,6 +1274,10 @@ class TranslatorWindow(QWidget):
         # 初始化流式状态
         self._is_streaming = True
         self._last_adjusted_height = 0
+        self._scrollbar_hidden = False
+
+        # 流式输出开始时隐藏滚动条
+        self._hide_output_scrollbar()
 
         # 禁用所有操作按钮（按钮文字保持不变，通过禁用状态表示正在处理）
         self._translate_btn.setEnabled(False)
@@ -1321,6 +1341,9 @@ class TranslatorWindow(QWidget):
         """实际执行总结错误操作"""
         try:
             self._is_streaming = False
+            self._scrollbar_hidden = False
+            # 恢复滚动条显示
+            self._show_output_scrollbar()
             self._output_text.setPlainText(f"总结失败: {error}")
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
@@ -1854,11 +1877,15 @@ class TranslatorWindow(QWidget):
         self._streaming_text = ""
         self._is_streaming = True  # 设置流式状态
         self._last_adjusted_height = 0  # 重置高度记录
+        self._scrollbar_hidden = False  # 重置滚动条隐藏状态
 
         if original_text:
             self._input_text.setPlainText(original_text)
 
         self._output_text.clear()
+
+        # 流式输出开始时隐藏滚动条
+        self._hide_output_scrollbar()
 
         # 启用按钮
         self._translate_btn.setEnabled(True)
@@ -1896,6 +1923,10 @@ class TranslatorWindow(QWidget):
     def _final_height_adjust(self):
         """流式翻译结束后的最终高度调整"""
         try:
+            # 恢复滚动条显示（流式输出结束后）
+            self._show_output_scrollbar()
+            self._scrollbar_hidden = False
+
             # 计算最终所需高度
             target_height = self._calculate_required_height()
             # 立即调整高度（不使用动画）
@@ -2154,13 +2185,20 @@ class TranslatorWindow(QWidget):
                 return
 
             target_height = self._calculate_required_height()
+            max_height = self._calculate_max_height_for_position()
 
             # 调试输出
             try:
                 from src.utils.logger import log_debug
-                log_debug(f"高度调整: 当前={self.height()}, 目标={target_height}, 上次={self._last_adjusted_height}")
+                log_debug(f"高度调整: 当前={self.height()}, 目标={target_height}, 上次={self._last_adjusted_height}, 最大={max_height}")
             except:
                 pass
+
+            # 判断是否达到最大高度限制
+            # 如果目标高度超过或接近最大高度，则显示滚动条
+            if target_height >= max_height - 10 and self._scrollbar_hidden:
+                self._show_output_scrollbar()
+                self._scrollbar_hidden = False
 
             # 只要目标高度不同就尝试调整（让 _smooth_adjust_height 决定是否真正调整）
             self._smooth_adjust_height(target_height)
@@ -2176,6 +2214,7 @@ class TranslatorWindow(QWidget):
         try:
             self._last_adjusted_height = 0
             self._is_streaming = False
+            self._scrollbar_hidden = False
 
             if self._height_adjust_timer:
                 self._height_adjust_timer.stop()
@@ -2184,6 +2223,9 @@ class TranslatorWindow(QWidget):
             from PyQt6.QtCore import QPropertyAnimation
             if self._height_animation and self._height_animation.state() == QPropertyAnimation.State.Running:
                 self._height_animation.stop()
+
+            # 恢复滚动条显示
+            self._show_output_scrollbar()
 
             self.resize(500, 400)
 
@@ -2221,6 +2263,50 @@ class TranslatorWindow(QWidget):
     def get_pending_text(self) -> str:
         """获取待翻译的原文"""
         return self._pending_original_text
+
+    def _hide_output_scrollbar(self):
+        """隐藏译文框滚动条（流式输出开始时）"""
+        try:
+            theme = get_theme(self._theme_style)
+            # 使用隐藏滚动条的样式
+            self._output_text.setStyleSheet(f"""
+                QTextEdit {{
+                    background-color: transparent;
+                    color: {theme['text_primary']};
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px;
+                    font-size: {self._font_size}px;
+                }}
+                {get_hidden_scrollbar_style(theme)}
+            """)
+            self._scrollbar_hidden = True
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
+
+    def _show_output_scrollbar(self):
+        """显示译文框滚动条（流式输出结束后）"""
+        try:
+            theme = get_theme(self._theme_style)
+            # 恢复正常的滚动条样式
+            self._output_text.setStyleSheet(f"""
+                QTextEdit {{
+                    background-color: transparent;
+                    color: {theme['text_primary']};
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px;
+                    font-size: {self._font_size}px;
+                }}
+                {get_scrollbar_style(theme)}
+            """)
+            self._scrollbar_hidden = False
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
 
 
 # 全局翻译窗口实例

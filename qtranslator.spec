@@ -14,7 +14,7 @@ a = Analysis(
     pathex=[str(project_root)],
     binaries=[],
     datas=[
-        # 添加 native 目录 - 包含 selection-hook Node.js 服务
+        # 添加 native 目录 - 包含 selection-hook Node.js 服务和嵌入式 Node.js 运行时
         ("E:/qoder/QTranslator/native", "native"),
         # 添加 assets 目录 - 包含应用图标
         ("E:/qoder/QTranslator/assets", "assets"),

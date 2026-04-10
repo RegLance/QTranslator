@@ -1,4 +1,6 @@
-"""文本捕获模块 - 使用 selection-hook 进行跨应用文本选择捕获"""
+"""文本捕获模块 - 使用 selection-hook 进行跨应用文本选择捕获
+支持嵌入式 Node.js 运行时，无需用户安装 Node.js
+"""
 import sys
 import os
 import json
@@ -8,6 +10,33 @@ import threading
 from typing import Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _is_frozen_env() -> bool:
+    """检测是否为 PyInstaller 打包环境"""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+
+
+def _get_base_path() -> Path:
+    """获取基础路径
+
+    打包环境: sys._MEIPASS (临时解压目录)
+    开发环境: 项目根目录
+    """
+    if _is_frozen_env():
+        return Path(sys._MEIPASS)
+    else:
+        # src/core -> src -> project_root
+        return Path(__file__).parent.parent.parent
+
+
+def _get_embedded_node_path() -> Optional[str]:
+    """获取嵌入的 node.exe 路径"""
+    base = _get_base_path()
+    node_exe = base / "native" / "node" / "win-x64" / "node.exe"
+    if node_exe.exists():
+        return str(node_exe)
+    return None
 
 
 @dataclass
@@ -40,35 +69,61 @@ class TextCapture:
         self._start_service()
 
     def _find_node(self):
-        """查找 Node.js 可执行文件路径"""
-        # Windows 上查找 node.exe
-        if sys.platform == 'win32':
-            # 尝试常见路径
-            common_paths = [
-                "node",  # PATH 中
-                r"C:\Program Files\nodejs\node.exe",
-                r"C:\Program Files (x86)\nodejs\node.exe",
-            ]
+        """查找 Node.js 可执行文件路径
 
+        优先级：
+        1. 嵌入式 Node.js (打包环境或开发环境的 native/node/win-x64/node.exe)
+        2. 系统 PATH 环境变量中的 node.exe
+        3. 常见安装路径
+        4. 回退到系统 "node" 命令
+        """
+        # 1. 优先检测嵌入式 Node.js
+        embedded_node = _get_embedded_node_path()
+        if embedded_node:
+            self._node_path = embedded_node
+            print(f"[TextCapture] 使用嵌入式 Node.js: {embedded_node}", file=sys.stderr)
+            return
+
+        # 2. 检查开发环境的 native/node/win-x64/node.exe
+        dev_node = Path(__file__).parent.parent.parent / "native" / "node" / "win-x64" / "node.exe"
+        if dev_node.exists():
+            self._node_path = str(dev_node)
+            print(f"[TextCapture] 使用开发环境 Node.js: {dev_node}", file=sys.stderr)
+            return
+
+        # 3. Windows 上查找系统安装的 node.exe
+        if sys.platform == 'win32':
             # 检查 PATH 环境变量
             path_env = os.environ.get('PATH', '').split(os.pathsep)
             for p in path_env:
                 node_exe = os.path.join(p, 'node.exe')
                 if os.path.isfile(node_exe):
                     self._node_path = node_exe
+                    print(f"[TextCapture] 使用系统 Node.js: {node_exe}", file=sys.stderr)
                     return
 
-            # 尝试直接使用 node（在 PATH 中）
-            self._node_path = "node"
-        else:
-            self._node_path = "node"
+            # 尝试常见安装路径
+            common_paths = [
+                r"C:\Program Files\nodejs\node.exe",
+                r"C:\Program Files (x86)\nodejs\node.exe",
+            ]
+            for p in common_paths:
+                if os.path.isfile(p):
+                    self._node_path = p
+                    print(f"[TextCapture] 使用系统 Node.js: {p}", file=sys.stderr)
+                    return
+
+        # 4. 回退到系统 "node" 命令
+        self._node_path = "node"
+        print("[TextCapture] 使用系统 PATH 中的 node 命令", file=sys.stderr)
 
     def _get_service_path(self) -> str:
-        """获取 selection-service.js 的路径"""
-        # 相对于当前文件的路径
-        current_dir = Path(__file__).parent
-        project_root = current_dir.parent.parent  # src/core -> src -> hover-translator
-        service_path = project_root / "native" / "selection-service.js"
+        """获取 selection-service.js 的路径
+
+        支持 PyInstaller 打包环境
+        """
+        base = _get_base_path()
+        service_path = base / "native" / "selection-service.js"
         return str(service_path)
 
     def _start_service(self):
@@ -81,6 +136,13 @@ class TextCapture:
             print(f"错误: selection-service.js 不存在: {service_path}", file=sys.stderr)
             return
 
+        # 获取 native 目录路径
+        native_dir = Path(service_path).parent
+
+        # 设置环境变量，确保原生模块可加载
+        env = os.environ.copy()
+        env['NODE_PATH'] = str(native_dir / "node_modules")
+
         try:
             # 启动 Node.js 子进程
             self._process = subprocess.Popen(
@@ -88,6 +150,8 @@ class TextCapture:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,
+                cwd=str(native_dir),  # 设置工作目录
+                env=env,  # 设置环境变量
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
                 text=True,
                 encoding='utf-8',

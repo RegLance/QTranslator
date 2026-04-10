@@ -1,6 +1,7 @@
 """
 PyInstaller 打包脚本 - QTranslator
 包含 native 目录以支持 selection-hook 文本选择捕获
+包含嵌入式 Node.js 运行时，无需用户安装 Node.js
 """
 import os
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.resolve()
 SRC_DIR = PROJECT_ROOT / "src"
 NATIVE_DIR = PROJECT_ROOT / "native"
+NODE_RUNTIME_DIR = NATIVE_DIR / "node" / "win-x64"
 
 # 输出版本信息
 VERSION = "1.0.0"
@@ -118,6 +120,8 @@ def create_spec_file():
     icon_path = str(PROJECT_ROOT / "assets" / "icon.ico").replace("\\", "/")
     native_path = str(PROJECT_ROOT / "native").replace("\\", "/")
     assets_path = str(PROJECT_ROOT / "assets").replace("\\", "/")
+    # 嵌入式 Node.js 运行时路径
+    node_runtime_path = str(NODE_RUNTIME_DIR).replace("\\", "/")
 
     content = rf'''# -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec file for QTranslator
@@ -135,7 +139,7 @@ a = Analysis(
     pathex=[str(project_root)],
     binaries=[],
     datas=[
-        # 添加 native 目录 - 包含 selection-hook Node.js 服务
+        # 添加 native 目录 - 包含 selection-hook Node.js 服务和嵌入式 Node.js 运行时
         ("{native_path}", "native"),
         # 添加 assets 目录 - 包含应用图标
         ("{assets_path}", "assets"),
@@ -274,15 +278,30 @@ def main():
         return 1
 
     print(f"Native 目录: {NATIVE_DIR}")
-    print(f"包含文件: {list(NATIVE_DIR.rglob('*'))[:10]}...")  # 显示前10个文件
 
-    # 检查 Node.js
-    import subprocess
-    try:
-        result = subprocess.run(["node", "--version"], capture_output=True, text=True)
-        print(f"Node.js 版本: {result.stdout.strip()}")
-    except FileNotFoundError:
-        print("警告: 未找到 Node.js，请确保 Node.js 已安装并在 PATH 中")
+    # 检查嵌入式 Node.js 运行时
+    node_exe = NODE_RUNTIME_DIR / "node.exe"
+    if node_exe.exists():
+        print(f"嵌入式 Node.js: {node_exe}")
+        import subprocess
+        try:
+            result = subprocess.run([str(node_exe), "--version"], capture_output=True, text=True)
+            print(f"Node.js 版本: {result.stdout.strip()}")
+        except Exception as e:
+            print(f"警告: 无法验证 node.exe: {e}")
+    else:
+        print(f"警告: 嵌入式 Node.js 不存在: {node_exe}")
+        print("请先运行: python scripts/prepare_node_runtime.py")
+        print("或手动下载 node.exe 放到 native/node/win-x64/ 目录")
+        print()
+        # 询问是否继续
+        try:
+            response = input("是否继续打包？（打包后应用将需要用户安装 Node.js）[y/N]: ").strip().lower()
+            if response != 'y':
+                print("取消打包")
+                return 1
+        except EOFError:
+            print("自动继续（非交互模式）")
 
     print()
 

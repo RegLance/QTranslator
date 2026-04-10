@@ -103,6 +103,9 @@ class TranslateButton(QWidget):
         # create() 只是准备创建，winId() 才真正触发底层创建
         _ = self.winId()
 
+        # 在 Windows 上禁用 DWM 窗口阴影
+        self._disable_windows_shadow()
+
     def _setup_ui(self):
         """设置 UI"""
         self._icon_label = QLabel(self)
@@ -152,6 +155,38 @@ class TranslateButton(QWidget):
         self._mouse_check_timer = QTimer()
         self._mouse_check_timer.setInterval(100)  # 每100ms检查一次
         self._mouse_check_timer.timeout.connect(self._check_mouse_distance)
+
+    def _disable_windows_shadow(self):
+        """在 Windows 上禁用 DWM 窗口阴影效果
+
+        Windows 11 默认会为所有窗口添加阴影，即使设置了无边框和透明背景。
+        需要通过 DWM API 明确禁用才能消除阴影。
+        """
+        if sys.platform != 'win32':
+            return
+
+        try:
+            import ctypes
+
+            hwnd = int(self.winId())
+
+            # DWM 相关常量
+            DWMNCRP_ENABLED = 2  # 启用非客户区渲染
+            DWMNCRP_DISABLED = 1  # 禁用非客户区渲染
+
+            # 设置 DWM 非客户区渲染策略，禁用阴影
+            # DWMWINDOWATTRIBUTE 枚举值
+            DWMWA_NCRENDERING_POLICY = 2  # 非客户区渲染策略
+
+            # 调用 DwmSetWindowAttribute
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_NCRENDERING_POLICY,
+                ctypes.byref(ctypes.c_int(DWMNCRP_DISABLED)),
+                ctypes.sizeof(ctypes.c_int)
+            )
+        except Exception:
+            pass  # 如果失败，忽略错误（不影响核心功能）
 
     def _setup_delay_timers(self):
         """设置延迟显示和鼠标静止检测计时器"""

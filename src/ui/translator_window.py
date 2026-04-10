@@ -1003,12 +1003,44 @@ class TranslatorWindow(QWidget):
                 tts.speak(text)
 
     def _clear_all(self):
-        """清空所有内容"""
+        """清空所有内容并取消正在进行的流式输出任务"""
+        # 1. 如果当前有翻译/总结/润色任务正在执行，取消它
+        if self._current_worker and self._current_worker.isRunning():
+            # 调用取消机制，设置取消标志
+            self._current_worker.cancel()
+            # 等待线程结束（最多1秒），避免资源泄露
+            self._current_worker.wait(1000)
+            # 清理 worker 引用
+            self._current_worker = None
+
+        # 2. 重置流式输出状态变量
+        self._is_streaming = False
+        self._scrollbar_hidden = False
+        if hasattr(self, '_streaming_text'):
+            self._streaming_text = ""
+
+        # 3. 恢复滚动条显示（如果之前被隐藏）
+        self._show_output_scrollbar()
+
+        # 4. 清空输入和输出文本框
         self._input_text.clear()
         self._output_text.clear()
+
+        # 5. 重置划词翻译相关状态
         self._auto_mode = False
         self._pending_original_text = ""
-        # 重置高度状态
+
+        # 6. 重新启用之前被禁用的操作按钮
+        self._translate_btn.setEnabled(True)
+        self._polishing_btn.setEnabled(True)
+        self._summarize_btn.setEnabled(True)
+
+        # 7. 清理高度调整定时器（如果存在）
+        if self._height_adjust_timer:
+            self._height_adjust_timer.stop()
+            self._height_adjust_timer = None
+
+        # 8. 重置高度状态
         self._reset_window_height()
 
     def _start_translation(self):

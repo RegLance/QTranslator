@@ -19,15 +19,12 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QProp
 from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence, QPalette
 
 # 设置高 DPI 支持
-# 注意：不再手动设置 DPI awareness，让 PyQt6 自己处理
-# 手动设置 SetProcessDpiAwareness(2) 会与 Qt 的 DPI 处理机制冲突
-# 导致跨屏幕拖动时窗口尺寸异常
-# if sys.platform == 'win32':
-#     import ctypes
-#     try:
-#         ctypes.windll.user32.SetProcessDpiAwareness(2)
-#     except Exception:
-#         pass
+if sys.platform == 'win32':
+    import ctypes
+    try:
+        ctypes.windll.user32.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
 
 
 # ============================================================================
@@ -944,7 +941,7 @@ class SettingsDialog(QDialog):
             # 更新所有窗口主题
             self._update_all_themes()
 
-            # 使用自定义提示框，只显示"保存成功"
+            # 使用简洁的保存成功提示
             self._show_save_success_toast()
         finally:
             # 恢复鼠标检测器

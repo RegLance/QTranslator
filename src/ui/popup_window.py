@@ -1249,9 +1249,6 @@ class PopupWindow(QWidget):
                     self._is_dragging = True
                     self._drag_start_pos = event.globalPosition().toPoint()
                     self._drag_window_start_pos = self.pos()
-                    # 记录拖动开始时的窗口尺寸，用于 DPI 变化检测
-                    self._drag_start_size = self.size()
-                    self._drag_start_screen = QApplication.screenAt(self._drag_start_pos)
                     log_debug("开始拖动窗口")
 
         super().mousePressEvent(event)
@@ -1261,26 +1258,7 @@ class PopupWindow(QWidget):
         pos = event.position().toPoint()
 
         if self._is_dragging and self._drag_start_pos:
-            # 检测屏幕变化（DPI 变化）
-            current_screen = QApplication.screenAt(event.globalPosition().toPoint())
-            if hasattr(self, '_drag_start_screen') and self._drag_start_screen and current_screen:
-                # 如果屏幕发生变化，可能触发了 DPI 变化
-                if current_screen != self._drag_start_screen:
-                    # 更新参考屏幕和起始位置，避免累计误差
-                    self._drag_start_screen = current_screen
-                    # 重新记录当前位置作为新的起点
-                    self._drag_start_pos = event.globalPosition().toPoint()
-                    self._drag_window_start_pos = self.pos()
-                    if hasattr(self, '_drag_start_size'):
-                        # 恢复原始尺寸，防止 DPI 变化导致窗口异常放大
-                        self.resize(self._drag_start_size)
-                    # 重新计算 delta（此时为 0，因为我们刚更新了起点）
-                    delta = QPoint(0, 0)
-                else:
-                    delta = event.globalPosition().toPoint() - self._drag_start_pos
-            else:
-                delta = event.globalPosition().toPoint() - self._drag_start_pos
-
+            delta = event.globalPosition().toPoint() - self._drag_start_pos
             new_pos = self._drag_window_start_pos + delta
             self.move(new_pos)
             self._ensure_within_screen()

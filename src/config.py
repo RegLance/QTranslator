@@ -158,6 +158,10 @@ class Config:
             'writing': {
                 'keep_original': False,  # 保留原文
             },
+            'translator_window': {
+                'fixed_height_mode': False,  # 固定高度模式（勾选后不自动调整窗口高度）
+                'remember_window_position': False,  # 记忆窗口位置（勾选后记住窗口关闭时的位置）
+            },
         }
 
     def _merge_with_defaults(self, config: Dict[str, Any]) -> Dict[str, Any]:

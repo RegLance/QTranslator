@@ -17,8 +17,8 @@ THEMES = {
         'text_placeholder': '#666666',
 
         # 强调色
-        'accent_color': '#0078d4',
-        'accent_hover': '#1084d8',
+        'accent_color': '#007AFF',     # macOS 风格现代蓝
+        'accent_hover': '#0A84FF',     # iOS 风格亮蓝
         'success_color': '#1a7f37',
         'warning_color': '#d29922',
         'error_color': '#ff6b6b',
@@ -29,7 +29,7 @@ THEMES = {
         'button_active': '#5d5d5d',
         'input_bg': '#252525',
         'input_border': '#3d3d3d',
-        'input_focus': '#0078d4',
+        'input_focus': '#007AFF',
 
         # 滚动条
         'scrollbar_bg': '#2d2d2d',
@@ -48,10 +48,10 @@ THEMES = {
         # 列表项
         'list_item_bg': '#252525',
         'list_item_hover': '#3d3d3d',
-        'list_item_selected': '#0078d4',
+        'list_item_selected': '#007AFF',
 
         # 分组框
-        'group_title': '#0078d4',
+        'group_title': '#007AFF',
 
         # 关闭按钮悬停
         'close_hover': '#ff6b6b',
@@ -70,8 +70,8 @@ THEMES = {
         'text_placeholder': '#aaaaaa',
 
         # 强调色
-        'accent_color': '#0078d4',
-        'accent_hover': '#1084d8',
+        'accent_color': '#007AFF',     # macOS 风格现代蓝
+        'accent_hover': '#0A84FF',     # iOS 风格亮蓝
         'success_color': '#1a7f37',
         'warning_color': '#d29922',
         'error_color': '#d32f2f',
@@ -82,7 +82,7 @@ THEMES = {
         'button_active': '#c0c0c0',
         'input_bg': '#ffffff',
         'input_border': '#e0e0e0',
-        'input_focus': '#0078d4',
+        'input_focus': '#007AFF',
 
         # 滚动条
         'scrollbar_bg': '#f0f0f0',
@@ -101,10 +101,10 @@ THEMES = {
         # 列表项
         'list_item_bg': '#ffffff',
         'list_item_hover': '#e8e8e8',
-        'list_item_selected': '#0078d4',
+        'list_item_selected': '#007AFF',
 
         # 分组框
-        'group_title': '#0078d4',
+        'group_title': '#007AFF',
 
         # 关闭按钮悬停
         'close_hover': '#ff6b6b',
@@ -342,6 +342,56 @@ def get_checkbox_style(theme: Dict[str, Any]) -> str:
         QCheckBox::indicator {{
             width: 0px;
             height: 0px;
+        }}
+    """
+
+
+def get_spinbox_style(theme: Dict[str, Any]) -> str:
+    """获取数字输入框(SpinBox)样式 - 按钮部分样式"""
+    return f"""
+        QSpinBox {{
+            background-color: {theme['input_bg']};
+            border: 1px solid {theme['input_border']};
+            border-radius: 6px;
+            padding: 4px 8px;
+            padding-right: 32px;
+            color: {theme['text_primary']};
+            font-size: 13px;
+        }}
+        QSpinBox:focus {{
+            border-color: {theme['accent_color']};
+        }}
+        QSpinBox::up-button {{
+            subcontrol-origin: border;
+            subcontrol-position: right top;
+            width: 24px;
+            height: 14px;
+            border: none;
+            border-top-right-radius: 5px;
+            border-left: 1px solid {theme['input_border']};
+            background-color: transparent;
+        }}
+        QSpinBox::up-button:hover {{
+            background-color: {theme['button_hover']};
+        }}
+        QSpinBox::up-button:pressed {{
+            background-color: {theme['accent_color']};
+        }}
+        QSpinBox::down-button {{
+            subcontrol-origin: border;
+            subcontrol-position: right bottom;
+            width: 24px;
+            height: 14px;
+            border: none;
+            border-bottom-right-radius: 5px;
+            border-left: 1px solid {theme['input_border']};
+            background-color: transparent;
+        }}
+        QSpinBox::down-button:hover {{
+            background-color: {theme['button_hover']};
+        }}
+        QSpinBox::down-button:pressed {{
+            background-color: {theme['accent_color']};
         }}
     """
 

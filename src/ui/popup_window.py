@@ -1384,7 +1384,7 @@ class PopupWindow(QWidget):
                 font-size: 13px;
             }
             QMenu::item:selected {
-                background-color: #0078d4;
+                background-color: #007AFF;
                 border-radius: 3px;
             }
         """)
@@ -1423,7 +1423,7 @@ class PopupWindow(QWidget):
                 font-size: 13px;
             }
             QMenu::item:selected {
-                background-color: #0078d4;
+                background-color: #007AFF;
                 border-radius: 3px;
             }
         """)

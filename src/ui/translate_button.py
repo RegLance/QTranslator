@@ -10,8 +10,9 @@ import math
 import time
 from typing import Optional, Tuple
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QApplication
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint
-from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont, QCursor
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSize
+from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont, QCursor, QIcon
+from pathlib import Path
 
 try:
     from ..config import get_config
@@ -119,7 +120,23 @@ class TranslateButton(QWidget):
         self.setMouseTracking(True)
 
     def _create_icon(self) -> QPixmap:
-        """创建翻译图标 - 显示 "T" 字符（半透明背景）"""
+        """创建翻译图标 - 尝试加载图片，失败则绘制 "T" 字符"""
+        # 尝试加载图片图标
+        icon_path = Path(__file__).parent.parent.parent / "assets" / "icon.png"
+
+        if icon_path.exists():
+            # 加载图片并缩放到按钮尺寸
+            pixmap = QPixmap(str(icon_path))
+            if not pixmap.isNull():
+                # 缩放图片到按钮大小，保持平滑
+                scaled_pixmap = pixmap.scaled(
+                    BUTTON_SIZE, BUTTON_SIZE,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                return scaled_pixmap
+
+        # 如果图片不存在或加载失败，绘制默认的 "T" 字符图标
         pixmap = QPixmap(BUTTON_SIZE, BUTTON_SIZE)
         pixmap.fill(QColor(0, 0, 0, 0))
 
@@ -127,7 +144,7 @@ class TranslateButton(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # 绘制圆形背景（半透明蓝色，透明度约50%）
-        painter.setBrush(QColor(0, 120, 212, 128))  # 半透明蓝色
+        painter.setBrush(QColor(0, 122, 255, 128))  # 半透明现代蓝
         painter.setPen(Qt.PenStyle.NoPen)  # 无边框
         painter.drawEllipse(0, 0, BUTTON_SIZE, BUTTON_SIZE)
 
@@ -506,8 +523,11 @@ class TranslateButton(QWidget):
     def mousePressEvent(self, event):
         """鼠标点击事件"""
         if event.button() == Qt.MouseButton.LeftButton:
+            # 先发出点击信号，让翻译窗口显示
             self.clicked.emit()
-            self.hide()
+            # 延迟隐藏按钮，让翻译窗口有时间激活并获得焦点
+            # 这解决了从 WA_ShowWithoutActivating 窗口切换时悬停效果失效的问题
+            QTimer.singleShot(100, self.hide)
         super().mousePressEvent(event)
 
 

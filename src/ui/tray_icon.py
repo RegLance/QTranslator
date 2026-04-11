@@ -61,7 +61,7 @@ class TrayIcon(QObject):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # 绘制圆形背景（半透明蓝色）
-        painter.setBrush(QColor(0, 120, 212, 180))
+        painter.setBrush(QColor(0, 122, 255, 180))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(0, 0, 24, 24)
 
@@ -84,7 +84,7 @@ class TrayIcon(QObject):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # 绘制蓝色圆角背景
-        painter.setBrush(QColor(0, 120, 212))
+        painter.setBrush(QColor(0, 122, 255))  # macOS 风格现代蓝
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(0, 0, 16, 16, 3, 3)
 
@@ -228,25 +228,54 @@ class TrayIcon(QObject):
         self.enabled_changed.emit(enabled)
 
     def _create_enabled_icon(self) -> QIcon:
-        """创建启用状态图标"""
-        pixmap = QPixmap(64, 64)
-        pixmap.fill(QColor(0, 0, 0, 0))
-
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QColor(0, 120, 212))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(4, 4, 56, 56)
-        painter.setPen(QColor(255, 255, 255))
-        font = QFont("Arial", 32, QFont.Weight.Bold)
-        painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "T")
-        painter.end()
-
-        return QIcon(pixmap)
+        """创建启用状态图标 - 加载 icon.png"""
+        icon_path = Path(__file__).parent.parent.parent / "assets" / "icon.png"
+        
+        if icon_path.exists():
+            pixmap = QPixmap(str(icon_path))
+            if not pixmap.isNull():
+                # 缩放到托盘图标合适大小
+                scaled = pixmap.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                return QIcon(scaled)
+        
+        # 如果加载失败，绘制备用图标
+        return self._create_default_icon()
 
     def _create_disabled_icon(self) -> QIcon:
-        """创建禁用状态图标"""
+        """创建禁用状态图标 - 加载 icon.png 并转换为灰色"""
+        icon_path = Path(__file__).parent.parent.parent / "assets" / "icon.png"
+        
+        if icon_path.exists():
+            pixmap = QPixmap(str(icon_path))
+            if not pixmap.isNull():
+                # 缩放到托盘图标合适大小
+                scaled = pixmap.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                
+                # 转换为灰色
+                gray_pixmap = self._convert_to_grayscale(scaled)
+                return QIcon(gray_pixmap)
+        
+        # 如果加载失败，绘制备用灰色图标
+        return self._create_default_disabled_icon()
+
+    def _convert_to_grayscale(self, pixmap: QPixmap) -> QPixmap:
+        """将 pixmap 转换为灰色"""
+        # 转换为 QImage 进行像素操作
+        image = pixmap.toImage()
+        
+        for x in range(image.width()):
+            for y in range(image.height()):
+                pixel = image.pixelColor(x, y)
+                # 计算灰度值
+                gray = int(pixel.red() * 0.3 + pixel.green() * 0.59 + pixel.blue() * 0.11)
+                # 设置新的灰色像素，保留 alpha
+                gray_pixel = QColor(gray, gray, gray, pixel.alpha())
+                image.setPixelColor(x, y, gray_pixel)
+        
+        return QPixmap.fromImage(image)
+
+    def _create_default_disabled_icon(self) -> QIcon:
+        """创建备用灰色图标"""
         pixmap = QPixmap(64, 64)
         pixmap.fill(QColor(0, 0, 0, 0))
 

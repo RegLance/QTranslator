@@ -1,14 +1,15 @@
 """独立翻译窗口模块 - QTranslator（无边框风格，支持主题切换、纯文本显示）"""
 import sys
+import math
 from typing import Optional
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTextEdit, QComboBox, QFrame,
-    QGraphicsDropShadowEffect, QApplication, QSplitter
+    QGraphicsDropShadowEffect, QApplication, QSplitter, QSplitterHandle
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect, QPointF, QTimer
-from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QKeySequence, QIcon, QFont, QPixmap, QPainter, QPen
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect, QPointF, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QKeySequence, QIcon, QFont, QPixmap, QPainter, QPen, QBrush, QLinearGradient
 
 try:
     from ..utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style, get_hidden_scrollbar_style
@@ -18,6 +19,210 @@ except ImportError:
     from src.utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style, get_hidden_scrollbar_style
     from src.config import get_config
     from src.utils.tts import get_tts
+
+
+class AnimatedSplitterHandle(QSplitterHandle):
+    """带动画效果的分隔线手柄
+
+    当操作进行时显示从左到右流动的渐变效果，作为视觉提示。
+    """
+
+    def __init__(self, orientation: Qt.Orientation, splitter: QSplitter):
+        super().__init__(orientation, splitter)
+        self._animation_active = False
+        self._animation_phase = 0.0  # 流动进度 (0.0 - 1.0)
+        self._animation_timer = QTimer(self)
+        self._animation_timer.timeout.connect(self._update_animation)
+        self._animation_timer.setInterval(16)  # 16ms ≈ 60fps
+
+        # 主题颜色缓存
+        self._base_color = QColor('#3d3d3d')
+        self._ripple_color = QColor('#5a5a5a')  # 灰色波纹
+
+        # 流动参数 - 更慢的速度
+        self._flow_speed = 0.006  # 约2.5秒完成一个周期
+
+        # 开启鼠标追踪
+        self.setMouseTracking(True)
+
+    def set_theme_colors(self, base_color: QColor, accent_color: QColor):
+        """设置主题颜色"""
+        self._base_color = base_color
+        # 波纹颜色：比基础色亮一点的灰色
+        if base_color.lightness() < 128:  # 深色主题
+            self._ripple_color = QColor(
+                min(255, base_color.red() + 45),
+                min(255, base_color.green() + 45),
+                min(255, base_color.blue() + 45)
+            )
+        else:  # 浅色主题
+            self._ripple_color = QColor(
+                max(0, base_color.red() - 45),
+                max(0, base_color.green() - 45),
+                max(0, base_color.blue() - 45)
+            )
+        self.update()
+
+    def start_animation(self):
+        """启动动画"""
+        if not self._animation_active:
+            self._animation_active = True
+            self._animation_phase = 0.0
+            self._animation_timer.start()
+
+    def stop_animation(self):
+        """停止动画"""
+        if self._animation_active:
+            self._animation_active = False
+            self._animation_timer.stop()
+            self._animation_phase = 0.0
+            self.update()
+
+    def is_animating(self) -> bool:
+        """检查是否正在动画"""
+        return self._animation_active
+
+    def _update_animation(self):
+        """更新动画帧"""
+        self._animation_phase += self._flow_speed
+        if self._animation_phase > 1.0:
+            self._animation_phase = 0.0
+        self.update()
+
+    def paintEvent(self, event):
+        """绘制分隔线（带从左到右流动渐变效果）"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = self.rect()
+        handle_height = 6
+        y_offset = (rect.height() - handle_height) // 2
+        draw_rect = QRect(rect.x() + 2, y_offset, rect.width() - 4, handle_height)
+
+        # 绘制基础分隔线背景
+        painter.setBrush(QBrush(self._base_color))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(draw_rect, 3, 3)
+
+        # 如果动画激活，绘制从左到右流动的渐变光带
+        if self._animation_active:
+            width = draw_rect.width()
+            
+            # 流动渐变光带的宽度（约占分隔线宽度的40%）
+            band_width = int(width * 0.4)
+            
+            # 计算光带的起始位置（从左到右流动）
+            # phase 从 0 到 1，光带从左边移动到右边
+            start_x = draw_rect.x() + int((width + band_width) * self._animation_phase) - band_width
+            
+            # 创建渐变：左边缘暗 -> 中间亮 -> 右边缘暗
+            gradient = QLinearGradient()
+            
+            # 计算渐变的绝对坐标
+            gradient_start = start_x
+            gradient_end = start_x + band_width
+            
+            gradient.setStart(gradient_start, 0)
+            gradient.setFinalStop(gradient_end, 0)
+            
+            # 渐变颜色：边缘透明，中间明亮
+            gradient.setColorAt(0.0, QColor(self._ripple_color.red(),
+                                            self._ripple_color.green(),
+                                            self._ripple_color.blue(), 0))
+            gradient.setColorAt(0.15, QColor(self._ripple_color.red(),
+                                            self._ripple_color.green(),
+                                            self._ripple_color.blue(), 50))
+            gradient.setColorAt(0.5, QColor(self._ripple_color.red(),
+                                            self._ripple_color.green(),
+                                            self._ripple_color.blue(), 200))  # 中间最亮
+            gradient.setColorAt(0.85, QColor(self._ripple_color.red(),
+                                            self._ripple_color.green(),
+                                            self._ripple_color.blue(), 50))
+            gradient.setColorAt(1.0, QColor(self._ripple_color.red(),
+                                            self._ripple_color.green(),
+                                            self._ripple_color.blue(), 0))
+            
+            # 计算绘制区域（限制在分隔线范围内）
+            draw_start = max(draw_rect.x(), start_x)
+            draw_end = min(draw_rect.x() + width, start_x + band_width)
+            band_draw_width = draw_end - draw_start
+            
+            if band_draw_width > 0:
+                # 调整渐变范围以匹配实际绘制区域
+                actual_gradient = QLinearGradient()
+                actual_gradient.setStart(draw_start, 0)
+                actual_gradient.setFinalStop(draw_end, 0)
+                
+                # 计算渐变位置在裁剪区域内的相对位置
+                rel_start = (draw_start - start_x) / band_width if band_width > 0 else 0
+                rel_end = (draw_end - start_x) / band_width if band_width > 0 else 1
+                
+                # 映射渐变颜色到裁剪区域
+                positions = [0.0, 0.15, 0.5, 0.85, 1.0]
+                alphas = [0, 50, 200, 50, 0]
+                
+                for pos, alpha in zip(positions, alphas):
+                    mapped_pos = rel_start + pos * (rel_end - rel_start)
+                    if 0 <= mapped_pos <= 1:
+                        actual_gradient.setColorAt(mapped_pos, 
+                            QColor(self._ripple_color.red(),
+                                   self._ripple_color.green(),
+                                   self._ripple_color.blue(), alpha))
+                
+                painter.setBrush(QBrush(actual_gradient))
+                painter.setPen(Qt.PenStyle.NoPen)
+                
+                band_rect = QRect(draw_start, draw_rect.y(), band_draw_width, draw_rect.height())
+                painter.drawRoundedRect(band_rect, 3, 3)
+
+    def setGeometry(self, rect: QRect):
+        """设置几何形状，保持高度不变"""
+        super().setGeometry(rect)
+
+
+class AnimatedSplitter(QSplitter):
+    """带动画分隔线效果的分割器"""
+
+    def __init__(self, orientation: Qt.Orientation):
+        super().__init__(orientation)
+        self._animated_handle: Optional[AnimatedSplitterHandle] = None
+        self._base_color: Optional[QColor] = None
+        self._accent_color: Optional[QColor] = None
+        self.setHandleWidth(10)  # 分隔线宽度（包含可拖拽区域）
+
+    def createHandle(self) -> QSplitterHandle:
+        """创建自定义的动画分隔线手柄"""
+        self._animated_handle = AnimatedSplitterHandle(self.orientation(), self)
+        # 如果已经设置了主题颜色，立即应用到新创建的 handle
+        if self._base_color and self._accent_color:
+            self._animated_handle.set_theme_colors(self._base_color, self._accent_color)
+        return self._animated_handle
+
+    def get_animated_handle(self) -> Optional[AnimatedSplitterHandle]:
+        """获取动画分隔线手柄"""
+        return self._animated_handle
+
+    def set_theme_colors(self, base_color: QColor, accent_color: QColor):
+        """设置主题颜色"""
+        # 保存颜色以便后续创建的 handle 使用
+        self._base_color = base_color
+        self._accent_color = accent_color
+        if self._animated_handle:
+            self._animated_handle.set_theme_colors(base_color, accent_color)
+
+    def start_animation(self):
+        """启动动画"""
+        if self._animated_handle:
+            self._animated_handle.start_animation()
+
+    def stop_animation(self):
+        """停止动画"""
+        if self._animated_handle:
+            self._animated_handle.stop_animation()
+
+    def is_animating(self) -> bool:
+        """检查是否正在动画"""
+        return self._animated_handle and self._animated_handle.is_animating()
 
 
 class StreamingTranslationWorker(QThread):
@@ -189,6 +394,21 @@ class TranslatorWindow(QWidget):
         self._height_adjust_timer = None  # 高度调整定时器（延迟调整，减少频繁更新）
         self._is_streaming = False  # 是否正在流式输出
         self._scrollbar_hidden = False  # 滚动条是否被隐藏（流式输出高度增长时）
+        self._user_resized_during_streaming = False  # 用户在流式期间手动调整了窗口大小
+
+        # 逐字输出相关
+        self._char_queue = []  # 待输出的字符缓冲区
+        self._char_timer = QTimer()  # 逐字输出定时器
+        self._char_timer.setInterval(10)  # 每个字符间隔 10ms（快速打字效果）
+        self._char_timer.timeout.connect(self._flush_char)
+        self._pending_finish_callback = None  # 缓冲区清空后的完成回调
+
+        # 固定高度模式（从配置读取）
+        self._fixed_height_mode = get_config().get('translator_window.fixed_height_mode', False)
+
+        # 记忆窗口位置（从配置读取，仅在当前会话内记忆，程序重启后重置）
+        self._remember_window_position = get_config().get('translator_window.remember_window_position', False)
+        self._saved_window_pos = None  # 保存的窗口位置 (QPoint)
 
         self._setup_window_properties()
         self._setup_ui()
@@ -201,8 +421,15 @@ class TranslatorWindow(QWidget):
         )
 
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setMinimumSize(450, 350)
-        self.resize(500, 400)
+        # 窗口最小高度计算：
+        # 默认模式：标题栏(28) + 控制栏(38) + 边距(40) + 原文框(120) + 分割条(6) + 译文框(180) = 372
+        # 固定高度模式：标题栏(28) + 控制栏(38) + 边距(40) + 原文框(180) + 分割条(6) + 译文框(360) = 652
+        if self._fixed_height_mode:
+            self.setMinimumSize(450, 630)
+            self.resize(500, 660)
+        else:
+            self.setMinimumSize(450, 400)
+            self.resize(500, 450)
 
         # 开启鼠标追踪
         self.setMouseTracking(True)
@@ -470,7 +697,7 @@ class TranslatorWindow(QWidget):
 
         # 翻译按钮
         self._translate_btn = QPushButton("翻译")
-        self._translate_btn.setFixedSize(60, 28)  # 固定宽度60px，防止状态文字变化导致宽度改变
+        self._translate_btn.setFixedSize(55, 28)  # 统一宽度55px
         self._translate_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._translate_btn.setStyleSheet(f"""
             QPushButton {{
@@ -478,7 +705,7 @@ class TranslatorWindow(QWidget):
                 color: #ffffff;
                 border: none;
                 border-radius: 4px;
-                padding: 0 16px;
+                padding: 0 8px;
                 font-size: 13px;
                 font-weight: bold;
             }}
@@ -495,7 +722,7 @@ class TranslatorWindow(QWidget):
 
         # 润色按钮
         self._polishing_btn = QPushButton("润色")
-        self._polishing_btn.setFixedSize(50, 28)  # 固定宽度50px
+        self._polishing_btn.setFixedSize(55, 28)  # 统一宽度55px
         self._polishing_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._polishing_btn.setStyleSheet(f"""
             QPushButton {{
@@ -503,7 +730,7 @@ class TranslatorWindow(QWidget):
                 color: {theme['text_primary']};
                 border: 1px solid {theme['border_color']};
                 border-radius: 4px;
-                padding: 0 12px;
+                padding: 0 8px;
                 font-size: 13px;
             }}
             QPushButton:hover {{
@@ -519,7 +746,7 @@ class TranslatorWindow(QWidget):
 
         # 总结按钮
         self._summarize_btn = QPushButton("总结")
-        self._summarize_btn.setFixedSize(50, 28)  # 固定宽度50px
+        self._summarize_btn.setFixedSize(55, 28)  # 统一宽度55px
         self._summarize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._summarize_btn.setStyleSheet(f"""
             QPushButton {{
@@ -527,7 +754,7 @@ class TranslatorWindow(QWidget):
                 color: {theme['text_primary']};
                 border: 1px solid {theme['border_color']};
                 border-radius: 4px;
-                padding: 0 12px;
+                padding: 0 8px;
                 font-size: 13px;
             }}
             QPushButton:hover {{
@@ -543,15 +770,20 @@ class TranslatorWindow(QWidget):
 
         content_layout.addWidget(self._control_bar)
 
-        # 分割器
-        self._splitter = QSplitter(Qt.Orientation.Vertical)
-        self._splitter.setStyleSheet(get_splitter_style(theme))
-        self._splitter.setHandleWidth(6)
+        # 分割器（使用动画分隔器）
+        self._splitter = AnimatedSplitter(Qt.Orientation.Vertical)
+        # 设置分隔线主题颜色
+        base_color = QColor(theme['splitter_color'])
+        accent_color = QColor(theme['accent_color'])
+        self._splitter.set_theme_colors(base_color, accent_color)
         self._splitter.setChildrenCollapsible(False)
 
         # 原文输入区域 - 纯文本显示
         self._input_text = QTextEdit()
         self._input_text.setPlaceholderText("输入要翻译的文本...")
+        # 固定高度模式下原文框高度为180px，否则为120px
+        input_min_height = 180 if self._fixed_height_mode else 120
+        self._input_text.setMinimumHeight(input_min_height)
         self._input_text.setFont(QFont("Microsoft YaHei", self._font_size))
         self._input_text.setStyleSheet(f"""
             QTextEdit {{
@@ -583,7 +815,9 @@ class TranslatorWindow(QWidget):
             }}
         """)
         # 不使用布局，使用绝对定位放置文本框和悬浮按钮
-        self._output_container.setMinimumHeight(60)
+        # 固定高度模式下译文框高度为360px，否则为180px
+        output_min_height = 360 if self._fixed_height_mode else 180
+        self._output_container.setMinimumHeight(output_min_height)
 
         # 翻译结果文本框
         self._output_text = QTextEdit()
@@ -676,8 +910,11 @@ class TranslatorWindow(QWidget):
 
         self._splitter.addWidget(self._output_container)
 
-        # 设置分割器初始比例（原文框100px，译文框200px）
-        self._splitter.setSizes([100, 200])
+        # 设置分割器初始比例（固定高度模式：原文框180px，译文框360px；默认：原文框120px，译文框180px）
+        if self._fixed_height_mode:
+            self._splitter.setSizes([180, 360])
+        else:
+            self._splitter.setSizes([120, 180])
         content_layout.addWidget(self._splitter, 1)
 
         # 为输出容器安装事件过滤器，以便处理 resize 事件更新悬浮按钮位置
@@ -724,10 +961,38 @@ class TranslatorWindow(QWidget):
             self._is_maximized = True
             self._maximize_btn.setText("❐")
 
+        # 窗口大小改变后，如果正在流式翻译中，停止自动高度增长并显示滚动条
+        if self._is_streaming:
+            self._on_user_resize_during_streaming()
+
     def update_theme(self):
         """更新主题"""
         new_theme = get_config().get('theme.popup_style', 'dark')
         new_font_size = get_config().get('font.size', 14)
+        new_fixed_height_mode = get_config().get('translator_window.fixed_height_mode', False)
+
+        # 同步记忆窗口位置配置
+        self._remember_window_position = get_config().get('translator_window.remember_window_position', False)
+        if not self._remember_window_position:
+            self._saved_window_pos = None
+
+        # 检查是否需要更新固定高度模式
+        if new_fixed_height_mode != self._fixed_height_mode:
+            self._fixed_height_mode = new_fixed_height_mode
+            # 更新最小高度和分割器尺寸
+            input_min_height = 180 if self._fixed_height_mode else 120
+            output_min_height = 360 if self._fixed_height_mode else 180
+            self._input_text.setMinimumHeight(input_min_height)
+            self._output_container.setMinimumHeight(output_min_height)
+            if self._fixed_height_mode:
+                self._splitter.setSizes([180, 360])
+                self.setMinimumSize(450, 630)
+                self.resize(500, 660)
+            else:
+                self._splitter.setSizes([120, 180])
+                self.setMinimumSize(450, 400)
+                self.resize(500, 450)
+
         if new_theme != self._theme_style or new_font_size != self._font_size:
             self._theme_style = new_theme
             self._font_size = new_font_size
@@ -893,8 +1158,10 @@ class TranslatorWindow(QWidget):
             }}
         """)
 
-        # 更新分割器
-        self._splitter.setStyleSheet(get_splitter_style(theme))
+        # 更新分割器颜色（使用动画分隔器的颜色设置）
+        base_color = QColor(theme['splitter_color'])
+        accent_color = QColor(theme['accent_color'])
+        self._splitter.set_theme_colors(base_color, accent_color)
 
         # 更新输入框
         self._input_text.setFont(QFont("Microsoft YaHei", self._font_size))
@@ -1016,8 +1283,14 @@ class TranslatorWindow(QWidget):
         # 2. 重置流式输出状态变量
         self._is_streaming = False
         self._scrollbar_hidden = False
+        self._user_resized_during_streaming = False
         if hasattr(self, '_streaming_text'):
             self._streaming_text = ""
+
+        # 2.1 停止逐字输出定时器并清空缓冲区
+        self._char_timer.stop()
+        self._char_queue.clear()
+        self._pending_finish_callback = None
 
         # 3. 恢复滚动条显示（如果之前被隐藏）
         self._show_output_scrollbar()
@@ -1035,12 +1308,15 @@ class TranslatorWindow(QWidget):
         self._polishing_btn.setEnabled(True)
         self._summarize_btn.setEnabled(True)
 
-        # 7. 清理高度调整定时器（如果存在）
+        # 7. 停止分隔线动画（如果正在播放）
+        self._splitter.stop_animation()
+
+        # 8. 清理高度调整定时器（如果存在）
         if self._height_adjust_timer:
             self._height_adjust_timer.stop()
             self._height_adjust_timer = None
 
-        # 8. 不重置窗口高度，保持当前窗口大小状态
+        # 9. 不重置窗口高度，保持当前窗口大小状态
         # 只恢复滚动条显示
         self._show_output_scrollbar()
         self._scrollbar_hidden = False
@@ -1065,14 +1341,25 @@ class TranslatorWindow(QWidget):
         self._is_streaming = True
         self._last_adjusted_height = 0
         self._scrollbar_hidden = False  # 重置滚动条隐藏状态
+        self._user_resized_during_streaming = False  # 重置用户手动调整标志
+        self._char_queue.clear()  # 清空逐字输出缓冲区
+        self._char_timer.stop()  # 停止逐字输出定时器
+        self._pending_finish_callback = None  # 重置完成回调
 
-        # 流式输出开始时隐藏滚动条
-        self._hide_output_scrollbar()
+        # 锁定原文框高度，防止流式输出期间 splitter 重新分配导致文字跳动
+        self._lock_input_height()
+
+        # 流式输出开始时隐藏滚动条（固定高度模式下不隐藏，保持滚动条显示）
+        if not self._fixed_height_mode:
+            self._hide_output_scrollbar()
 
         # 禁用按钮（按钮文字保持不变，通过禁用状态表示正在处理）
         self._translate_btn.setEnabled(False)
         self._polishing_btn.setEnabled(False)
         self._summarize_btn.setEnabled(False)
+
+        # 启动分隔线动画（指示正在翻译）
+        self._splitter.start_animation()
 
         # 获取目标语言
         target_language = self._lang_combo.currentText()
@@ -1087,46 +1374,81 @@ class TranslatorWindow(QWidget):
         self._current_worker.start()
 
     def _on_chunk_received(self, chunk: str):
-        """收到翻译片段"""
+        """收到翻译片段 - 将字符加入逐字输出缓冲区"""
         try:
             if not hasattr(self, '_streaming_text'):
                 self._streaming_text = ""
                 self._is_streaming = True
                 self._last_adjusted_height = 0
 
+            # 将 chunk 中的每个字符加入缓冲区
+            self._char_queue.extend(chunk)
+
+            # 启动逐字输出定时器（如果尚未启动）
+            if not self._char_timer.isActive():
+                self._char_timer.start()
+        except RuntimeError:
+            # 窗口已被销毁，忽略
+            pass
+
+    def _flush_char(self):
+        """逐字输出定时器回调：每次从缓冲区取出一个字符插入文本框"""
+        try:
+            if not self._char_queue:
+                # 缓冲区为空，停止定时器
+                self._char_timer.stop()
+                # 如果流式已结束且缓冲区清空，执行完成回调
+                if hasattr(self, '_pending_finish_callback') and self._pending_finish_callback:
+                    callback = self._pending_finish_callback
+                    self._pending_finish_callback = None
+                    callback()
+                return
+
+            # 每次输出 3 个字符，提高速度感（10ms * 3 = 每秒约300字）
+            batch_size = 3
+            chars_to_insert = []
+            for _ in range(batch_size):
+                if self._char_queue:
+                    chars_to_insert.append(self._char_queue.pop(0))
+                else:
+                    break
+
+            if not chars_to_insert:
+                return
+
+            chunk = ''.join(chars_to_insert)
             self._streaming_text += chunk
 
-            # 记录当前滚动条位置，判断用户是否在底部
+            # 在插入文本之前记录滚动位置
             scrollbar = self._output_text.verticalScrollBar()
-            was_at_bottom = scrollbar.value() >= scrollbar.maximum() - 10  # 允许10px误差
+            was_at_bottom = scrollbar.value() >= scrollbar.maximum() - 10
 
             # 使用 QTextCursor 追加文本，避免频繁 setPlainText 导致滚动条闪烁
             cursor = self._output_text.textCursor()
-
-            # 移动到文档末尾
             cursor.movePosition(cursor.MoveOperation.End)
-
-            # 插入新文本（不重新渲染整个文档）
             cursor.insertText(chunk)
 
-            # 如果用户之前不在底部（正在查看之前的内容），恢复滚动位置
-            # 如果用户在底部，则自动滚动到新内容
-            if was_at_bottom:
-                # 用户在底部，跟随新内容滚动到底部
+            # 滚动策略：
+            # - 窗口自动增长期间（滚动条隐藏）：不改变滚动位置
+            # - 窗口达到最大高度后（滚动条可见）：自动滚动到底部跟随新内容
+            if not self._scrollbar_hidden and was_at_bottom:
                 scrollbar.setValue(scrollbar.maximum())
-            # else: 用户正在查看之前的内容，不改变滚动位置（让用户自由滚动）
 
-            # 触发高度调整（延迟执行，避免频繁更新）
-            if self._is_streaming:
+            # 触发高度调整（延迟执行，避免频繁更新）- 固定高度模式下不调整
+            if self._is_streaming and not self._fixed_height_mode:
                 self._schedule_height_adjust()
         except RuntimeError:
             # 窗口已被销毁，忽略
             pass
 
     def _on_translation_finished(self, result: str):
-        """翻译完成"""
+        """翻译完成 - 等待逐字缓冲区清空后再执行完成逻辑"""
         from PyQt6.QtCore import QTimer
-        QTimer.singleShot(0, lambda: self._do_translation_finished(result))
+        if self._char_queue:
+            # 缓冲区还有字符，延迟执行完成逻辑
+            self._pending_finish_callback = lambda: self._do_translation_finished(result)
+        else:
+            QTimer.singleShot(0, lambda: self._do_translation_finished(result))
 
     def _do_translation_finished(self, result: str):
         """实际执行翻译完成操作"""
@@ -1136,8 +1458,12 @@ class TranslatorWindow(QWidget):
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
 
-            # 最终高度调整
-            QTimer.singleShot(100, self._final_height_adjust)
+            # 停止分隔线动画（翻译完成）
+            self._splitter.stop_animation()
+
+            # 最终高度调整（固定高度模式下不调整）
+            if not self._fixed_height_mode:
+                QTimer.singleShot(100, self._final_height_adjust)
 
             # 调试输出
             try:
@@ -1185,12 +1511,18 @@ class TranslatorWindow(QWidget):
         try:
             self._is_streaming = False
             self._scrollbar_hidden = False
+            # 停止逐字输出并清空缓冲区
+            self._char_timer.stop()
+            self._char_queue.clear()
+            self._pending_finish_callback = None
             # 恢复滚动条显示
             self._show_output_scrollbar()
             self._output_text.setPlainText(f"翻译失败: {error}")
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
+            # 停止分隔线动画（翻译失败）
+            self._splitter.stop_animation()
             self._current_worker = None
             # 重置自动翻译模式
             self._auto_mode = False
@@ -1218,14 +1550,25 @@ class TranslatorWindow(QWidget):
         self._is_streaming = True
         self._last_adjusted_height = 0
         self._scrollbar_hidden = False
+        self._user_resized_during_streaming = False  # 重置用户手动调整标志
+        self._char_queue.clear()  # 清空逐字输出缓冲区
+        self._char_timer.stop()  # 停止逐字输出定时器
+        self._pending_finish_callback = None  # 重置完成回调
 
-        # 流式输出开始时隐藏滚动条
-        self._hide_output_scrollbar()
+        # 锁定原文框高度，防止流式输出期间 splitter 重新分配导致文字跳动
+        self._lock_input_height()
+
+        # 流式输出开始时隐藏滚动条（固定高度模式下不隐藏）
+        if not self._fixed_height_mode:
+            self._hide_output_scrollbar()
 
         # 禁用所有操作按钮（按钮文字保持不变，通过禁用状态表示正在处理）
         self._translate_btn.setEnabled(False)
         self._polishing_btn.setEnabled(False)
         self._summarize_btn.setEnabled(False)
+
+        # 启动分隔线动画（指示正在润色）
+        self._splitter.start_animation()
 
         # 启动润色线程
         self._current_worker = StreamingPolishingWorker(text)
@@ -1235,10 +1578,12 @@ class TranslatorWindow(QWidget):
         self._current_worker.start()
 
     def _on_polishing_finished(self, result: str):
-        """润色完成"""
-        # 使用 QTimer 延迟执行，避免在信号槽中直接操作
+        """润色完成 - 等待逐字缓冲区清空后再执行完成逻辑"""
         from PyQt6.QtCore import QTimer
-        QTimer.singleShot(0, lambda: self._do_polishing_finished(result))
+        if self._char_queue:
+            self._pending_finish_callback = lambda: self._do_polishing_finished(result)
+        else:
+            QTimer.singleShot(0, lambda: self._do_polishing_finished(result))
 
     def _do_polishing_finished(self, result: str):
         """实际执行润色完成操作（在主线程中）"""
@@ -1247,10 +1592,13 @@ class TranslatorWindow(QWidget):
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
+            # 停止分隔线动画（润色完成）
+            self._splitter.stop_animation()
             self._current_worker = None
 
-            # 最终高度调整
-            QTimer.singleShot(100, self._final_height_adjust)
+            # 最终高度调整（固定高度模式下不调整）
+            if not self._fixed_height_mode:
+                QTimer.singleShot(100, self._final_height_adjust)
 
             # 保存润色历史
             if result:
@@ -1278,12 +1626,18 @@ class TranslatorWindow(QWidget):
         try:
             self._is_streaming = False
             self._scrollbar_hidden = False
+            # 停止逐字输出并清空缓冲区
+            self._char_timer.stop()
+            self._char_queue.clear()
+            self._pending_finish_callback = None
             # 恢复滚动条显示
             self._show_output_scrollbar()
             self._output_text.setPlainText(f"润色失败: {error}")
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
+            # 停止分隔线动画（润色失败）
+            self._splitter.stop_animation()
             self._current_worker = None
         except RuntimeError:
             # 窗口已被销毁，忽略
@@ -1309,14 +1663,25 @@ class TranslatorWindow(QWidget):
         self._is_streaming = True
         self._last_adjusted_height = 0
         self._scrollbar_hidden = False
+        self._user_resized_during_streaming = False  # 重置用户手动调整标志
+        self._char_queue.clear()  # 清空逐字输出缓冲区
+        self._char_timer.stop()  # 停止逐字输出定时器
+        self._pending_finish_callback = None  # 重置完成回调
 
-        # 流式输出开始时隐藏滚动条
-        self._hide_output_scrollbar()
+        # 锁定原文框高度，防止流式输出期间 splitter 重新分配导致文字跳动
+        self._lock_input_height()
+
+        # 流式输出开始时隐藏滚动条（固定高度模式下不隐藏）
+        if not self._fixed_height_mode:
+            self._hide_output_scrollbar()
 
         # 禁用所有操作按钮（按钮文字保持不变，通过禁用状态表示正在处理）
         self._translate_btn.setEnabled(False)
         self._polishing_btn.setEnabled(False)
         self._summarize_btn.setEnabled(False)
+
+        # 启动分隔线动画（指示正在总结）
+        self._splitter.start_animation()
 
         # 获取目标语言（用于总结输出的语言）
         target_language = self._lang_combo.currentText()
@@ -1331,9 +1696,12 @@ class TranslatorWindow(QWidget):
         self._current_worker.start()
 
     def _on_summarize_finished(self, result: str):
-        """总结完成"""
+        """总结完成 - 等待逐字缓冲区清空后再执行完成逻辑"""
         from PyQt6.QtCore import QTimer
-        QTimer.singleShot(0, lambda: self._do_summarize_finished(result))
+        if self._char_queue:
+            self._pending_finish_callback = lambda: self._do_summarize_finished(result)
+        else:
+            QTimer.singleShot(0, lambda: self._do_summarize_finished(result))
 
     def _do_summarize_finished(self, result: str):
         """实际执行总结完成操作"""
@@ -1342,10 +1710,13 @@ class TranslatorWindow(QWidget):
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
+            # 停止分隔线动画（总结完成）
+            self._splitter.stop_animation()
             self._current_worker = None
 
-            # 最终高度调整
-            QTimer.singleShot(100, self._final_height_adjust)
+            # 最终高度调整（固定高度模式下不调整）
+            if not self._fixed_height_mode:
+                QTimer.singleShot(100, self._final_height_adjust)
 
             # 保存总结历史
             if result:
@@ -1376,12 +1747,18 @@ class TranslatorWindow(QWidget):
         try:
             self._is_streaming = False
             self._scrollbar_hidden = False
+            # 停止逐字输出并清空缓冲区
+            self._char_timer.stop()
+            self._char_queue.clear()
+            self._pending_finish_callback = None
             # 恢复滚动条显示
             self._show_output_scrollbar()
             self._output_text.setPlainText(f"总结失败: {error}")
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
+            # 停止分隔线动画（总结失败）
+            self._splitter.stop_animation()
             self._current_worker = None
         except RuntimeError:
             # 窗口已被销毁，忽略
@@ -1614,10 +1991,16 @@ class TranslatorWindow(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent):
         """鼠标释放事件"""
         if event.button() == Qt.MouseButton.LeftButton:
+            was_resizing = self._is_resizing
             self._is_dragging = False
             self._drag_start_pos = None
             self._is_resizing = False
             self._resize_edge = None
+
+            # 如果刚刚结束了窗口大小调整，且正在流式翻译中，
+            # 停止自动高度增长并立即显示滚动条，让用户可以滚动查看内容
+            if was_resizing and self._is_streaming:
+                self._on_user_resize_during_streaming()
 
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         super().mouseReleaseEvent(event)
@@ -1738,12 +2121,21 @@ class TranslatorWindow(QWidget):
         self._is_minimized = False
         self.update_theme()
 
-        screen = QApplication.primaryScreen()
-        if screen:
-            screen_geo = screen.availableGeometry()
-            x = (screen_geo.width() - self.width()) // 2
-            y = (screen_geo.height() - self.height()) // 2
-            self.move(x, y)
+        # 固定高度模式下，每次显示都重置到预设尺寸
+        if self._fixed_height_mode:
+            self.setMinimumSize(450, 630)
+            self.resize(500, 660)
+
+        # 记忆窗口位置：优先使用保存的位置，否则居中显示
+        if self._remember_window_position and self._saved_window_pos is not None:
+            self.move(self._saved_window_pos)
+        else:
+            screen = QApplication.primaryScreen()
+            if screen:
+                screen_geo = screen.availableGeometry()
+                x = (screen_geo.width() - self.width()) // 2
+                y = (screen_geo.height() - self.height()) // 2
+                self.move(x, y)
 
         if not self.isVisible():
             self.show()
@@ -1780,12 +2172,12 @@ class TranslatorWindow(QWidget):
         return (0, 0, 1920, 1080)
 
     def _calculate_position(self, mouse_pos):
-        """计算悬浮窗位置（考虑最大高度限制和屏幕边界）
+        """计算悬浮窗位置（考虑屏幕边界）
 
         窗口位置计算策略：
         1. 默认显示在鼠标右下方
         2. 如果右侧空间不足，显示在左侧
-        3. 如果下方空间不足（考虑最大高度70%），显示在上方
+        3. 如果下方空间不足以放置当前窗口高度，显示在上方
         4. 确保窗口不会超出屏幕边界
         """
         x, y = mouse_pos
@@ -1805,9 +2197,6 @@ class TranslatorWindow(QWidget):
         win_w = self.width()
         win_h = self.height()
 
-        # 计算最大可能高度（屏幕高度的70%），用于判断位置是否安全
-        max_potential_height = int(screen_h * 0.7)
-
         new_x = x + 15
         new_y = y + 15
 
@@ -1815,16 +2204,17 @@ class TranslatorWindow(QWidget):
         if new_x + win_w > screen_x + screen_w - 10:
             new_x = x - win_w - 15
 
-        # 检查垂直方向：考虑最大可能高度
-        # 如果当前窗口底部加上最大可能高度会超出屏幕，则放到上面
-        if new_y + max_potential_height > screen_y + screen_h - 10:
-            # 尝试放在鼠标上方
-            potential_y = y - max_potential_height - 15
+        # 检查垂直方向：使用当前窗口高度判断
+        # 计算底部剩余空间
+        bottom_space = screen_y + screen_h - new_y - 10
+        if bottom_space < win_h:
+            # 底部空间不够，尝试放在鼠标上方
+            potential_y = y - win_h - 15
             if potential_y >= screen_y + 10:
                 new_y = potential_y
             else:
-                # 如果上方也放不下，就贴着屏幕底部放置
-                new_y = screen_y + screen_h - max_potential_height - 10
+                # 上方也放不下，贴着屏幕底部
+                new_y = screen_y + screen_h - win_h - 10
 
         # 确保不超出左边界
         if new_x < screen_x + 10:
@@ -1912,14 +2302,22 @@ class TranslatorWindow(QWidget):
         self._is_streaming = True  # 设置流式状态
         self._last_adjusted_height = 0  # 重置高度记录
         self._scrollbar_hidden = False  # 重置滚动条隐藏状态
+        self._user_resized_during_streaming = False  # 重置用户手动调整标志
+        self._char_queue.clear()  # 清空逐字输出缓冲区
+        self._char_timer.stop()  # 停止逐字输出定时器
+        self._pending_finish_callback = None  # 重置完成回调
+
+        # 锁定原文框高度，防止流式输出期间 splitter 重新分配导致文字跳动
+        self._lock_input_height()
 
         if original_text:
             self._input_text.setPlainText(original_text)
 
         self._output_text.clear()
 
-        # 流式输出开始时隐藏滚动条
-        self._hide_output_scrollbar()
+        # 流式输出开始时隐藏滚动条（固定高度模式下不隐藏）
+        if not self._fixed_height_mode:
+            self._hide_output_scrollbar()
 
         # 启用按钮
         self._translate_btn.setEnabled(True)
@@ -1927,22 +2325,35 @@ class TranslatorWindow(QWidget):
         self._summarize_btn.setEnabled(True)
 
     def append_translation_text(self, chunk: str):
-        """追加流式翻译文本
+        """追加流式翻译文本（通过逐字缓冲区输出）
 
         Args:
             chunk: 翻译文本片段
         """
         if not hasattr(self, '_streaming_text'):
             self._streaming_text = ""
-        self._streaming_text += chunk
-        self._output_text.setPlainText(self._streaming_text)
 
-        # 触发高度调整（延迟执行，避免频繁更新）
-        if self._is_streaming:
-            self._schedule_height_adjust()
+        # 将 chunk 中的每个字符加入缓冲区
+        self._char_queue.extend(chunk)
+
+        # 启动逐字输出定时器（如果尚未启动）
+        if not self._char_timer.isActive():
+            self._char_timer.start()
 
     def finish_streaming(self):
-        """完成流式翻译"""
+        """完成流式翻译 - 刷新缓冲区中剩余字符后执行完成操作"""
+        # 如果缓冲区还有字符，加速排空
+        if self._char_queue:
+            # 立即排空所有剩余字符
+            remaining = ''.join(self._char_queue)
+            self._char_queue.clear()
+            self._char_timer.stop()
+            self._streaming_text += remaining
+
+            cursor = self._output_text.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            cursor.insertText(remaining)
+
         self._is_streaming = False
         # 清理定时器
         if self._height_adjust_timer:
@@ -1951,15 +2362,22 @@ class TranslatorWindow(QWidget):
         # 滚动到顶部
         self._input_text.verticalScrollBar().setValue(0)
         self._output_text.verticalScrollBar().setValue(0)
-        # 最终高度调整和屏幕边界检查
-        QTimer.singleShot(100, self._final_height_adjust)
+        # 最终高度调整和屏幕边界检查（固定高度模式下不调整）
+        if not self._fixed_height_mode:
+            QTimer.singleShot(100, self._final_height_adjust)
 
     def _final_height_adjust(self):
         """流式翻译结束后的最终高度调整"""
         try:
             # 恢复滚动条显示（流式输出结束后）
+            # _show_output_scrollbar 内部会同步恢复分割条的拉伸因子
             self._show_output_scrollbar()
             self._scrollbar_hidden = False
+
+            # 如果用户在流式期间手动调整过窗口大小，不再自动调整高度
+            # 避免翻译完成后窗口"跳动"
+            if self._user_resized_during_streaming:
+                return
 
             # 计算最终所需高度
             target_height = self._calculate_required_height()
@@ -1994,6 +2412,7 @@ class TranslatorWindow(QWidget):
         """计算显示当前内容所需的窗口高度
 
         保持用户手动调整的原文框高度，只根据译文内容动态调整窗口高度
+        使用动态 overhead 计算，避免硬编码常量遗漏边框等像素。
 
         Returns:
             所需的窗口高度（像素）
@@ -2006,42 +2425,51 @@ class TranslatorWindow(QWidget):
 
             from PyQt6.QtGui import QFontMetrics, QTextDocument
 
-            # 使用窗口宽度计算（输出区域占满窗口宽度减去边距）
-            # 窗口内边距 12px * 2 = 24px，输出框内边距 8px * 2 = 16px
-            output_width = self.width() - 24 - 16 - 20  # 额外20px余量
-            output_width = max(200, output_width)  # 确保最小宽度
+            # 动态计算 splitter 以外的开销（标题栏、控制栏、边距、边框等）
+            splitter_h = self._splitter.height()
+            if splitter_h > 0 and self.height() > splitter_h:
+                overhead = self.height() - splitter_h
+            else:
+                overhead = 98  # fallback
+
+            # 优先使用 viewport 宽度（最准确，反映实际排版宽度）
+            viewport_width = self._output_text.viewport().width()
+            if viewport_width > 50:
+                output_width = viewport_width
+            else:
+                output_width = self.width() - 2 - 24 - 2 - 16
+                output_width = max(200, output_width)
 
             # 计算输出文本高度
             output_font = self._output_text.font()
             output_text = self._output_text.toPlainText()
 
             if output_text:
-                # 使用 QTextDocument 计算精确高度
                 doc = QTextDocument()
                 doc.setDefaultFont(output_font)
                 doc.setTextWidth(output_width)
                 doc.setPlainText(output_text)
-                output_height = int(doc.size().height()) + 30  # 额外30px边距
-                # 确保最小高度
-                output_height = max(80, output_height)
+                text_content_height = int(doc.size().height())
             else:
-                output_height = 80
+                text_content_height = 0
 
-            # 获取当前分割器的原文框高度（用户可能手动调整过）
+            # output_container 需要的高度 = 文本高度 + padding(8*2) + border(1*2)
+            output_container_height = text_content_height + 18
+
+            # 获取当前分割器尺寸
             current_sizes = self._splitter.sizes()
             input_height = current_sizes[0] if current_sizes else 100
-            input_height = max(60, input_height)  # 确保最小高度
+            input_height = max(60, input_height)
+            current_output = current_sizes[1] if len(current_sizes) > 1 else 180
 
-            # 总高度 = 标题栏 + 控制栏 + 边距 + 输入区 + 分割条 + 输出区
-            title_height = 28
-            control_height = 38
-            splitter_height = 6
-            margin = 40
+            # 用当前输出容器实际大小作为下限（不缩小），而非固定 180
+            # 当前容器可能 < 180（如窗口较小时），但内容已能完全显示
+            output_container_height = max(current_output, output_container_height)
 
-            total_height = title_height + control_height + margin + input_height + splitter_height + output_height
+            handle_width = self._splitter.handleWidth()
+            total_height = overhead + input_height + handle_width + output_container_height
 
-            # 限制在合理范围内
-            min_window_height = 350
+            min_window_height = 400
             total_height = max(min_window_height, min(total_height, max_height))
 
             return total_height
@@ -2104,52 +2532,121 @@ class TranslatorWindow(QWidget):
     def _smooth_adjust_height(self, target_height: int, immediate: bool = False):
         """平滑调整窗口高度
 
-        在调整窗口高度时保持原文框高度不变，只改变译文框高度
+        在调整窗口高度时保持原文框高度不变，只改变译文框高度。
+        当底部触及屏幕边界但整体高度未达到屏幕70%时，向上扩展窗口。
 
         Args:
             target_height: 目标高度
             immediate: 是否立即调整（不使用动画）
         """
         try:
+            # 固定高度模式下不调整窗口高度
+            if self._fixed_height_mode:
+                return
+
+            # 获取屏幕信息
+            screen_x, screen_y, screen_w, screen_h = self._get_current_screen_bounds()
+            max_height_by_percent = int(screen_h * 0.7)  # 屏幕高度70%限制
+
             # 首先根据窗口位置计算最大允许高度（确保不超出屏幕下边界）
             max_height_for_position = self._calculate_max_height_for_position()
 
-            # 限制目标高度不超过位置限制
-            target_height = min(target_height, max_height_for_position)
-
             current_height = self.height()
+            current_y = self.y()
 
-            # 调试输出
-            try:
-                from src.utils.logger import log_debug
-                log_debug(f"平滑调整高度: 当前={current_height}, 目标={target_height}, 最大={max_height_for_position}")
-            except:
-                pass
+            # 保存原始目标高度（用于判断是否内容超出了窗口容量）
+            original_target_height = target_height
+
+            # 判断是否需要向上扩展
+            # 条件：1. 目标高度超过位置限制（底部触及屏幕边界）
+            #      2. 当前高度小于屏幕70%限制
+            #      3. 窗口上方有足够空间
+            need_expand_upward = False
+            new_window_y = current_y
+            actual_expand = 0  # 记录实际向上扩展的高度
+
+            if target_height > max_height_for_position and current_height < max_height_by_percent:
+                # 计算需要向上移动的距离
+                needed_extra = target_height - max_height_for_position
+                # 上方可用空间
+                top_space = current_y - screen_y
+
+                if top_space > 10:
+                    # 可以向上扩展
+                    # 计算实际可扩展的高度（考虑上方空间和70%限制）
+                    max_expand_upward = min(top_space, max_height_by_percent - current_height)
+                    actual_expand = min(needed_extra, max_expand_upward)
+
+                    if actual_expand > 5:
+                        need_expand_upward = True
+                        new_window_y = current_y - actual_expand
+                        # 向上扩展后，实际可达到的高度
+                        target_height = min(target_height, current_height + actual_expand)
+
+            # 如果不需要向上扩展，则限制目标高度不超过位置限制
+            if not need_expand_upward:
+                target_height = min(target_height, max_height_for_position)
+
+            # 判断窗口是否无法继续增长（达到屏幕70%或空间耗尽）
+            # 直接检查文本是否溢出 viewport，避免 clamped target 导致检测失效
+            content_exceeds_window = self._output_text.verticalScrollBar().maximum() > 0
+            window_at_max_limit = current_height >= max_height_by_percent - 20 or (
+                not need_expand_upward and target_height >= max_height_for_position - 20
+            )
+            if content_exceeds_window and window_at_max_limit and self._scrollbar_hidden:
+                self._show_output_scrollbar()
+                self._scrollbar_hidden = False
+                # 滚动条刚变为可见，滚到底部显示最新内容
+                if self._is_streaming:
+                    self._output_text.verticalScrollBar().setValue(
+                        self._output_text.verticalScrollBar().maximum()
+                    )
 
             # 如果高度差异太小，不调整
-            if abs(target_height - current_height) < 5:
+            if abs(target_height - current_height) < 5 and not need_expand_upward:
                 return
 
             # 如果目标高度比当前高度小很多（超过20px），才缩小
             # 这样可以避免小幅度的抖动，但允许窗口增长
-            if target_height < current_height - 20:
+            if target_height < current_height - 20 and not need_expand_upward:
                 return
 
             self._last_adjusted_height = target_height
 
-            # 获取当前原文框高度（用户可能手动调整过）
-            current_sizes = self._splitter.sizes()
-            current_input_height = current_sizes[0] if current_sizes else 100
+            # 原文框默认高度（初始化时设置的值）
+            DEFAULT_INPUT_HEIGHT = 120
 
-            # 计算译文框目标高度
-            # 总高度 = 标题栏(28) + 控制栏(38) + 边距(40) + 原文框 + 分割条(6) + 译文框
-            target_output_height = target_height - 28 - 38 - 40 - current_input_height - 6
-            target_output_height = max(80, target_output_height)  # 确保最小高度
+            # 在流式输出过程中，使用固定的输入框高度（避免分割条跳动）
+            if self._is_streaming and hasattr(self, '_streaming_input_height'):
+                current_input_height = self._streaming_input_height
+            else:
+                # 非流式输出时，获取当前原文框高度（用户可能手动调整过）
+                current_sizes = self._splitter.sizes()
+                current_input_height = current_sizes[0] if current_sizes else DEFAULT_INPUT_HEIGHT
+
+            # 确保原文框高度不低于默认高度，防止窗口调整时原文框被压缩
+            current_input_height = max(current_input_height, DEFAULT_INPUT_HEIGHT)
+
+            # 动态计算 splitter 以外的开销，与 _calculate_required_height 保持一致
+            splitter_h = self._splitter.height()
+            if splitter_h > 0 and self.height() > splitter_h:
+                overhead = self.height() - splitter_h
+            else:
+                overhead = 98  # fallback
+
+            handle_width = self._splitter.handleWidth()
+            target_output_height = target_height - overhead - current_input_height - handle_width
+            target_output_height = max(0, target_output_height)
 
             if immediate or not self.isVisible():
-                self.resize(self.width(), target_height)
-                # 保持原文框高度不变
+                # 先设置 splitter 尺寸，再 resize，避免 resize 时 Qt 按比例重新分配导致原文框缩小
                 self._splitter.setSizes([current_input_height, target_output_height])
+                self.resize(self.width(), target_height)
+                # resize 后再次确保 splitter 尺寸正确（防止 Qt 自动调整）
+                self._splitter.setSizes([current_input_height, target_output_height])
+                # 如果需要向上扩展，移动窗口位置
+                if need_expand_upward:
+                    self.move(self.x(), new_window_y)
                 # 确保窗口在屏幕范围内
                 self._ensure_within_screen()
                 return
@@ -2158,26 +2655,62 @@ class TranslatorWindow(QWidget):
             from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QSize
 
             if self._height_animation is None:
-                self._height_animation = QPropertyAnimation(self, "size")
+                self._height_animation = QPropertyAnimation(self, b"size")
                 self._height_animation.setDuration(150)
                 self._height_animation.setEasingCurve(QEasingCurve.Type.OutQuad)
 
-            # 停止正在进行的动画
-            if self._height_animation.state() == QPropertyAnimation.State.Running:
+            # 检查动画是否正在运行
+            animation_running = self._height_animation.state() == QPropertyAnimation.State.Running
+
+            # 如果动画正在运行
+            if animation_running:
+                # 获取当前动画的目标高度
+                current_anim_target = self._height_animation.endValue().height()
+                height_diff = abs(target_height - current_anim_target)
+
+                # 如果需要向上扩展，必须立即移动窗口位置，并更新动画目标
+                if need_expand_upward:
+                    self.move(self.x(), new_window_y)
+                    # 更新动画目标值（从当前位置继续动画到新目标）
+                    self._height_animation.setEndValue(QSize(self.width(), target_height))
+                    return
+
+                # 如果差异小于30px且不需要向上扩展，跳过本次调整，让动画继续
+                if height_diff < 30:
+                    return
+                # 差异较大，停止动画重新开始
                 self._height_animation.stop()
 
             current_size = self.size()
             target_size = QSize(self.width(), target_height)
 
+            # 流式输出期间，两个面板都不拉伸，避免 QPropertyAnimation 逐帧 resize 时
+            # Qt 按 stretch factor 重新分配 splitter 空间导致文字上下跳动
+            self._splitter.setStretchFactor(0, 0)  # input 不拉伸
+            self._splitter.setStretchFactor(1, 0)  # output 也不拉伸（流式期间）
+
+            # 设置 splitter 尺寸
+            self._splitter.setSizes([current_input_height, target_output_height])
+
+            # 如果需要向上扩展，先移动窗口位置
+            if need_expand_upward:
+                self.move(self.x(), new_window_y)
+
             self._height_animation.setStartValue(current_size)
             self._height_animation.setEndValue(target_size)
             self._height_animation.start()
 
-            # 保持原文框高度不变
-            self._splitter.setSizes([current_input_height, target_output_height])
-
-            # 动画完成后检查屏幕边界
-            QTimer.singleShot(200, self._ensure_within_screen)
+            # 动画完成后：恢复 stretch factor 并确保分割条正确
+            def on_animation_done():
+                try:
+                    # 流式输出结束后，恢复译文框的拉伸因子，让后续 resize 时译文框可自适应
+                    if not self._is_streaming:
+                        self._splitter.setStretchFactor(1, 1)
+                    self._splitter.setSizes([current_input_height, target_output_height])
+                    self._ensure_within_screen()
+                except:
+                    pass
+            QTimer.singleShot(200, on_animation_done)
 
         except RuntimeError:
             pass
@@ -2208,34 +2741,42 @@ class TranslatorWindow(QWidget):
     def _do_height_adjust(self):
         """执行高度调整"""
         try:
-            # 调试输出
-            try:
-                from src.utils.logger import log_debug
-                log_debug(f"_do_height_adjust: _is_streaming={self._is_streaming}, isVisible={self.isVisible()}")
-            except:
-                pass
-
             if not self._is_streaming or not self.isVisible():
                 return
 
+            # 如果用户手动调整了窗口大小，不再自动增长高度
+            # 新内容到达时保持当前窗口大小，用户通过滚动条查看
+            if self._user_resized_during_streaming:
+                return
+
             target_height = self._calculate_required_height()
-            max_height = self._calculate_max_height_for_position()
 
-            # 调试输出
-            try:
-                from src.utils.logger import log_debug
-                log_debug(f"高度调整: 当前={self.height()}, 目标={target_height}, 上次={self._last_adjusted_height}, 最大={max_height}")
-            except:
-                pass
+            # 获取屏幕信息，用于判断是否达到70%限制
+            screen_x, screen_y, screen_w, screen_h = self._get_current_screen_bounds()
+            max_height_by_percent = int(screen_h * 0.7)
 
-            # 判断是否达到最大高度限制
-            # 如果目标高度超过或接近最大高度，则显示滚动条
-            if target_height >= max_height - 10 and self._scrollbar_hidden:
+            current_height = self.height()
+
+            # 判断窗口是否达到高度上限（屏幕70%限制或位置限制）
+            # 窗口无法继续增长且内容溢出时，显示滚动条让用户滚动查看内容
+            max_height_for_position = self._calculate_max_height_for_position()
+            window_at_limit = (
+                current_height >= max_height_by_percent - 10 or
+                current_height >= max_height_for_position - 10
+            )
+            content_needs_more_space = self._output_text.verticalScrollBar().maximum() > 0
+
+            if window_at_limit and content_needs_more_space and self._scrollbar_hidden:
                 self._show_output_scrollbar()
                 self._scrollbar_hidden = False
+                # 滚动条刚变为可见（窗口无法继续增长），滚到底部显示最新内容
+                self._output_text.verticalScrollBar().setValue(
+                    self._output_text.verticalScrollBar().maximum()
+                )
 
-            # 只要目标高度不同就尝试调整（让 _smooth_adjust_height 决定是否真正调整）
-            self._smooth_adjust_height(target_height)
+            # 流式期间使用立即 resize（不用动画），内容是增量到达的，
+            # 每次增长几像素，本身就足够平滑，动画反而会导致 splitter 跳动
+            self._smooth_adjust_height(target_height, immediate=True)
 
             # 确保窗口在屏幕范围内
             self._ensure_within_screen()
@@ -2244,11 +2785,12 @@ class TranslatorWindow(QWidget):
             pass
 
     def _reset_window_height(self):
-        """重置窗口高度到默认值（不重置分割器比例）"""
+        """重置窗口高度到默认值（固定高度模式下不调整尺寸）"""
         try:
             self._last_adjusted_height = 0
             self._is_streaming = False
             self._scrollbar_hidden = False
+            self._user_resized_during_streaming = False
 
             if self._height_adjust_timer:
                 self._height_adjust_timer.stop()
@@ -2261,7 +2803,12 @@ class TranslatorWindow(QWidget):
             # 恢复滚动条显示
             self._show_output_scrollbar()
 
-            self.resize(500, 400)
+            # 根据模式重置窗口尺寸
+            if self._fixed_height_mode:
+                self.setMinimumSize(450, 630)
+                self.resize(500, 660)
+            else:
+                self.resize(500, 400)
 
             # 确保窗口在屏幕范围内
             self._ensure_within_screen()
@@ -2283,6 +2830,10 @@ class TranslatorWindow(QWidget):
 
     def hide(self):
         """隐藏窗口"""
+        # 记忆窗口位置：在隐藏前保存当前位置
+        if self._remember_window_position:
+            self._saved_window_pos = self.pos()
+
         # 重置自动翻译模式状态
         self._auto_mode = False
         self._pending_original_text = ""
@@ -2337,6 +2888,78 @@ class TranslatorWindow(QWidget):
                 {get_scrollbar_style(theme)}
             """)
             self._scrollbar_hidden = False
+
+            # 流式输出结束后，恢复原文框高度约束和分割条拉伸因子
+            if not self._is_streaming:
+                self._unlock_input_height()
+                self._splitter.setStretchFactor(0, 0)  # 原文框不拉伸
+                self._splitter.setStretchFactor(1, 1)  # 译文框拉伸
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
+
+    def _lock_input_height(self):
+        """锁定原文框高度（流式输出开始时）
+
+        通过 setFixedHeight 让 QSplitter 无法改变原文框的高度，
+        从而避免窗口 resize 时 splitter 重新分配空间导致文字跳动。
+        使用 splitter 当前分配的实际高度，不强制最小值，
+        避免与窗口尺寸约束冲突导致不必要的窗口增长。
+        """
+        try:
+            current_sizes = self._splitter.sizes()
+            input_height = current_sizes[0] if current_sizes else 120
+            self._streaming_input_height = input_height
+
+            # setFixedHeight 同时设置 min 和 max，splitter 物理上无法改变它
+            self._input_text.setFixedHeight(input_height)
+
+            # 同时设置 stretch factor，双重保护
+            self._splitter.setStretchFactor(0, 0)
+            self._splitter.setStretchFactor(1, 0)
+        except RuntimeError:
+            pass
+
+    def _unlock_input_height(self):
+        """解除原文框高度锁定（流式输出结束后）
+
+        恢复原文框的 min/max 高度约束，让用户可以手动拖动分割条。
+        """
+        try:
+            input_min_height = 180 if self._fixed_height_mode else 120
+            self._input_text.setMinimumHeight(input_min_height)
+            self._input_text.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
+        except RuntimeError:
+            pass
+
+    def _on_user_resize_during_streaming(self):
+        """用户在流式翻译期间手动调整了窗口大小
+
+        当用户手动调整窗口大小（拖动边缘或最大化/还原）时：
+        1. 标记用户已手动调整，停止自动高度增长
+        2. 立即显示滚动条，让用户可以滚动查看溢出的内容
+        3. 保持流式翻译继续运行，新内容到达时不再调整窗口高度
+        4. 翻译完成时也不再调整窗口高度，避免"跳动"
+        """
+        try:
+            # 标记用户手动调整了窗口大小
+            self._user_resized_during_streaming = True
+
+            # 停止正在进行的高度调整动画
+            from PyQt6.QtCore import QPropertyAnimation
+            if self._height_animation and self._height_animation.state() == QPropertyAnimation.State.Running:
+                self._height_animation.stop()
+
+            # 停止高度调整定时器
+            if self._height_adjust_timer:
+                self._height_adjust_timer.stop()
+                self._height_adjust_timer = None
+
+            # 立即显示滚动条
+            if self._scrollbar_hidden:
+                self._show_output_scrollbar()
+                self._scrollbar_hidden = False
         except RuntimeError:
             pass
         except Exception:

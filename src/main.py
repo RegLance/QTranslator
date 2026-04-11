@@ -16,7 +16,8 @@ from PyQt6.QtWidgets import (
     QSpinBox, QKeySequenceEdit
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect
-from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence, QPalette
+from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence, QPalette, QPolygonF, QBrush
+from PyQt6.QtCore import QPointF
 
 # 设置高 DPI 支持
 if sys.platform == 'win32':
@@ -25,6 +26,124 @@ if sys.platform == 'win32':
         ctypes.windll.user32.SetProcessDpiAwareness(2)
     except Exception:
         pass
+
+
+# ============================================================================
+# 自定义 SpinBox 组件（带三角形箭头）
+# ============================================================================
+
+class StyledSpinBox(QSpinBox):
+    """带自定义三角形箭头的 SpinBox"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._arrow_color = QColor('#b0b0b0')
+        self._hover_color = QColor('#ffffff')
+        self._pressed_color = QColor('#ffffff')
+        self._up_hover = False
+        self._down_hover = False
+        self._up_pressed = False
+        self._down_pressed = False
+
+    def set_arrow_color(self, color: str):
+        """设置箭头颜色"""
+        self._arrow_color = QColor(color)
+
+    def paintEvent(self, event):
+        """自定义绘制事件"""
+        super().paintEvent(event)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # 计算按钮位置
+        btn_width = 24
+        btn_height = 14
+        rect = self.rect()
+        right = rect.right() - 1
+        top = rect.top() + 1
+
+        # 绘制上按钮区域背景
+        up_rect = QRect(right - btn_width, top, btn_width, btn_height)
+        # 绘制下按钮区域背景
+        down_rect = QRect(right - btn_width, rect.bottom() - btn_height - 1, btn_width, btn_height)
+
+        # 绘制上箭头
+        up_color = self._pressed_color if self._up_pressed else (self._hover_color if self._up_hover else self._arrow_color)
+        self._draw_arrow(painter, up_rect, 'up', up_color)
+
+        # 绘制下箭头
+        down_color = self._pressed_color if self._down_pressed else (self._hover_color if self._down_hover else self._arrow_color)
+        self._draw_arrow(painter, down_rect, 'down', down_color)
+
+    def _draw_arrow(self, painter: QPainter, rect: QRect, direction: str, color: QColor):
+        """绘制三角形箭头"""
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(color))
+
+        polygon = QPolygonF()
+        cx = rect.center().x()
+        cy = rect.center().y()
+        size = 5
+
+        if direction == 'up':
+            polygon.append(QPointF(cx, cy - size + 1))      # 顶点
+            polygon.append(QPointF(cx - size, cy + 1))      # 左下
+            polygon.append(QPointF(cx + size, cy + 1))      # 右下
+        else:
+            polygon.append(QPointF(cx - size, cy - 1))      # 左上
+            polygon.append(QPointF(cx + size, cy - 1))      # 右上
+            polygon.append(QPointF(cx, cy + size - 1))      # 底点
+
+        painter.drawPolygon(polygon)
+
+    def mousePressEvent(self, event):
+        """鼠标按下事件"""
+        btn_width = 24
+        btn_height = 14
+        rect = self.rect()
+        right = rect.right() - 1
+
+        up_rect = QRect(right - btn_width, rect.top() + 1, btn_width, btn_height)
+        down_rect = QRect(right - btn_width, rect.bottom() - btn_height - 1, btn_width, btn_height)
+
+        if up_rect.contains(event.pos()):
+            self._up_pressed = True
+            self.stepUp()
+        elif down_rect.contains(event.pos()):
+            self._down_pressed = True
+            self.stepDown()
+
+        super().mousePressEvent(event)
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        """鼠标释放事件"""
+        self._up_pressed = False
+        self._down_pressed = False
+        super().mouseReleaseEvent(event)
+        self.update()
+
+    def mouseMoveEvent(self, event):
+        """鼠标移动事件"""
+        btn_width = 24
+        btn_height = 14
+        rect = self.rect()
+        right = rect.right() - 1
+
+        up_rect = QRect(right - btn_width, rect.top() + 1, btn_width, btn_height)
+        down_rect = QRect(right - btn_width, rect.bottom() - btn_height - 1, btn_width, btn_height)
+
+        old_up_hover = self._up_hover
+        old_down_hover = self._down_hover
+
+        self._up_hover = up_rect.contains(event.pos())
+        self._down_hover = down_rect.contains(event.pos())
+
+        if old_up_hover != self._up_hover or old_down_hover != self._down_hover:
+            self.update()
+
+        super().mouseMoveEvent(event)
 
 
 # ============================================================================
@@ -158,9 +277,10 @@ try:
     from .ui.translator_window import get_translator_window
     from .ui.history_window import get_history_window
     from .ui.help_window import get_help_window
+    from .ui.splash_screen import show_splash_screen
     from .utils.logger import get_logger, log_info, log_error, log_debug
     from .utils.history import add_translation_history
-    from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style
+    from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style
     from .utils.hotkey_manager import get_hotkey_manager
 except ImportError:
     # 打包后的导入路径
@@ -176,9 +296,10 @@ except ImportError:
     from src.ui.translator_window import get_translator_window
     from src.ui.history_window import get_history_window
     from src.ui.help_window import get_help_window
+    from src.ui.splash_screen import show_splash_screen
     from src.utils.logger import get_logger, log_info, log_error, log_debug
     from src.utils.history import add_translation_history
-    from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style
+    from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style
     from src.utils.hotkey_manager import get_hotkey_manager
 
 
@@ -242,8 +363,8 @@ class SettingsDialog(QDialog):
             Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setMinimumSize(480, 520)
-        self.resize(500, 580)
+        self.setMinimumSize(480, 620)
+        self.resize(500, 680)
 
         self._config = get_config()
         self._setup_ui()
@@ -251,8 +372,8 @@ class SettingsDialog(QDialog):
 
         # 应用主题
         self._apply_theme()
-
         # 居中显示
+
         self._center_window()
 
     def _center_window(self):
@@ -318,7 +439,7 @@ class SettingsDialog(QDialog):
         self._scroll_content = QWidget()
         scroll_layout = QVBoxLayout(self._scroll_content)
         scroll_layout.setSpacing(16)
-        scroll_layout.setContentsMargins(8, 8, 8, 8)
+        scroll_layout.setContentsMargins(8, 8, 8, 16)  # 底部增加边距避免视觉截断
 
         # 翻译设置组
         self._trans_group = QGroupBox("翻译设置")
@@ -357,7 +478,7 @@ class SettingsDialog(QDialog):
         font_layout.setContentsMargins(12, 20, 12, 12)
         font_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        self._font_size_spin = QSpinBox()
+        self._font_size_spin = StyledSpinBox()
         self._font_size_spin.setRange(10, 24)
         self._font_size_spin.setValue(14)
         self._font_size_spin.setMinimumHeight(32)
@@ -419,6 +540,35 @@ class SettingsDialog(QDialog):
         writing_layout.addWidget(self._writing_hint_label)
 
         scroll_layout.addWidget(self._writing_group)
+
+        # 翻译窗口设置组
+        self._translator_window_group = QGroupBox("翻译窗口设置")
+        translator_window_layout = QVBoxLayout(self._translator_window_group)
+        translator_window_layout.setSpacing(8)
+        translator_window_layout.setContentsMargins(12, 20, 12, 12)
+
+        self._fixed_height_check = QCheckBox("固定窗口高度")
+        self._fixed_height_check.toggled.connect(self._on_checkbox_toggled)
+        translator_window_layout.addWidget(self._fixed_height_check)
+
+        # 添加说明文字
+        self._fixed_height_hint_label = QLabel("勾选后，原文框固定180px，译文框固定360px，不随内容自动调整")
+        self._fixed_height_hint_label.setStyleSheet(f"color: {self._theme['text_muted']}; font-size: 11px;")
+        self._fixed_height_hint_label.setWordWrap(True)
+        translator_window_layout.addWidget(self._fixed_height_hint_label)
+
+        # 记忆窗口位置勾选框
+        self._remember_position_check = QCheckBox("记忆窗口位置")
+        self._remember_position_check.toggled.connect(self._on_checkbox_toggled)
+        translator_window_layout.addWidget(self._remember_position_check)
+
+        # 添加说明文字
+        self._remember_position_hint_label = QLabel("勾选后，翻译窗口会记住上次关闭时的位置。程序重启后位置重置")
+        self._remember_position_hint_label.setStyleSheet(f"color: {self._theme['text_muted']}; font-size: 11px;")
+        self._remember_position_hint_label.setWordWrap(True)
+        translator_window_layout.addWidget(self._remember_position_hint_label)
+
+        scroll_layout.addWidget(self._translator_window_group)
 
         # 系统设置组
         self._sys_group = QGroupBox("系统设置")
@@ -601,6 +751,7 @@ class SettingsDialog(QDialog):
         self._font_group.setStyleSheet(groupbox_style)
         self._hotkey_group.setStyleSheet(groupbox_style)
         self._writing_group.setStyleSheet(groupbox_style)
+        self._translator_window_group.setStyleSheet(groupbox_style)
         self._sys_group.setStyleSheet(groupbox_style)
 
         # 标签样式
@@ -617,22 +768,8 @@ class SettingsDialog(QDialog):
         self._popup_style_combo.setStyleSheet(combobox_style)
 
         # 字体大小设置
-        self._font_size_spin.setStyleSheet(f"""
-            QSpinBox {{
-                background-color: {self._theme['input_bg']};
-                border: 1px solid {self._theme['input_border']};
-                border-radius: 4px;
-                padding: 4px 8px;
-                color: {self._theme['text_primary']};
-                font-size: 13px;
-            }}
-            QSpinBox:focus {{
-                border-color: {self._theme['accent_color']};
-            }}
-            QSpinBox::up-button, QSpinBox::down-button {{
-                width: 16px;
-            }}
-        """)
+        self._font_size_spin.setStyleSheet(get_spinbox_style(self._theme))
+        self._font_size_spin.set_arrow_color(self._theme['text_secondary'])
 
         # 快捷键按钮样式
         hotkey_btn_style = f"""
@@ -661,13 +798,17 @@ class SettingsDialog(QDialog):
         checkbox_style = get_checkbox_style(self._theme)
         self._auto_start_check.setStyleSheet(checkbox_style)
         self._keep_original_check.setStyleSheet(checkbox_style)
+        self._fixed_height_check.setStyleSheet(checkbox_style)
+        self._remember_position_check.setStyleSheet(checkbox_style)
         check_icon = self._create_check_icon()
         uncheck_icon = self._create_uncheck_icon()
         self._auto_start_check.setIcon(check_icon if self._auto_start_check.isChecked() else uncheck_icon)
         self._keep_original_check.setIcon(check_icon if self._keep_original_check.isChecked() else uncheck_icon)
+        self._fixed_height_check.setIcon(check_icon if self._fixed_height_check.isChecked() else uncheck_icon)
+        self._remember_position_check.setIcon(check_icon if self._remember_position_check.isChecked() else uncheck_icon)
 
-        # 底部按钮栏
-        self._btn_bar.setStyleSheet("QFrame { background-color: transparent; }")
+        # 底部按钮栏 - 确保无边框
+        self._btn_bar.setStyleSheet("QFrame { background-color: transparent; border: none; }")
 
         # 取消按钮
         self._cancel_btn.setStyleSheet(f"""
@@ -858,6 +999,14 @@ class SettingsDialog(QDialog):
         keep_original = self._config.get('writing.keep_original', False)
         self._keep_original_check.setChecked(keep_original)
 
+        # 固定高度模式选项
+        fixed_height_mode = self._config.get('translator_window.fixed_height_mode', False)
+        self._fixed_height_check.setChecked(fixed_height_mode)
+
+        # 记忆窗口位置选项
+        remember_position = self._config.get('translator_window.remember_window_position', False)
+        self._remember_position_check.setChecked(remember_position)
+
         self._auto_start_check.setChecked(self._config.get('startup.auto_start', False))
 
         # 禁用滚轮事件，避免误触
@@ -915,6 +1064,14 @@ class SettingsDialog(QDialog):
             # 写作设置
             keep_original = self._keep_original_check.isChecked()
             self._config.set('writing.keep_original', keep_original)
+
+            # 翻译窗口固定高度模式
+            fixed_height_mode = self._fixed_height_check.isChecked()
+            self._config.set('translator_window.fixed_height_mode', fixed_height_mode)
+
+            # 翻译窗口记忆位置
+            remember_position = self._remember_position_check.isChecked()
+            self._config.set('translator_window.remember_window_position', remember_position)
 
             auto_start = self._auto_start_check.isChecked()
             self._config.set('startup.auto_start', auto_start)
@@ -1186,7 +1343,7 @@ class ToastWidget(QWidget):
             bg_color = "#cf222e"
             icon = "✕"
         else:
-            bg_color = "#0078d4"
+            bg_color = "#007AFF"  # macOS 风格现代蓝
             icon = "✓"
 
         self.setStyleSheet(f"""
@@ -1588,9 +1745,9 @@ class MainController(QObject):
 
         self._last_text = text.strip()
 
-        # 获取按钮位置
-        button_pos = self._translate_button.pos()
-        mouse_pos = (button_pos.x() + 20, button_pos.y() + 20)
+        # 使用用户实际点击时的鼠标位置，让翻译窗口出现在点击位置附近
+        cursor_pos = QCursor.pos()
+        mouse_pos = (cursor_pos.x(), cursor_pos.y())
 
         # 使用 translator_window 的自动翻译功能
         self._translator_window.show_at_mouse(mouse_pos, self._last_text)
@@ -1733,12 +1890,22 @@ def main():
         from PyQt6.QtGui import QIcon
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    controller = MainController()
-    controller.start()
+    # 主控制器引用（延迟初始化）
+    controller = None
+
+    # 定义启动完成后的初始化函数
+    def on_splash_finished():
+        nonlocal controller
+        controller = MainController()
+        controller.start()
+
+    # 显示启动动画，动画完成后初始化主控制器
+    show_splash_screen(on_splash_finished)
 
     exit_code = app.exec()
 
-    controller.stop()
+    if controller:
+        controller.stop()
     # 释放单实例锁
     single_instance.release()
     sys.exit(exit_code)

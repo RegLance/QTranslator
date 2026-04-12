@@ -454,6 +454,14 @@ class SettingsDialog(QDialog):
         self._target_lang_label = QLabel("目标语言:")
         trans_layout.addRow(self._target_lang_label, self._target_lang_combo)
 
+        self._browser_delay_spin = StyledSpinBox()
+        self._browser_delay_spin.setRange(0, 2000)
+        self._browser_delay_spin.setValue(450)
+        self._browser_delay_spin.setMinimumHeight(32)
+        self._browser_delay_spin.setSuffix(" ms")
+        self._browser_delay_label = QLabel("浏览器划词延迟:")
+        trans_layout.addRow(self._browser_delay_label, self._browser_delay_spin)
+
         scroll_layout.addWidget(self._trans_group)
 
         # 外观设置组
@@ -757,6 +765,7 @@ class SettingsDialog(QDialog):
         # 标签样式
         label_style = f"color: {self._theme['text_secondary']}; font-size: 13px;"
         self._target_lang_label.setStyleSheet(label_style)
+        self._browser_delay_label.setStyleSheet(label_style)
         self._popup_style_label.setStyleSheet(label_style)
         self._font_size_label.setStyleSheet(label_style)
         self._hotkey_label.setStyleSheet(label_style)
@@ -770,6 +779,10 @@ class SettingsDialog(QDialog):
         # 字体大小设置
         self._font_size_spin.setStyleSheet(get_spinbox_style(self._theme))
         self._font_size_spin.set_arrow_color(self._theme['text_secondary'])
+
+        # 浏览器划词延迟设置
+        self._browser_delay_spin.setStyleSheet(get_spinbox_style(self._theme))
+        self._browser_delay_spin.set_arrow_color(self._theme['text_secondary'])
 
         # 快捷键按钮样式
         hotkey_btn_style = f"""
@@ -978,6 +991,10 @@ class SettingsDialog(QDialog):
         if index >= 0:
             self._target_lang_combo.setCurrentIndex(index)
 
+        # 浏览器划词延迟
+        browser_delay = self._config.get('selection.browser_delay_ms', 450)
+        self._browser_delay_spin.setValue(browser_delay)
+
         popup_style = self._config.get('theme.popup_style', 'dark')
         self._popup_style_combo.setCurrentIndex(0 if popup_style == 'dark' else 1)
 
@@ -1013,6 +1030,7 @@ class SettingsDialog(QDialog):
         self._disable_wheel_event(self._target_lang_combo)
         self._disable_wheel_event(self._popup_style_combo)
         self._disable_wheel_event(self._font_size_spin)
+        self._disable_wheel_event(self._browser_delay_spin)
 
     def _disable_wheel_event(self, widget):
         """禁用控件的鼠标滚轮事件，防止误触"""
@@ -1050,6 +1068,9 @@ class SettingsDialog(QDialog):
             new_writing_hotkey = self._writing_hotkey_value
 
             self._config.set('target_language', self._target_lang_combo.currentText())
+
+            # 浏览器划词延迟
+            self._config.set('selection.browser_delay_ms', self._browser_delay_spin.value())
 
             popup_style = 'dark' if self._popup_style_combo.currentIndex() == 0 else 'light'
             self._config.set('theme.popup_style', popup_style)

@@ -1,13 +1,11 @@
 """翻译图标按钮组件 - QTranslator
 
 优化：解决与网站原生悬浮窗冲突的问题
-- 添加延迟显示机制，等待网站悬浮窗消失
-- 添加鼠标静止检测，避免在网站交互期间显示
-- 更智能的防抖逻辑
+- 浏览器环境下延迟显示，等待网站悬浮窗消失
+- 非浏览器环境立即显示
 """
 import sys
 import math
-import time
 from typing import Optional, Tuple
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QApplication
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSize
@@ -28,14 +26,8 @@ BUTTON_SIZE = 18
 # 鼠标离开按钮多少像素后自动隐藏（使用逻辑坐标）
 HIDE_DISTANCE_THRESHOLD = 50
 
-# 延迟显示时间（毫秒）- 等待网站原生悬浮窗消失
-SHOW_DELAY_MS = 300
-
-# 鼠标静止检测时间（毫秒）
-MOUSE_STILL_THRESHOLD_MS = 150
-
-# 鼠标移动阈值（像素）- 超过此距离认为鼠标在移动
-MOUSE_MOVE_THRESHOLD = 5
+# 浏览器环境下延迟显示时间（毫秒）- 等待网站原生悬浮窗消失
+DEFAULT_BROWSER_DELAY_MS = 450
 
 
 class TranslateButton(QWidget):
@@ -47,8 +39,7 @@ class TranslateButton(QWidget):
     特性：
     - 小巧的圆形图标按钮
     - 跟随选区/鼠标位置显示
-    - 延迟显示，避免与网站原生悬浮窗冲突
-    - 鼠标静止检测，确保用户体验
+    - 浏览器环境下延迟显示，避免与网站原生悬浮窗冲突
     - 点击触发翻译
     - 鼠标距离按钮一定距离后自动隐藏
     """
@@ -72,11 +63,6 @@ class TranslateButton(QWidget):
         self._show_delay_timer: Optional[QTimer] = None  # 延迟显示计时器
         self._pending_show_pos: Optional[Tuple[int, int]] = None  # 待显示的位置
         self._pending_text: str = ""  # 待显示的文本
-
-        # 鼠标静止检测相关
-        self._mouse_still_timer: Optional[QTimer] = None  # 鼠标静止检测计时器
-        self._last_mouse_pos: Optional[Tuple[int, int]] = None  # 上次鼠标位置
-        self._last_mouse_time: float = 0  # 上次鼠标检测时间
 
         # 注意：必须先设置窗口属性，再创建 UI 子控件
         # 否则 setWindowFlags 会销毁已创建的窗口状态，导致首次显示问题
@@ -171,16 +157,11 @@ class TranslateButton(QWidget):
         self._mouse_check_timer.timeout.connect(self._check_mouse_distance)
 
     def _setup_delay_timers(self):
-        """设置延迟显示和鼠标静止检测计时器"""
+        """设置延迟显示计时器"""
         # 延迟显示计时器 - 等待网站原生悬浮窗消失
         self._show_delay_timer = QTimer()
         self._show_delay_timer.setSingleShot(True)
         self._show_delay_timer.timeout.connect(self._do_delayed_show)
-
-        # 鼠标静止检测计时器
-        self._mouse_still_timer = QTimer()
-        self._mouse_still_timer.setInterval(50)  # 每50ms检测一次
-        self._mouse_still_timer.timeout.connect(self._check_mouse_still)
 
     def _check_mouse_distance(self):
         """检查鼠标距离，如果离按钮太远则隐藏"""
@@ -214,42 +195,6 @@ class TranslateButton(QWidget):
         # 重置自动隐藏计时器
         self._auto_hide_timer.stop()
         self._auto_hide_timer.start(self._auto_hide_delay)
-
-    def _check_mouse_still(self):
-        """检测鼠标是否静止 - 用于判断网站悬浮窗是否消失"""
-        cursor_pos = QCursor.pos()
-        current_pos = (cursor_pos.x(), cursor_pos.y())
-        current_time = time.time()
-
-        if self._last_mouse_pos is not None:
-            # 计算鼠标移动距离
-            dx = current_pos[0] - self._last_mouse_pos[0]
-            dy = current_pos[1] - self._last_mouse_pos[1]
-            distance = math.sqrt(dx * dx + dy * dy)
-
-            # 如果鼠标移动超过阈值，重置计时
-            if distance > MOUSE_MOVE_THRESHOLD:
-                self._last_mouse_time = current_time
-                self._last_mouse_pos = current_pos
-                return
-
-        # 检查鼠标是否静止足够长时间
-        if self._last_mouse_time > 0:
-            still_duration = (current_time - self._last_mouse_time) * 1000  # 转换为毫秒
-            if still_duration >= MOUSE_STILL_THRESHOLD_MS:
-                # 鼠标已静止足够长时间，可以显示按钮
-                self._mouse_still_timer.stop()
-                self._do_show_after_still()
-
-        self._last_mouse_pos = current_pos
-
-    def _do_show_after_still(self):
-        """鼠标静止后执行延迟显示"""
-        if self._pending_show_pos is None:
-            return
-
-        # 启动延迟显示计时器
-        self._show_delay_timer.start(SHOW_DELAY_MS)
 
     def _do_delayed_show(self):
         """延迟显示 - 在网站原生悬浮窗消失后显示"""
@@ -412,8 +357,9 @@ class TranslateButton(QWidget):
         # 停止之前的计时器
         self._show_delay_timer.stop()
 
-        # 直接启动延迟显示计时器（简化逻辑，移除鼠标静止检测）
-        self._show_delay_timer.start(SHOW_DELAY_MS + MOUSE_STILL_THRESHOLD_MS)
+        # 从配置读取浏览器延迟时间
+        delay_ms = get_config().get('selection.browser_delay_ms', DEFAULT_BROWSER_DELAY_MS)
+        self._show_delay_timer.start(delay_ms)
 
     def show_at_position_immediate(self, pos: Optional[Tuple[int, int]], selected_text: str = ""):
         """立即显示图标按钮（不经过延迟检测）
@@ -488,13 +434,10 @@ class TranslateButton(QWidget):
         """隐藏按钮"""
         self._auto_hide_timer.stop()
         self._mouse_check_timer.stop()
-        self._show_delay_timer.stop()  # 停止延迟显示
-        self._mouse_still_timer.stop()  # 停止鼠标静止检测
+        self._show_delay_timer.stop()
         self._selected_text = ""
-        self._pending_show_pos = None  # 清除待显示状态
+        self._pending_show_pos = None
         self._pending_text = ""
-        self._last_mouse_pos = None  # 重置鼠标位置记录
-        self._last_mouse_time = 0
         super().hide()
         self.hidden.emit()
 

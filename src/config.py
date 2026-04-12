@@ -162,6 +162,9 @@ class Config:
                 'fixed_height_mode': False,  # 固定高度模式（勾选后不自动调整窗口高度）
                 'remember_window_position': False,  # 记忆窗口位置（勾选后记住窗口关闭时的位置）
             },
+            'selection': {
+                'browser_delay_ms': 450,  # 浏览器环境下划词延迟（毫秒）
+            },
         }
 
     def _merge_with_defaults(self, config: Dict[str, Any]) -> Dict[str, Any]:

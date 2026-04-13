@@ -88,7 +88,19 @@ class TranslateButton(QWidget):
         self.create()
         # 强制获取窗口ID，确保底层窗口句柄已创建完成
         # create() 只是准备创建，winId() 才真正触发底层创建
-        _ = self.winId()
+        hwnd = int(self.winId())
+
+        # Windows 11 DWM 会给顶层窗口自动添加阴影，
+        # 通过禁用非客户区渲染来去掉阴影
+        if sys.platform == 'win32':
+            import ctypes
+            DWMWA_NCRENDERING_POLICY = 2
+            DWMNCRP_DISABLED = 1
+            value = ctypes.c_int(DWMNCRP_DISABLED)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, DWMWA_NCRENDERING_POLICY,
+                ctypes.byref(value), ctypes.sizeof(value)
+            )
 
     def _setup_ui(self):
         """设置 UI"""
@@ -120,7 +132,15 @@ class TranslateButton(QWidget):
                     Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     Qt.TransformationMode.SmoothTransformation
                 )
-                return scaled_pixmap
+                # 将图标合成到 alpha=1 的背景上，防止透明像素导致点击穿透
+                # Windows 分层窗口对 alpha=0 的像素不做命中测试，
+                # alpha=1 肉眼不可见但足以让 OS 将其识别为窗口区域
+                result = QPixmap(BUTTON_SIZE, BUTTON_SIZE)
+                result.fill(QColor(0, 0, 0, 1))
+                painter = QPainter(result)
+                painter.drawPixmap(0, 0, scaled_pixmap)
+                painter.end()
+                return result
 
         # 如果图片不存在或加载失败，绘制默认的 "T" 字符图标
         pixmap = QPixmap(BUTTON_SIZE, BUTTON_SIZE)

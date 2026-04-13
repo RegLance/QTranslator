@@ -1,4 +1,5 @@
 """启动动画窗口 - 在屏幕中心显示应用程序图标，带有渐变动画效果"""
+import sys
 from pathlib import Path
 from typing import Optional
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
@@ -28,15 +29,19 @@ class SplashScreen(QWidget):
         """初始化启动动画窗口"""
         super().__init__()
 
-        # 设置窗口属性：无边框、置顶、透明背景
+        # 设置窗口属性：无边框、置顶、透明背景、Tool类型避免任务栏显示
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         self._setup_ui()
         self._position_window()
+
+        # Win11 下移除 DWM 添加的窗口边框
+        self._remove_win11_border()
 
         # 窗口透明度动画
         self._opacity_animation: Optional[QPropertyAnimation] = None
@@ -48,6 +53,50 @@ class SplashScreen(QWidget):
 
         # 动画完成回调
         self._on_finished_callback: Optional[callable] = None
+
+    def _remove_win11_border(self):
+        """移除 Win11 DWM 给无边框窗口添加的边框
+
+        Win11 的 Desktop Window Manager 会对所有窗口（包括 FramelessWindowHint）
+        添加圆角和一个细微的边框。通过 DwmSetWindowAttribute 可以禁用此行为。
+        """
+        if sys.platform != 'win32':
+            return
+
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            hwnd = int(self.winId())
+            if not hwnd:
+                return
+
+            dwmapi = ctypes.windll.dwmapi
+
+            # DWMWA_WINDOW_CORNER_PREFERENCE = 33
+            # DWMWCP_DONOTROUND = 1 (不使用圆角)
+            DWMWA_WINDOW_CORNER_PREFERENCE = 33
+            DWMWCP_DONOTROUND = ctypes.c_int(1)
+            dwmapi.DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                ctypes.byref(DWMWCP_DONOTROUND),
+                ctypes.sizeof(DWMWCP_DONOTROUND)
+            )
+
+            # DWMWA_BORDER_COLOR = 34
+            # 设置边框颜色为 DWMWA_COLOR_NONE (0xFFFFFFFE) 来隐藏边框
+            DWMWA_BORDER_COLOR = 34
+            DWMWA_COLOR_NONE = ctypes.c_uint(0xFFFFFFFE)
+            dwmapi.DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR,
+                ctypes.byref(DWMWA_COLOR_NONE),
+                ctypes.sizeof(DWMWA_COLOR_NONE)
+            )
+        except Exception:
+            # Win10 或更早版本不支持这些 DWM 属性，静默忽略
+            pass
 
     def _setup_ui(self):
         """设置 UI"""

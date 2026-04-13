@@ -4,6 +4,7 @@
 1. 钩子回调中避免任何阻塞操作
 2. 使用队列将事件处理延迟到工作线程
 3. 添加暂停标志，在UI重操作时快速跳过处理
+4. 定期健康检查，自动恢复被系统卸载的鼠标钩子
 """
 import time
 import threading
@@ -38,6 +39,7 @@ class HoverDetector(QObject):
     1. 钩子回调只做轻量操作（坐标记录、队列写入）
     2. 使用处理计时器在工作线程处理重操作
     3. 提供 pause/resume 接口，在UI重操作期间暂停处理
+    4. 定期健康检查，检测钩子是否被系统卸载并自动恢复
     """
 
     # 信号定义
@@ -61,6 +63,13 @@ class HoverDetector(QObject):
         self._delay_ms = get_config().get('hover.delay_ms', 300)
         self._area_padding = get_config().get('hover.area_padding', 15)
 
+        # 钩子健康检查相关
+        self._last_hook_activity_time: float = 0.0  # 钩子最后一次活动时间
+        self._health_check_timer: Optional[QTimer] = None
+        # 如果超过此时间（秒）没有收到任何鼠标事件，认为钩子已失效
+        self._hook_timeout_seconds: float = 30.0
+        self._restart_count: int = 0  # 重启计数，用于日志追踪
+
         # 初始化计时器
         self._init_timer()
 
@@ -70,20 +79,72 @@ class HoverDetector(QObject):
         self._hover_timer.setSingleShot(True)
         self._hover_timer.timeout.connect(self._on_hover_timeout)
 
+        # 健康检查计时器：每 15 秒检查一次钩子是否还在工作
+        self._health_check_timer = QTimer()
+        self._health_check_timer.setInterval(15000)
+        self._health_check_timer.timeout.connect(self._check_hook_health)
+
     def start(self):
         """启动检测"""
         if self._mouse_listener is not None:
             return
 
+        self._start_listener()
+        # 启动健康检查
+        self._health_check_timer.start()
+        print("悬停检测器已启动")
+
+    def _start_listener(self):
+        """启动鼠标监听器（内部方法，支持重启）"""
+        # 确保旧的监听器已清理
+        if self._mouse_listener is not None:
+            try:
+                self._mouse_listener.stop()
+            except Exception:
+                pass
+            self._mouse_listener = None
+
+        self._last_hook_activity_time = time.time()
         self._mouse_listener = mouse.Listener(
             on_release=self._on_mouse_release,
             on_move=self._on_mouse_move
         )
+        self._mouse_listener.daemon = True
         self._mouse_listener.start()
-        print("悬停检测器已启动")
+
+    def _check_hook_health(self):
+        """定期检查鼠标钩子是否仍然有效
+
+        Windows 在以下情况会自动卸载低级鼠标钩子：
+        1. 钩子回调超时（默认 LowLevelHooksTimeout = 1000ms）
+        2. 锁屏/解锁导致桌面切换
+        3. UAC 提权对话框弹出
+
+        检测方法：如果长时间没有收到任何鼠标事件，说明钩子可能已失效。
+        """
+        if not self._is_enabled or self._is_paused:
+            # 暂停状态下不检查，但更新活动时间避免误判
+            self._last_hook_activity_time = time.time()
+            return
+
+        elapsed = time.time() - self._last_hook_activity_time
+        if elapsed > self._hook_timeout_seconds:
+            self._restart_count += 1
+            print(f"[警告] 鼠标钩子可能已失效（{elapsed:.0f}秒无活动），"
+                  f"正在重新安装... (第{self._restart_count}次重启)")
+            self._start_listener()
+
+        # 同时检查 listener 线程是否还活着
+        if self._mouse_listener is not None and not self._mouse_listener.is_alive():
+            self._restart_count += 1
+            print(f"[警告] 鼠标监听线程已终止，正在重启... (第{self._restart_count}次重启)")
+            self._start_listener()
 
     def stop(self):
         """停止检测"""
+        if self._health_check_timer is not None:
+            self._health_check_timer.stop()
+
         if self._mouse_listener is not None:
             self._mouse_listener.stop()
             self._mouse_listener = None
@@ -107,14 +168,6 @@ class HoverDetector(QObject):
         """恢复检测"""
         self._is_paused = False
 
-    def restart(self):
-        """重启鼠标监听器（用于锁屏恢复后重建钩子）"""
-        was_running = self._mouse_listener is not None
-        if was_running:
-            self.stop()
-            self.start()
-            print("悬停检测器已重启（钩子已重建）")
-
     def set_enabled(self, enabled: bool):
         """设置是否启用检测"""
         self._is_enabled = enabled
@@ -128,6 +181,9 @@ class HoverDetector(QObject):
 
     def _on_mouse_release(self, button, x, y):
         """鼠标释放事件处理 - 钩子回调，必须快速返回"""
+        # 更新钩子活动时间（证明钩子仍然工作）
+        self._last_hook_activity_time = time.time()
+
         # 快速检查：如果暂停或禁用，立即返回
         if self._is_paused or not self._is_enabled:
             return
@@ -163,6 +219,9 @@ class HoverDetector(QObject):
 
     def _on_mouse_move(self, x, y):
         """鼠标移动事件处理 - 钩子回调，必须快速返回"""
+        # 更新钩子活动时间（证明钩子仍然工作）
+        self._last_hook_activity_time = time.time()
+
         # 快速检查：如果暂停、禁用或不在悬停状态，立即返回
         if self._is_paused or not self._is_enabled or not self._is_hovering:
             return

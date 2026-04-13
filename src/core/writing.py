@@ -55,6 +55,7 @@ class WritingService:
         self._current_thread: Optional[threading.Thread] = None
         self._stop_flag = False
         self._translator = None
+        self._openai_client = None  # 复用 OpenAI 客户端，避免重复创建连接池
 
     def _get_translator(self):
         """获取翻译器实例"""
@@ -173,13 +174,15 @@ Requirements:
                 os.environ['no_proxy'] = self._no_proxy
                 log_debug(f"写作服务已设置 NO_PROXY: {self._no_proxy}")
 
-            client = OpenAI(
-                api_key=api_key,
-                base_url=base_url,
-                timeout=timeout,
-            )
+            # 复用 OpenAI 客户端，避免每次写作都创建新的连接池
+            if self._openai_client is None:
+                self._openai_client = OpenAI(
+                    api_key=api_key,
+                    base_url=base_url,
+                    timeout=timeout,
+                )
 
-            stream = client.chat.completions.create(
+            stream = self._openai_client.chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},

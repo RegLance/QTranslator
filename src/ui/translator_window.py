@@ -1277,7 +1277,9 @@ class TranslatorWindow(QWidget):
             self._current_worker.cancel()
             # 等待线程结束（最多1秒），避免资源泄露
             self._current_worker.wait(1000)
-            # 清理 worker 引用
+        # 清理 worker 引用，使用 deleteLater 避免 QThread 对象泄漏
+        if self._current_worker is not None:
+            self._current_worker.deleteLater()
             self._current_worker = None
 
         # 2. 重置流式输出状态变量
@@ -1331,6 +1333,9 @@ class TranslatorWindow(QWidget):
         if self._current_worker and self._current_worker.isRunning():
             self._current_worker.cancel()
             self._current_worker.wait(1000)
+        # 清理旧的 worker，避免 QThread 对象泄漏
+        if self._current_worker is not None:
+            self._current_worker.deleteLater()
             self._current_worker = None
 
         # 清空输出
@@ -1477,6 +1482,8 @@ class TranslatorWindow(QWidget):
                 original_text = self._pending_original_text or self._input_text.toPlainText()
                 self.translation_completed.emit(original_text, result)
 
+            if self._current_worker is not None:
+                self._current_worker.deleteLater()
             self._current_worker = None
 
             # 保存翻译历史
@@ -1523,6 +1530,8 @@ class TranslatorWindow(QWidget):
             self._summarize_btn.setEnabled(True)
             # 停止分隔线动画（翻译失败）
             self._splitter.stop_animation()
+            if self._current_worker is not None:
+                self._current_worker.deleteLater()
             self._current_worker = None
             # 重置自动翻译模式
             self._auto_mode = False
@@ -1540,38 +1549,9 @@ class TranslatorWindow(QWidget):
         if self._current_worker and self._current_worker.isRunning():
             self._current_worker.cancel()
             self._current_worker.wait(1000)
+        if self._current_worker is not None:
+            self._current_worker.deleteLater()
             self._current_worker = None
-
-        # 清空输出
-        self._output_text.clear()
-        self._streaming_text = ""
-
-        # 初始化流式状态
-        self._is_streaming = True
-        self._last_adjusted_height = 0
-        self._scrollbar_hidden = False
-        self._user_resized_during_streaming = False  # 重置用户手动调整标志
-        self._char_queue.clear()  # 清空逐字输出缓冲区
-        self._char_timer.stop()  # 停止逐字输出定时器
-        self._pending_finish_callback = None  # 重置完成回调
-
-        # 锁定原文框高度，防止流式输出期间 splitter 重新分配导致文字跳动
-        self._lock_input_height()
-
-        # 流式输出开始时隐藏滚动条（固定高度模式下不隐藏）
-        if not self._fixed_height_mode:
-            self._hide_output_scrollbar()
-
-        # 禁用所有操作按钮（按钮文字保持不变，通过禁用状态表示正在处理）
-        self._translate_btn.setEnabled(False)
-        self._polishing_btn.setEnabled(False)
-        self._summarize_btn.setEnabled(False)
-
-        # 启动分隔线动画（指示正在润色）
-        self._splitter.start_animation()
-
-        # 启动润色线程
-        self._current_worker = StreamingPolishingWorker(text)
         self._current_worker.chunk_received.connect(self._on_chunk_received)
         self._current_worker.polishing_finished.connect(self._on_polishing_finished)
         self._current_worker.polishing_error.connect(self._on_polishing_error)
@@ -1594,6 +1574,8 @@ class TranslatorWindow(QWidget):
             self._summarize_btn.setEnabled(True)
             # 停止分隔线动画（润色完成）
             self._splitter.stop_animation()
+            if self._current_worker is not None:
+                self._current_worker.deleteLater()
             self._current_worker = None
 
             # 最终高度调整（固定高度模式下不调整）
@@ -1638,6 +1620,8 @@ class TranslatorWindow(QWidget):
             self._summarize_btn.setEnabled(True)
             # 停止分隔线动画（润色失败）
             self._splitter.stop_animation()
+            if self._current_worker is not None:
+                self._current_worker.deleteLater()
             self._current_worker = None
         except RuntimeError:
             # 窗口已被销毁，忽略
@@ -1653,6 +1637,8 @@ class TranslatorWindow(QWidget):
         if self._current_worker and self._current_worker.isRunning():
             self._current_worker.cancel()
             self._current_worker.wait(1000)
+        if self._current_worker is not None:
+            self._current_worker.deleteLater()
             self._current_worker = None
 
         # 清空输出
@@ -1712,6 +1698,8 @@ class TranslatorWindow(QWidget):
             self._summarize_btn.setEnabled(True)
             # 停止分隔线动画（总结完成）
             self._splitter.stop_animation()
+            if self._current_worker is not None:
+                self._current_worker.deleteLater()
             self._current_worker = None
 
             # 最终高度调整（固定高度模式下不调整）
@@ -1759,6 +1747,8 @@ class TranslatorWindow(QWidget):
             self._summarize_btn.setEnabled(True)
             # 停止分隔线动画（总结失败）
             self._splitter.stop_animation()
+            if self._current_worker is not None:
+                self._current_worker.deleteLater()
             self._current_worker = None
         except RuntimeError:
             # 窗口已被销毁，忽略
@@ -2103,6 +2093,8 @@ class TranslatorWindow(QWidget):
         if self._current_worker and self._current_worker.isRunning():
             self._current_worker.cancel()
             self._current_worker.wait(1000)
+        if self._current_worker is not None:
+            self._current_worker.deleteLater()
             self._current_worker = None
 
         # 重置自动翻译模式

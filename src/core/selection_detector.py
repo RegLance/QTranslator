@@ -47,10 +47,13 @@ class SelectionDetector(QObject):
         # 轮询定时器 - 检查是否有新的选择
         self._poll_timer = QTimer()
         self._poll_timer.timeout.connect(self._on_poll)
-        self._poll_interval = 50  # 50ms 检查一次
+        self._poll_interval = 100  # 100ms 检查一次（从50ms降低频率，减少CPU占用）
 
         # 文本捕获引用（延迟获取）
         self._text_capture = None
+
+        # 缓存当前进程 PID，避免每次轮询都调用系统API
+        self._current_pid: Optional[int] = None
 
     def pause(self):
         """暂停检测"""
@@ -118,9 +121,11 @@ class SelectionDetector(QObject):
                             # 进一步检查：获取窗口进程ID，确认是否是我们自己的进程
                             process_id = ctypes.c_ulong()
                             ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
-                            current_pid = ctypes.windll.kernel32.GetCurrentProcessId()
+                            # 使用缓存的 PID，避免每次轮询都调用 GetCurrentProcessId
+                            if self._current_pid is None:
+                                self._current_pid = ctypes.windll.kernel32.GetCurrentProcessId()
                             # 只有进程ID也匹配，才是我们自己的窗口
-                            if process_id.value == current_pid:
+                            if process_id.value == self._current_pid:
                                 return True
                 except Exception:
                     pass
@@ -164,34 +169,37 @@ class SelectionDetector(QObject):
         if not self._is_enabled or self._is_paused:
             return
 
-        # 检查是否在我们自己的窗口中选择
-        if self._is_own_window_active():
-            return
-
         tc = self._get_text_capture()
         if not tc:
             return
 
-        # 检查是否有新选择
-        if tc.has_new_selection(self._last_capture_time):
-            # 更新时间戳
-            self._last_capture_time = tc.get_last_capture_time()
+        # 先检查是否有新选择（轻量操作），再做昂贵的窗口检查
+        if not tc.has_new_selection(self._last_capture_time):
+            return
 
-            # 获取选择位置
-            info = tc.capture()
-            x, y = 0, 0
-            if info.bounds:
-                x, y, _, _ = info.bounds
+        # 有新选择时才检查是否在我们自己的窗口中
+        if self._is_own_window_active():
+            return
 
-            # 如果位置无效（都是0），使用当前鼠标位置
-            if x == 0 and y == 0:
-                cursor_pos = QCursor.pos()
-                x, y = cursor_pos.x(), cursor_pos.y()
+        # 有新选择且不在自己的窗口中
+        # 更新时间戳
+        self._last_capture_time = tc.get_last_capture_time()
 
-            self._last_position = MousePosition(x=x, y=y, timestamp=self._last_capture_time)
+        # 获取选择位置
+        info = tc.capture()
+        x, y = 0, 0
+        if info.bounds:
+            x, y, _, _ = info.bounds
 
-            # 发出信号
-            self.selection_finished.emit()
+        # 如果位置无效（都是0），使用当前鼠标位置
+        if x == 0 and y == 0:
+            cursor_pos = QCursor.pos()
+            x, y = cursor_pos.x(), cursor_pos.y()
+
+        self._last_position = MousePosition(x=x, y=y, timestamp=self._last_capture_time)
+
+        # 发出信号
+        self.selection_finished.emit()
 
     def get_last_position(self) -> Optional[Tuple[int, int]]:
         if self._last_position:

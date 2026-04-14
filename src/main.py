@@ -613,28 +613,6 @@ class SettingsDialog(QDialog):
 
         content_layout.addWidget(self._btn_bar)
 
-    def _create_check_icon(self) -> QIcon:
-        """创建勾选图标"""
-        pixmap = QPixmap(18, 18)
-        pixmap.fill(QColor(0, 0, 0, 0))
-
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        # 绘制蓝色圆角背景
-        painter.setBrush(QColor(self._theme['accent_color']))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(0, 0, 18, 18, 4, 4)
-
-        # 绘制白色勾选符号 ✓
-        painter.setPen(QPen(QColor(255, 255, 255), 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawLine(4, 9, 7, 13)  # 左下到中下
-        painter.drawLine(7, 13, 14, 5)  # 中下到右上
-
-        painter.end()
-
-        return QIcon(pixmap)
-
     def _create_uncheck_icon(self) -> QIcon:
         """创建未勾选图标（空白边框）"""
         pixmap = QPixmap(18, 18)
@@ -1463,6 +1441,13 @@ class MainController(QObject):
         self._current_worker = None
         self._last_text: str = ""
 
+        # 系统恢复检测 - 用于在休眠/锁屏恢复后重新注册热键
+        self._last_health_check_time = time.time()
+        self._session_was_locked = False  # Windows 锁屏状态跟踪
+        self._system_health_timer = QTimer()
+        self._system_health_timer.timeout.connect(self._on_system_health_check)
+        self._system_health_timer.start(10000)  # 每 10 秒检查一次（需要快速检测解锁）
+
         self._connect_signals()
         self._check_config()
         self._setup_hotkey()
@@ -1486,29 +1471,98 @@ class MainController(QObject):
         pass
 
     def _setup_hotkey(self):
-        """设置全局热键
+        """设置全局热键"""
+        is_auto_start = self._config.get('startup.auto_start', False)
+        self._hotkey_retry_count = 0
 
-        开机自启时，系统桌面可能尚未完全就绪，keyboard 库的低级键盘钩子
-        (WH_KEYBOARD_LL) 可能无法正确安装。因此先立即尝试注册，然后安排
-        一次延迟重试以确保在桌面就绪后钩子生效。
-        """
-        # 翻译窗口热键
+        if is_auto_start:
+            # 开机自启时延迟注册热键，等待 Windows 桌面环境完全就绪
+            log_info("开机自启模式，延迟 5 秒注册热键")
+            QTimer.singleShot(5000, self._register_all_hotkeys)
+        else:
+            self._register_all_hotkeys()
+
+    def _register_all_hotkeys(self):
+        """注册所有热键（支持重试）"""
         hotkey = self._config.get('hotkey.translator_window', 'Ctrl+O')
-        self._hotkey_manager.register_hotkey(hotkey, name="translator_window")
-        log_debug(f"已注册翻译窗口热键: {hotkey}")
+        success1 = self._hotkey_manager.register_hotkey(hotkey, name="translator_window")
+        log_debug(f"注册翻译窗口热键: {hotkey}, 结果: {success1}")
 
-        # 写作热键
         writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+I')
-        self._hotkey_manager.register_hotkey(writing_hotkey, name="writing")
-        log_debug(f"已注册写作热键: {writing_hotkey}")
+        success2 = self._hotkey_manager.register_hotkey(writing_hotkey, name="writing")
+        log_debug(f"注册写作热键: {writing_hotkey}, 结果: {success2}")
 
-        # 延迟重新注册：开机自启时桌面可能未就绪，5秒后再注册一次确保生效
-        QTimer.singleShot(5000, self._retry_hotkey_registration)
+        if not success1 or not success2:
+            self._hotkey_retry_count += 1
+            if self._hotkey_retry_count <= 3:
+                delay = self._hotkey_retry_count * 5000  # 5s, 10s, 15s
+                log_info(f"部分热键注册失败，第 {self._hotkey_retry_count} 次重试将在 {delay//1000} 秒后执行")
+                QTimer.singleShot(delay, self._register_all_hotkeys)
+            else:
+                log_error("热键注册多次重试失败，请手动重启软件")
 
-    def _retry_hotkey_registration(self):
-        """延迟重新注册热键 - 确保开机自启后热键生效"""
-        log_debug("执行延迟热键重注册...")
-        self._hotkey_manager._reinstall_all_hotkeys()
+    def _on_system_health_check(self):
+        """系统健康检查 - 检测休眠恢复和锁屏解锁
+
+        两种场景：
+        1. 系统休眠/睡眠恢复：进程被挂起，QTimer 不触发，通过定时器间隔检测
+        2. 屏幕锁定/解锁：进程正常运行，QTimer 正常触发，通过 OpenInputDesktop API 检测
+
+        两种场景下 keyboard 库的 WH_KEYBOARD_LL 钩子和 pynput 的 WH_MOUSE_LL 钩子
+        都可能被 Windows 系统移除，需要在恢复后重新注册。
+        """
+        current_time = time.time()
+        gap = current_time - self._last_health_check_time
+        self._last_health_check_time = current_time
+
+        # 场景1：检测系统休眠/睡眠恢复（定时器间隔远超预期）
+        if gap > 120:  # 超过 2 分钟
+            log_info(f"检测到系统从休眠恢复（间隔 {gap:.0f} 秒）")
+            self._session_was_locked = False
+            QTimer.singleShot(2000, self._on_session_restored)
+            return
+
+        # 场景2：检测 Windows 锁屏/解锁（通过 OpenInputDesktop API）
+        if sys.platform == 'win32':
+            self._check_session_lock_state()
+
+    def _check_session_lock_state(self):
+        """检测 Windows 会话锁定状态变化
+
+        使用 OpenInputDesktop API 判断当前桌面是否可访问：
+        - 正常桌面：OpenInputDesktop 返回有效句柄
+        - 锁屏/安全桌面：OpenInputDesktop 返回 NULL（无权访问 Winlogon 桌面）
+        """
+        try:
+            import ctypes
+            # DESKTOP_READOBJECTS = 0x0001
+            hdesk = ctypes.windll.user32.OpenInputDesktop(0, False, 0x0001)
+            is_unlocked = bool(hdesk)
+            if hdesk:
+                ctypes.windll.user32.CloseDesktop(hdesk)
+
+            was_locked = self._session_was_locked
+            self._session_was_locked = not is_unlocked
+
+            # 检测到从锁屏 → 解锁的状态转换
+            if was_locked and is_unlocked:
+                log_info("检测到屏幕解锁，重新注册热键并重启鼠标监听")
+                QTimer.singleShot(2000, self._on_session_restored)
+        except Exception:
+            pass
+
+    def _on_session_restored(self):
+        """会话恢复后的统一处理（休眠恢复/屏幕解锁共用）"""
+        # 重新注册所有热键
+        self._hotkey_retry_count = 0
+        self._register_all_hotkeys()
+
+        # 重启鼠标监听器（pynput 的低级钩子也可能在会话变更时失效）
+        try:
+            hover_detector = get_hover_detector()
+            hover_detector._restart_listener()
+        except Exception as e:
+            log_error(f"重启鼠标监听器失败: {e}")
 
     def start(self):
         self._selection_detector.start()
@@ -1516,6 +1570,9 @@ class MainController(QObject):
         log_info(f"{APP_NAME} 已启动")
 
     def stop(self):
+        # 停止系统健康检查
+        self._system_health_timer.stop()
+
         self._selection_detector.stop()
         self._selection_detector.cleanup()
 

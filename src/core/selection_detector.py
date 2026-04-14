@@ -1,4 +1,9 @@
-"""选择检测模块 - 监听文本选择事件"""
+"""选择检测模块 - 监听文本选择事件
+
+优化：
+- 检测系统休眠/锁屏恢复，避免锁屏期间无效轮询
+- 恢复后重置状态，防止事件堆积
+"""
 import sys
 import time
 from typing import Optional, Tuple
@@ -10,8 +15,10 @@ from PyQt6.QtWidgets import QApplication
 
 try:
     from ..config import get_config, APP_NAME
+    from ..utils.logger import log_info, log_debug
 except ImportError:
     from src.config import get_config, APP_NAME
+    from src.utils.logger import log_info, log_debug
 
 
 @dataclass
@@ -44,16 +51,16 @@ class SelectionDetector(QObject):
         # 上一次捕获的时间戳，用于检测新选择
         self._last_capture_time = 0.0
 
+        # 上一次轮询的实际时间 - 用于检测系统休眠/恢复
+        self._last_poll_wall_time: float = time.time()
+
         # 轮询定时器 - 检查是否有新的选择
         self._poll_timer = QTimer()
         self._poll_timer.timeout.connect(self._on_poll)
-        self._poll_interval = 100  # 100ms 检查一次（从50ms降低频率，减少CPU占用）
+        self._poll_interval = 50  # 50ms 检查一次
 
         # 文本捕获引用（延迟获取）
         self._text_capture = None
-
-        # 缓存当前进程 PID，避免每次轮询都调用系统API
-        self._current_pid: Optional[int] = None
 
     def pause(self):
         """暂停检测"""
@@ -121,11 +128,9 @@ class SelectionDetector(QObject):
                             # 进一步检查：获取窗口进程ID，确认是否是我们自己的进程
                             process_id = ctypes.c_ulong()
                             ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
-                            # 使用缓存的 PID，避免每次轮询都调用 GetCurrentProcessId
-                            if self._current_pid is None:
-                                self._current_pid = ctypes.windll.kernel32.GetCurrentProcessId()
+                            current_pid = ctypes.windll.kernel32.GetCurrentProcessId()
                             # 只有进程ID也匹配，才是我们自己的窗口
-                            if process_id.value == self._current_pid:
+                            if process_id.value == current_pid:
                                 return True
                 except Exception:
                     pass
@@ -166,40 +171,52 @@ class SelectionDetector(QObject):
 
     def _on_poll(self):
         """轮询检查是否有新的文本选择"""
+        current_wall_time = time.time()
+
+        # 检测系统休眠/锁屏恢复：如果两次轮询间隔远超预期，说明系统经历了休眠
+        # 正常间隔约 50ms，超过 60 秒说明系统刚恢复
+        wall_gap = current_wall_time - self._last_poll_wall_time
+        self._last_poll_wall_time = current_wall_time
+
+        if wall_gap > 60:
+            # 系统刚从休眠/锁屏恢复，丢弃休眠期间积累的旧选择事件
+            log_info(f"检测到系统恢复（轮询间隔 {wall_gap:.0f} 秒），重置选择检测状态")
+            tc = self._get_text_capture()
+            if tc:
+                self._last_capture_time = tc.get_last_capture_time()
+            return
+
         if not self._is_enabled or self._is_paused:
+            return
+
+        # 检查是否在我们自己的窗口中选择
+        if self._is_own_window_active():
             return
 
         tc = self._get_text_capture()
         if not tc:
             return
 
-        # 先检查是否有新选择（轻量操作），再做昂贵的窗口检查
-        if not tc.has_new_selection(self._last_capture_time):
-            return
+        # 检查是否有新选择
+        if tc.has_new_selection(self._last_capture_time):
+            # 更新时间戳
+            self._last_capture_time = tc.get_last_capture_time()
 
-        # 有新选择时才检查是否在我们自己的窗口中
-        if self._is_own_window_active():
-            return
+            # 获取选择位置
+            info = tc.capture()
+            x, y = 0, 0
+            if info.bounds:
+                x, y, _, _ = info.bounds
 
-        # 有新选择且不在自己的窗口中
-        # 更新时间戳
-        self._last_capture_time = tc.get_last_capture_time()
+            # 如果位置无效（都是0），使用当前鼠标位置
+            if x == 0 and y == 0:
+                cursor_pos = QCursor.pos()
+                x, y = cursor_pos.x(), cursor_pos.y()
 
-        # 获取选择位置
-        info = tc.capture()
-        x, y = 0, 0
-        if info.bounds:
-            x, y, _, _ = info.bounds
+            self._last_position = MousePosition(x=x, y=y, timestamp=self._last_capture_time)
 
-        # 如果位置无效（都是0），使用当前鼠标位置
-        if x == 0 and y == 0:
-            cursor_pos = QCursor.pos()
-            x, y = cursor_pos.x(), cursor_pos.y()
-
-        self._last_position = MousePosition(x=x, y=y, timestamp=self._last_capture_time)
-
-        # 发出信号
-        self.selection_finished.emit()
+            # 发出信号
+            self.selection_finished.emit()
 
     def get_last_position(self) -> Optional[Tuple[int, int]]:
         if self._last_position:

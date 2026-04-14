@@ -156,10 +156,10 @@ class HelpWindow(QWidget):
         self._add_section(self._help_layout, "使用方法", theme)
         self._add_text(self._help_layout, """
 1. 首次使用
-   右键点击托盘图标
+   右键点击托盘图标 → 设置，配置 API Key、Base URL 和 Model。
 
 2. 划词翻译
-   • 选中文本后会出现翻译按钮
+   • 选中文本后会出现翻译按钮（T图标）
    • 点击按钮即可显示翻译结果
    • 支持流式输出，实时显示翻译内容
 
@@ -182,10 +182,11 @@ class HelpWindow(QWidget):
         # 注意事项
         self._add_section(self._help_layout, "注意事项", theme)
         self._add_text(self._help_layout, """
+• 请确保已正确配置 API Key、Base URL 和 Model
 • 翻译采用智能检测，中文→英文，其他语言→中文
 • 单词翻译会显示详细释义、音标和例句
 • 翻译结果仅供参考，请核实重要内容
-• 如遇到问题，可查看日志文件
+• 如遇到问题，可查看日志文件或检查API配置
         """, theme)
 
         self._help_layout.addStretch()

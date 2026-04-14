@@ -409,6 +409,7 @@ class SettingsDialog(QDialog):
 
         # 标题栏
         self._title_bar = QFrame()
+        self._title_bar.setObjectName("titleBar")
         self._title_bar.setFixedHeight(28)
         # 不设置整体光标，在 mouseMoveEvent 中动态控制
 
@@ -417,11 +418,13 @@ class SettingsDialog(QDialog):
 
         # 标题文字
         self._title_label = QLabel("设置")
+        self._title_label.setObjectName("titleLabel")
         title_layout.addWidget(self._title_label)
         title_layout.addStretch()
 
         # 关闭按钮
         self._close_btn = QPushButton("×")
+        self._close_btn.setObjectName("closeBtn")
         self._close_btn.setFixedSize(20, 20)
         self._close_btn.clicked.connect(self.reject)
         title_layout.addWidget(self._close_btn)
@@ -467,7 +470,7 @@ class SettingsDialog(QDialog):
 
         # 添加说明文字
         self._model_hint_label = QLabel("推荐使用Instruct模型，Thinking模型响应会比较慢")
-        self._model_hint_label.setStyleSheet(f"color: {self._theme['text_muted']}; font-size: 11px;")
+        self._model_hint_label.setProperty("class", "hint")
         self._model_hint_label.setWordWrap(True)
         api_layout.addRow("", self._model_hint_label)
 
@@ -567,6 +570,7 @@ class SettingsDialog(QDialog):
 
         # 翻译窗口快捷键按钮
         self._hotkey_btn = QPushButton("Ctrl+O")
+        self._hotkey_btn.setObjectName("hotkeyBtn")
         self._hotkey_btn.setMinimumHeight(32)
         self._hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._hotkey_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -575,6 +579,7 @@ class SettingsDialog(QDialog):
 
         # 写作快捷键按钮
         self._writing_hotkey_btn = QPushButton("Ctrl+I")
+        self._writing_hotkey_btn.setObjectName("hotkeyBtn2")
         self._writing_hotkey_btn.setMinimumHeight(32)
         self._writing_hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._writing_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -583,7 +588,7 @@ class SettingsDialog(QDialog):
 
         # 快捷键提示文字
         self._hotkey_hint_label = QLabel("点击按钮后按下新的快捷键组合")
-        self._hotkey_hint_label.setStyleSheet(f"color: {self._theme['text_muted']}; font-size: 11px;")
+        self._hotkey_hint_label.setProperty("class", "hint")
         self._hotkey_hint_label.setWordWrap(True)
         hotkey_layout.addRow("", self._hotkey_hint_label)
 
@@ -609,7 +614,7 @@ class SettingsDialog(QDialog):
 
         # 添加说明文字
         self._writing_hint_label = QLabel("勾选后，写作时会在原文下方另起一行插入翻译结果")
-        self._writing_hint_label.setStyleSheet(f"color: {self._theme['text_muted']}; font-size: 11px;")
+        self._writing_hint_label.setProperty("class", "hint")
         self._writing_hint_label.setWordWrap(True)
         writing_layout.addWidget(self._writing_hint_label)
 
@@ -627,7 +632,7 @@ class SettingsDialog(QDialog):
 
         # 添加说明文字
         self._fixed_height_hint_label = QLabel("勾选后，原文框固定180px，译文框固定360px，不随内容自动调整")
-        self._fixed_height_hint_label.setStyleSheet(f"color: {self._theme['text_muted']}; font-size: 11px;")
+        self._fixed_height_hint_label.setProperty("class", "hint")
         self._fixed_height_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._fixed_height_hint_label)
 
@@ -638,7 +643,7 @@ class SettingsDialog(QDialog):
 
         # 添加说明文字
         self._remember_position_hint_label = QLabel("勾选后，翻译窗口会记住上次关闭时的位置。程序重启后位置重置")
-        self._remember_position_hint_label.setStyleSheet(f"color: {self._theme['text_muted']}; font-size: 11px;")
+        self._remember_position_hint_label.setProperty("class", "hint")
         self._remember_position_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._remember_position_hint_label)
 
@@ -661,6 +666,7 @@ class SettingsDialog(QDialog):
 
         # 底部按钮栏
         self._btn_bar = QFrame()
+        self._btn_bar.setObjectName("btnBar")
         btn_layout = QHBoxLayout(self._btn_bar)
         btn_layout.setContentsMargins(0, 8, 0, 0)
         btn_layout.setSpacing(12)
@@ -673,6 +679,7 @@ class SettingsDialog(QDialog):
         btn_layout.addWidget(self._cancel_btn)
 
         self._save_btn = QPushButton("保存")
+        self._save_btn.setObjectName("saveBtn")
         self._save_btn.setFixedHeight(32)
         self._save_btn.clicked.connect(self._save_settings)
         btn_layout.addWidget(self._save_btn)
@@ -696,25 +703,6 @@ class SettingsDialog(QDialog):
 
         return QIcon(pixmap)
 
-    def _get_groupbox_style(self) -> str:
-        """获取分组框样式"""
-        return f"""
-            QGroupBox {{
-                color: {self._theme['group_title']};
-                font-size: 14px;
-                font-weight: bold;
-                border: 1px solid {self._theme['border_color']};
-                border-radius: 6px;
-                margin-top: 12px;
-                padding-top: 8px;
-                background-color: transparent;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }}
-        """
 
     def _create_check_icon(self) -> QIcon:
         """创建勾选图标"""
@@ -739,171 +727,230 @@ class SettingsDialog(QDialog):
         return QIcon(pixmap)
 
     def _apply_theme(self):
-        """应用主题样式"""
-        # 内容容器
-        self._content_frame.setStyleSheet(f"""
+        """应用主题样式 - 使用单一合并样式表，避免逐控件 setStyleSheet 的性能开销"""
+        t = self._theme
+
+        # 构建合并样式表，一次性应用到 contentFrame 及其所有子控件
+        consolidated_style = f"""
+            /* 内容容器 */
             QFrame#contentFrame {{
-                background-color: {self._theme['bg_color']};
+                background-color: {t['bg_color']};
                 border-radius: 8px;
-                border: 1px solid {self._theme['border_color']};
+                border: 1px solid {t['border_color']};
             }}
-        """)
 
-        # 标题栏
-        self._title_bar.setStyleSheet(f"""
-            QFrame {{
+            /* 标题栏 */
+            QFrame#titleBar {{
                 background-color: transparent;
-                border-bottom: 1px solid {self._theme['border_color']};
+                border-bottom: 1px solid {t['border_color']};
             }}
-            QFrame:hover {{
-                background-color: {self._theme['border_color']};
+            QFrame#titleBar:hover {{
+                background-color: {t['border_color']};
             }}
-        """)
 
-        # 标题文字
-        self._title_label.setStyleSheet(f"""
-            QLabel {{
-                color: {self._theme['text_muted']};
+            /* 标题文字 */
+            QLabel#titleLabel {{
+                color: {t['text_muted']};
                 font-size: 12px;
             }}
-        """)
 
-        # 关闭按钮
-        self._close_btn.setStyleSheet(f"""
-            QPushButton {{
+            /* 关闭按钮 */
+            QPushButton#closeBtn {{
                 background-color: transparent;
-                color: {self._theme['text_muted']};
+                color: {t['text_muted']};
                 border: none;
                 border-radius: 10px;
                 font-size: 14px;
                 font-weight: bold;
             }}
-            QPushButton:hover {{
-                background-color: {self._theme['close_hover']};
+            QPushButton#closeBtn:hover {{
+                background-color: {t['close_hover']};
                 color: #ffffff;
             }}
-        """)
 
-        # 滚动区域
-        self._scroll_area.setStyleSheet(f"""
+            /* 滚动区域 */
             QScrollArea {{
                 background-color: transparent;
                 border: none;
             }}
-            {get_scrollbar_style(self._theme)}
-        """)
 
-        # 滚动内容容器
-        self._scroll_content.setStyleSheet("background-color: transparent;")
+            /* 滚动条 */
+            {get_scrollbar_style(t)}
 
-        # 分组框样式
-        groupbox_style = self._get_groupbox_style()
-        self._api_group.setStyleSheet(groupbox_style)
-        self._trans_group.setStyleSheet(groupbox_style)
-        self._theme_group.setStyleSheet(groupbox_style)
-        self._font_group.setStyleSheet(groupbox_style)
-        self._hotkey_group.setStyleSheet(groupbox_style)
-        self._writing_group.setStyleSheet(groupbox_style)
-        self._translator_window_group.setStyleSheet(groupbox_style)
-        self._sys_group.setStyleSheet(groupbox_style)
+            /* 滚动内容容器 */
+            QScrollArea > QWidget > QWidget {{
+                background-color: transparent;
+            }}
 
-        # 标签样式
-        label_style = f"color: {self._theme['text_secondary']}; font-size: 13px;"
-        self._api_url_label.setStyleSheet(label_style)
-        self._api_key_label.setStyleSheet(label_style)
-        self._model_label.setStyleSheet(label_style)
-        self._no_proxy_label.setStyleSheet(label_style)
-        self._target_lang_label.setStyleSheet(label_style)
-        self._browser_delay_label.setStyleSheet(label_style)
-        self._popup_style_label.setStyleSheet(label_style)
-        self._accent_color_label.setStyleSheet(label_style)
-        self._bg_color_label.setStyleSheet(label_style)
-        self._font_size_label.setStyleSheet(label_style)
-        self._hotkey_label.setStyleSheet(label_style)
-        self._writing_hotkey_label.setStyleSheet(label_style)
+            /* 分组框 */
+            QGroupBox {{
+                color: {t['group_title']};
+                font-size: 14px;
+                font-weight: bold;
+                border: 1px solid {t['border_color']};
+                border-radius: 6px;
+                margin-top: 12px;
+                padding-top: 8px;
+                background-color: transparent;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }}
 
-        # API 输入框样式
-        lineedit_style = get_lineedit_style(self._theme)
-        self._api_url_edit.setStyleSheet(lineedit_style)
-        self._api_key_edit.setStyleSheet(lineedit_style)
-        self._model_edit.setStyleSheet(lineedit_style)
-        self._no_proxy_edit.setStyleSheet(lineedit_style)
+            /* 表单标签（默认） */
+            QGroupBox QLabel {{
+                color: {t['text_secondary']};
+                font-size: 13px;
+            }}
 
-        # 下拉框样式
-        combobox_style = get_combobox_style(self._theme)
-        self._target_lang_combo.setStyleSheet(combobox_style)
-        self._popup_style_combo.setStyleSheet(combobox_style)
+            /* 提示标签 */
+            QLabel[class="hint"] {{
+                color: {t['text_muted']};
+                font-size: 11px;
+            }}
 
-        # 自定义颜色按钮样式
-        self._update_color_btn_style(self._accent_color_btn, self._custom_accent)
-        self._update_color_btn_style(self._bg_color_btn, self._custom_bg)
+            /* 输入框 */
+            QLineEdit {{
+                background-color: {t['input_bg']};
+                border: 1px solid {t['input_border']};
+                border-radius: 4px;
+                padding: 6px 10px;
+                color: {t['text_primary']};
+                font-size: 13px;
+            }}
+            QLineEdit:focus {{
+                border-color: {t['input_focus']};
+            }}
 
-        # 字体大小设置
-        self._font_size_spin.setStyleSheet(get_spinbox_style(self._theme))
-        self._font_size_spin.set_arrow_color(self._theme['text_secondary'])
+            /* 下拉框 */
+            QComboBox {{
+                background-color: {t['input_bg']};
+                color: {t['text_primary']};
+                border: 1px solid {t['input_border']};
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-size: 13px;
+            }}
+            QComboBox:hover {{
+                border-color: {t['accent_color']};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {t['bg_color']};
+                color: {t['text_primary']};
+                selection-background-color: {t['accent_color']};
+                selection-color: #ffffff;
+                border: 1px solid {t['border_color']};
+                border-radius: 4px;
+                padding: 2px;
+            }}
 
-        # 浏览器划词延迟设置
-        self._browser_delay_spin.setStyleSheet(get_spinbox_style(self._theme))
-        self._browser_delay_spin.set_arrow_color(self._theme['text_secondary'])
+            /* 数字输入框 */
+            QSpinBox {{
+                background-color: {t['input_bg']};
+                border: 1px solid {t['input_border']};
+                border-radius: 6px;
+                padding: 4px 8px;
+                padding-right: 32px;
+                color: {t['text_primary']};
+                font-size: 13px;
+            }}
+            QSpinBox:focus {{
+                border-color: {t['accent_color']};
+            }}
+            QSpinBox::up-button {{
+                subcontrol-origin: border;
+                subcontrol-position: right top;
+                width: 24px;
+                height: 14px;
+                border: none;
+                border-top-right-radius: 5px;
+                border-left: 1px solid {t['input_border']};
+                background-color: transparent;
+            }}
+            QSpinBox::up-button:hover {{
+                background-color: {t['button_hover']};
+            }}
+            QSpinBox::up-button:pressed {{
+                background-color: {t['accent_color']};
+            }}
+            QSpinBox::down-button {{
+                subcontrol-origin: border;
+                subcontrol-position: right bottom;
+                width: 24px;
+                height: 14px;
+                border: none;
+                border-bottom-right-radius: 5px;
+                border-left: 1px solid {t['input_border']};
+                background-color: transparent;
+            }}
+            QSpinBox::down-button:hover {{
+                background-color: {t['button_hover']};
+            }}
+            QSpinBox::down-button:pressed {{
+                background-color: {t['accent_color']};
+            }}
 
-        # 快捷键按钮样式
-        hotkey_btn_style = f"""
-            QPushButton {{
-                background-color: {self._theme['input_bg']};
-                border: 1px solid {self._theme['input_border']};
+            /* 快捷键按钮 */
+            QPushButton#hotkeyBtn, QPushButton#hotkeyBtn2 {{
+                background-color: {t['input_bg']};
+                border: 1px solid {t['input_border']};
                 border-radius: 4px;
                 padding: 4px 12px;
-                color: {self._theme['text_primary']};
+                color: {t['text_primary']};
                 font-size: 13px;
                 text-align: left;
             }}
-            QPushButton:hover {{
-                border-color: {self._theme['accent_color']};
+            QPushButton#hotkeyBtn:hover, QPushButton#hotkeyBtn2:hover {{
+                border-color: {t['accent_color']};
             }}
-            QPushButton:focus {{
-                border-color: {self._theme['accent_color']};
-                background-color: {self._theme['accent_color']};
+            QPushButton#hotkeyBtn:focus, QPushButton#hotkeyBtn2:focus {{
+                border-color: {t['accent_color']};
+                background-color: {t['accent_color']};
                 color: #ffffff;
             }}
-        """
-        self._hotkey_btn.setStyleSheet(hotkey_btn_style)
-        self._writing_hotkey_btn.setStyleSheet(hotkey_btn_style)
 
-        # 复选框样式和图标
-        checkbox_style = get_checkbox_style(self._theme)
-        self._auto_start_check.setStyleSheet(checkbox_style)
-        self._keep_original_check.setStyleSheet(checkbox_style)
-        self._fixed_height_check.setStyleSheet(checkbox_style)
-        self._remember_position_check.setStyleSheet(checkbox_style)
-        check_icon = self._create_check_icon()
-        uncheck_icon = self._create_uncheck_icon()
-        self._auto_start_check.setIcon(check_icon if self._auto_start_check.isChecked() else uncheck_icon)
-        self._keep_original_check.setIcon(check_icon if self._keep_original_check.isChecked() else uncheck_icon)
-        self._fixed_height_check.setIcon(check_icon if self._fixed_height_check.isChecked() else uncheck_icon)
-        self._remember_position_check.setIcon(check_icon if self._remember_position_check.isChecked() else uncheck_icon)
+            /* 复选框 */
+            QCheckBox {{
+                color: {t['text_primary']};
+                font-size: 13px;
+                spacing: 8px;
+            }}
+            QCheckBox::indicator {{
+                width: 0px;
+                height: 0px;
+                margin: 0px;
+                padding: 0px;
+                border: none;
+            }}
 
-        # 底部按钮栏 - 确保无边框
-        self._btn_bar.setStyleSheet("QFrame { background-color: transparent; border: none; }")
+            /* 底部按钮栏 */
+            QFrame#btnBar {{
+                background-color: transparent;
+                border: none;
+            }}
 
-        # 取消按钮
-        self._cancel_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {self._theme['button_bg']};
-                color: {self._theme['text_primary']};
+            /* 取消按钮 */
+            QPushButton#cancelBtn {{
+                background-color: {t['button_bg']};
+                color: {t['text_primary']};
                 border: none;
                 border-radius: 4px;
                 padding: 0 20px;
                 font-size: 13px;
             }}
-            QPushButton:hover {{
-                background-color: {self._theme['button_hover']};
+            QPushButton#cancelBtn:hover {{
+                background-color: {t['button_hover']};
             }}
-        """)
 
-        # 保存按钮
-        self._save_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {self._theme['accent_color']};
+            /* 保存按钮 */
+            QPushButton#saveBtn {{
+                background-color: {t['accent_color']};
                 color: #ffffff;
                 border: none;
                 border-radius: 4px;
@@ -911,10 +958,28 @@ class SettingsDialog(QDialog):
                 font-size: 13px;
                 font-weight: bold;
             }}
-            QPushButton:hover {{
-                background-color: {self._theme['accent_hover']};
+            QPushButton#saveBtn:hover {{
+                background-color: {t['accent_hover']};
             }}
-        """)
+        """
+
+        # 一次性应用合并样式表
+        self._content_frame.setStyleSheet(consolidated_style)
+
+        # 动态样式：颜色选择器按钮（背景色随用户选择变化，需单独设置）
+        self._update_color_btn_style(self._accent_color_btn, self._custom_accent)
+        self._update_color_btn_style(self._bg_color_btn, self._custom_bg)
+
+        # SpinBox 自定义箭头颜色
+        self._font_size_spin.set_arrow_color(t['text_secondary'])
+        self._browser_delay_spin.set_arrow_color(t['text_secondary'])
+
+        # 缓存复选框图标并应用
+        self._cached_check_icon = self._create_check_icon()
+        self._cached_uncheck_icon = self._create_uncheck_icon()
+        for cb in (self._auto_start_check, self._keep_original_check,
+                   self._fixed_height_check, self._remember_position_check):
+            cb.setIcon(self._cached_check_icon if cb.isChecked() else self._cached_uncheck_icon)
 
     def _start_hotkey_capture(self, target: str):
         """开始捕获快捷键"""
@@ -968,12 +1033,10 @@ class SettingsDialog(QDialog):
         super().keyPressEvent(event)
 
     def _on_checkbox_toggled(self, checked: bool):
-        """复选框状态改变时更新图标"""
+        """复选框状态改变时更新图标（使用缓存图标）"""
         sender = self.sender()
-        if sender:
-            check_icon = self._create_check_icon()
-            uncheck_icon = self._create_uncheck_icon()
-            sender.setIcon(check_icon if checked else uncheck_icon)
+        if sender and hasattr(self, '_cached_check_icon'):
+            sender.setIcon(self._cached_check_icon if checked else self._cached_uncheck_icon)
 
     def update_theme(self):
         """更新主题"""
@@ -1110,14 +1173,20 @@ class SettingsDialog(QDialog):
         self._disable_wheel_event(self._font_size_spin)
         self._disable_wheel_event(self._browser_delay_spin)
 
+        # 预初始化 ComboBox 下拉视图，避免首次点击卡顿
+        self._target_lang_combo.view()
+        self._popup_style_combo.view()
+
     def _disable_wheel_event(self, widget):
         """禁用控件的鼠标滚轮事件，防止误触"""
         widget.installEventFilter(self)
 
     def eventFilter(self, obj, event):
-        """事件过滤器，用于禁用滚轮事件"""
+        """事件过滤器，用于禁用控件的滚轮事件并转发给滚动区域"""
         if event.type() == event.Type.Wheel:
-            # 忽略滚轮事件
+            # 将滚轮事件转发给滚动区域，而不是直接吞掉
+            if hasattr(self, '_scroll_area') and self._scroll_area:
+                QApplication.sendEvent(self._scroll_area.verticalScrollBar(), event)
             return True
         return super().eventFilter(obj, event)
 

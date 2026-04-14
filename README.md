@@ -17,8 +17,10 @@
 - **翻译历史**：自动保存翻译历史记录，方便查阅和管理
 - **智能检测**：自动识别源语言并确定翻译方向（中文→英文，其他→中文）
 - **单词详解**：单词翻译显示详细释义、音标和例句
-- **多主题**：支持深色和浅色主题切换
+- **多主题**：支持深色、浅色及多种彩色主题（海洋蓝/森林绿/皇家紫/暖橙/玫瑰粉/薄荷浅色），也可自定义主题颜色
 - **自定义快捷键**：可自定义翻译窗口和划词写作的快捷键
+- **翻译窗口设置**：支持固定窗口高度、记忆窗口位置
+- **浏览器划词延迟**：可调整浏览器环境下的划词延迟时间，避免与网站悬浮窗冲突
 - **开机自启**：支持开机自动启动
 
 ## 使用方法
@@ -43,7 +45,7 @@
   - **翻译**：将文本翻译为目标语言
   - **润色**：改进文本表达，使其更自然流畅
   - **总结**：生成文本摘要
-- 支持快捷键：`Ctrl+Enter` 快速翻译
+- 支持快捷键：`Enter` 快速翻译，`Shift+Enter` 换行
 
 ### 划词写作
 
@@ -61,10 +63,11 @@
 | 划词写作 | `Ctrl+I` |
 | 关闭窗口 | `Esc` |
 | 快速翻译 | `Enter` |
+| 换行 | `Shift+Enter` |
 
 ## 配置说明
 
-配置文件 `config.yaml` 位于程序目录，主要配置项：
+配置文件 `config.yaml` 位于应用数据目录（Windows: `%LOCALAPPDATA%\QTranslator`），主要配置项：
 
 ```yaml
 # 翻译服务配置
@@ -72,16 +75,19 @@ translator:
   api_key: "your-api-key"       # API 密钥
   model: "gpt-4o-mini"          # 模型名称
   base_url: "https://api.openai.com/v1"  # API 地址
-  timeout: 15                   # 超时时间（秒）
+  timeout: 60                   # 超时时间（秒）
+  no_proxy: ""                  # 不使用代理的地址，多个用逗号分隔
 
 # 翻译目标语言
 target_language: "中文"
 
 # 界面配置
 theme:
-  popup_style: "dark"           # 窗口样式：dark/light
+  popup_style: "dark"           # 窗口样式：dark/light/ocean_blue/forest_green/royal_purple/warm_orange/rose_pink/mint_light/custom
+  custom_accent: "#007AFF"      # 自定义主题强调色
+  custom_bg: "#2d2d2d"          # 自定义主题背景色
 font:
-  size: 14                      # 字体大小
+  size: 15                      # 字体大小
 
 # 快捷键配置
 hotkey:
@@ -91,6 +97,15 @@ hotkey:
 # 写作配置
 writing:
   keep_original: false          # 是否保留原文
+
+# 翻译窗口配置
+translator_window:
+  fixed_height_mode: false      # 固定窗口高度（不随内容自动调整）
+  remember_window_position: false  # 记忆窗口位置
+
+# 划词设置
+selection:
+  browser_delay_ms: 450         # 浏览器环境下划词延迟（毫秒）
 
 # 启动配置
 startup:
@@ -117,25 +132,25 @@ QTranslator/
 │   │   ├── writing.py       # 写作服务
 │   │   ├── text_capture.py  # 文本捕获
 │   │   └── selection_detector.py  # 选择检测
-│   │   └── hover_detector.py       # 悬停检测
 │   ├── ui/
 │   │   ├── tray_icon.py     # 系统托盘
 │   │   ├── popup_window.py  # 划词翻译弹窗
 │   │   ├── translator_window.py    # 翻译窗口
 │   │   ├── history_window.py       # 历史窗口
 │   │   ├── help_window.py          # 帮助窗口
-│   │   └── translate_button.py     # 翻译按钮
+│   │   ├── translate_button.py     # 翻译按钮
+│   │   └── splash_screen.py        # 启动画面
 │   └── utils/
-│   │   ├── theme.py         # 主题管理
-│   │   ├── logger.py        # 日志管理
+│       ├── theme.py         # 主题管理
+│       ├── logger.py        # 日志管理
 │       ├── history.py       # 历史记录
 │       ├── hotkey_manager.py        # 快捷键管理
+│       ├── tts.py           # 语音朗读
 │       └── language_detector.py     # 语言检测
 ├── native/
 │   └── selection-service.js # 文本选择服务
 ├── assets/
 │   └── icon.png             # 应用图标
-├── config.yaml              # 配置文件
 ├── requirements.txt         # Python依赖
 └── build.py                 # 构建脚本
 ```
@@ -174,6 +189,7 @@ python build.py
 - 翻译采用智能检测，中文→英文，其他语言→中文
 - 单词翻译会显示详细释义、音标和例句
 - 翻译结果仅供参考，请核实重要内容
+- 浏览器中划词延迟时间可在设置中调整，避免与网站悬浮窗冲突
 - 如遇到问题，可查看日志文件或检查 API 配置
 
 ## License

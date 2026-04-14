@@ -9,7 +9,7 @@ from io import BytesIO
 from datetime import datetime
 
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
-from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QFont, QPen, QCursor
+from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QFont, QPen
 from PyQt6.QtCore import pyqtSignal, QObject, Qt, QBuffer, QTimer
 
 try:
@@ -53,7 +53,7 @@ class TrayIcon(QObject):
             self._icon = self._create_default_icon()
 
     def _create_default_icon(self) -> QIcon:
-        """创建默认图标 - "T" 字符（24px）"""
+        """创建默认图标 - "Q" 字符（24px）"""
         pixmap = QPixmap(24, 24)
         pixmap.fill(QColor(0, 0, 0, 0))
 
@@ -65,11 +65,11 @@ class TrayIcon(QObject):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(0, 0, 24, 24)
 
-        # 绘制 T 字符
+        # 绘制 Q 字符
         painter.setPen(QColor(255, 255, 255, 230))
         font = QFont("Arial", 14, QFont.Weight.Bold)
         painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "T")
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "Q")
 
         painter.end()
 
@@ -194,6 +194,9 @@ class TrayIcon(QObject):
         self._tray = QSystemTrayIcon(self._icon)
         self._tray.setToolTip(f"{APP_NAME}")
 
+        # 使用 setContextMenu 让系统原生处理右键菜单，避免手动 exec 导致的卡顿
+        self._tray.setContextMenu(self._menu)
+
         # 连接信号
         self._tray.activated.connect(self._on_tray_activated)
 
@@ -287,7 +290,7 @@ class TrayIcon(QObject):
         painter.setPen(QColor(180, 180, 180))
         font = QFont("Arial", 32, QFont.Weight.Bold)
         painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "T")
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "Q")
         painter.end()
 
         return QIcon(pixmap)
@@ -345,12 +348,10 @@ class TrayIcon(QObject):
     def _on_tray_activated(self, reason):
         """托盘图标激活事件"""
         try:
-            if reason == QSystemTrayIcon.ActivationReason.Context:
-                # 右键点击：显示菜单
-                self._menu.exec(QCursor.pos())
-            elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
                 # 双击：显示翻译窗口
                 self.translator_window_requested.emit()
+            # 右键菜单已通过 setContextMenu 由系统原生处理，无需手动 exec
         except Exception as e:
             self._log_error("_on_tray_activated", e)
 

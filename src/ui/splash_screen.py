@@ -104,11 +104,11 @@ class SplashScreen(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(margin, margin, self.ICON_SIZE - 2*margin, self.ICON_SIZE - 2*margin)
 
-        # 绘制白色 "T" 字
+        # 绘制白色 "Q" 字
         painter.setPen(QColor(255, 255, 255))
         font = QFont("Arial", 56, QFont.Weight.Bold)
         painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "T")
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "Q")
 
         painter.end()
 

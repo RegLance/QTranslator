@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QFormLayout, QComboBox,
     QCheckBox, QGroupBox, QMessageBox, QSizePolicy, QFrame,
     QGraphicsDropShadowEffect, QScrollArea, QMenu, QWidget,
-    QSpinBox, QKeySequenceEdit
+    QSpinBox, QKeySequenceEdit, QColorDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect
 from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence, QPalette, QPolygonF, QBrush
@@ -279,7 +279,7 @@ try:
     from .ui.splash_screen import show_splash_screen
     from .utils.logger import get_logger, log_info, log_error, log_debug
     from .utils.history import add_translation_history
-    from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style
+    from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
     from .utils.hotkey_manager import get_hotkey_manager
 except ImportError:
     # 打包后的导入路径
@@ -297,7 +297,7 @@ except ImportError:
     from src.ui.splash_screen import show_splash_screen
     from src.utils.logger import get_logger, log_info, log_error, log_debug
     from src.utils.history import add_translation_history
-    from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style
+    from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
     from src.utils.hotkey_manager import get_hotkey_manager
 
 
@@ -465,6 +465,12 @@ class SettingsDialog(QDialog):
         self._model_label = QLabel("Model:")
         api_layout.addRow(self._model_label, self._model_edit)
 
+        # 添加说明文字
+        self._model_hint_label = QLabel("推荐使用Instruct模型，Thinking模型响应会比较慢")
+        self._model_hint_label.setStyleSheet(f"color: {self._theme['text_muted']}; font-size: 11px;")
+        self._model_hint_label.setWordWrap(True)
+        api_layout.addRow("", self._model_hint_label)
+
         self._no_proxy_edit = QLineEdit()
         self._no_proxy_edit.setMinimumHeight(32)
         self._no_proxy_edit.setPlaceholderText("localhost,127.0.0.1")
@@ -503,11 +509,35 @@ class SettingsDialog(QDialog):
         theme_layout.setContentsMargins(12, 20, 12, 12)
         theme_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
+        # 主题选择下拉框（使用 THEME_DISPLAY_NAMES 填充）
+        self._theme_keys = list(THEME_DISPLAY_NAMES.keys())
         self._popup_style_combo = QComboBox()
-        self._popup_style_combo.addItems(["深色", "浅色"])
+        self._popup_style_combo.addItems(list(THEME_DISPLAY_NAMES.values()))
         self._popup_style_combo.setMinimumHeight(32)
         self._popup_style_label = QLabel("窗口样式:")
         theme_layout.addRow(self._popup_style_label, self._popup_style_combo)
+
+        # 自定义主题：强调色选择器
+        self._custom_accent = '#007AFF'
+        self._accent_color_btn = QPushButton()
+        self._accent_color_btn.setFixedSize(80, 32)
+        self._accent_color_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._accent_color_btn.clicked.connect(self._pick_accent_color)
+        self._accent_color_label = QLabel("强调色:")
+        theme_layout.addRow(self._accent_color_label, self._accent_color_btn)
+
+        # 自定义主题：背景色选择器
+        self._custom_bg = '#2d2d2d'
+        self._bg_color_btn = QPushButton()
+        self._bg_color_btn.setFixedSize(80, 32)
+        self._bg_color_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._bg_color_btn.clicked.connect(self._pick_bg_color)
+        self._bg_color_label = QLabel("背景色:")
+        theme_layout.addRow(self._bg_color_label, self._bg_color_btn)
+
+        # 根据当前选择控制颜色选择器可见性
+        self._popup_style_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
+        self._update_custom_color_visibility()
 
         scroll_layout.addWidget(self._theme_group)
 
@@ -786,6 +816,8 @@ class SettingsDialog(QDialog):
         self._target_lang_label.setStyleSheet(label_style)
         self._browser_delay_label.setStyleSheet(label_style)
         self._popup_style_label.setStyleSheet(label_style)
+        self._accent_color_label.setStyleSheet(label_style)
+        self._bg_color_label.setStyleSheet(label_style)
         self._font_size_label.setStyleSheet(label_style)
         self._hotkey_label.setStyleSheet(label_style)
         self._writing_hotkey_label.setStyleSheet(label_style)
@@ -801,6 +833,10 @@ class SettingsDialog(QDialog):
         combobox_style = get_combobox_style(self._theme)
         self._target_lang_combo.setStyleSheet(combobox_style)
         self._popup_style_combo.setStyleSheet(combobox_style)
+
+        # 自定义颜色按钮样式
+        self._update_color_btn_style(self._accent_color_btn, self._custom_accent)
+        self._update_color_btn_style(self._bg_color_btn, self._custom_bg)
 
         # 字体大小设置
         self._font_size_spin.setStyleSheet(get_spinbox_style(self._theme))
@@ -1028,7 +1064,17 @@ class SettingsDialog(QDialog):
         self._browser_delay_spin.setValue(browser_delay)
 
         popup_style = self._config.get('theme.popup_style', 'dark')
-        self._popup_style_combo.setCurrentIndex(0 if popup_style == 'dark' else 1)
+        if popup_style in self._theme_keys:
+            self._popup_style_combo.setCurrentIndex(self._theme_keys.index(popup_style))
+        else:
+            self._popup_style_combo.setCurrentIndex(0)
+
+        # 加载自定义颜色
+        self._custom_accent = self._config.get('theme.custom_accent', '#007AFF')
+        self._custom_bg = self._config.get('theme.custom_bg', '#2d2d2d')
+        self._update_color_btn_style(self._accent_color_btn, self._custom_accent)
+        self._update_color_btn_style(self._bg_color_btn, self._custom_bg)
+        self._update_custom_color_visibility()
 
         # 字体大小
         font_size = self._config.get('font.size', 14)
@@ -1075,6 +1121,46 @@ class SettingsDialog(QDialog):
             return True
         return super().eventFilter(obj, event)
 
+    def _on_theme_combo_changed(self, index):
+        """主题下拉框选项变更时，控制自定义颜色选择器的可见性"""
+        self._update_custom_color_visibility()
+
+    def _update_custom_color_visibility(self):
+        """根据当前主题选择更新颜色选择器的可见性"""
+        is_custom = self._theme_keys[self._popup_style_combo.currentIndex()] == 'custom'
+        self._accent_color_label.setVisible(is_custom)
+        self._accent_color_btn.setVisible(is_custom)
+        self._bg_color_label.setVisible(is_custom)
+        self._bg_color_btn.setVisible(is_custom)
+
+    def _update_color_btn_style(self, btn, hex_color):
+        """更新颜色按钮的背景色显示"""
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {hex_color};
+                border: 1px solid {self._theme.get('border_color', '#3d3d3d')};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                border-color: {self._theme.get('accent_color', '#007AFF')};
+                border-width: 2px;
+            }}
+        """)
+
+    def _pick_accent_color(self):
+        """弹出颜色对话框选择强调色"""
+        color = QColorDialog.getColor(QColor(self._custom_accent), self, "选择强调色")
+        if color.isValid():
+            self._custom_accent = color.name()
+            self._update_color_btn_style(self._accent_color_btn, self._custom_accent)
+
+    def _pick_bg_color(self):
+        """弹出颜色对话框选择背景色"""
+        color = QColorDialog.getColor(QColor(self._custom_bg), self, "选择背景色")
+        if color.isValid():
+            self._custom_bg = color.name()
+            self._update_color_btn_style(self._bg_color_btn, self._custom_bg)
+
     def _save_settings(self):
         """保存设置"""
         try:
@@ -1103,8 +1189,11 @@ class SettingsDialog(QDialog):
             # 浏览器划词延迟
             self._config.set('selection.browser_delay_ms', self._browser_delay_spin.value())
 
-            popup_style = 'dark' if self._popup_style_combo.currentIndex() == 0 else 'light'
-            self._config.set('theme.popup_style', popup_style)
+            selected_key = self._theme_keys[self._popup_style_combo.currentIndex()]
+            self._config.set('theme.popup_style', selected_key)
+            if selected_key == 'custom':
+                self._config.set('theme.custom_accent', self._custom_accent)
+                self._config.set('theme.custom_bg', self._custom_bg)
 
             # 字体大小
             self._config.set('font.size', self._font_size_spin.value())

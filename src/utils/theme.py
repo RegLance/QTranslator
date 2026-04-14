@@ -1,7 +1,166 @@
 """全局主题管理模块 - QTranslator"""
+import colorsys
+from collections import OrderedDict
 from typing import Dict, Any
 
-# 主题样式定义
+
+# ---------------------------------------------------------------------------
+# 颜色工具函数
+# ---------------------------------------------------------------------------
+
+def _hex_to_rgb(hex_color: str) -> tuple:
+    """#RRGGBB -> (r, g, b) 归一化到 0.0-1.0"""
+    hex_color = hex_color.lstrip('#')
+    r = int(hex_color[0:2], 16) / 255.0
+    g = int(hex_color[2:4], 16) / 255.0
+    b = int(hex_color[4:6], 16) / 255.0
+    return (r, g, b)
+
+
+def _rgb_to_hex(r: float, g: float, b: float) -> str:
+    """(r, g, b) 0.0-1.0 -> #rrggbb"""
+    return '#{:02x}{:02x}{:02x}'.format(
+        max(0, min(255, int(round(r * 255)))),
+        max(0, min(255, int(round(g * 255)))),
+        max(0, min(255, int(round(b * 255)))),
+    )
+
+
+def _lighten(hex_color: str, amount: float) -> str:
+    """在 HLS 空间增加亮度（amount: 0.0~1.0 的增量）"""
+    r, g, b = _hex_to_rgb(hex_color)
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    l = min(1.0, l + amount)
+    r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
+    return _rgb_to_hex(r2, g2, b2)
+
+
+def _darken(hex_color: str, amount: float) -> str:
+    """在 HLS 空间降低亮度（amount: 0.0~1.0 的减量）"""
+    r, g, b = _hex_to_rgb(hex_color)
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    l = max(0.0, l - amount)
+    r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
+    return _rgb_to_hex(r2, g2, b2)
+
+
+def _luminance(hex_color: str) -> float:
+    """计算 WCAG 相对亮度 (0.0 = 黑, 1.0 = 白)"""
+    r, g, b = _hex_to_rgb(hex_color)
+
+    def _linearize(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * _linearize(r) + 0.7152 * _linearize(g) + 0.0722 * _linearize(b)
+
+
+# ---------------------------------------------------------------------------
+# 主题派生函数
+# ---------------------------------------------------------------------------
+
+def derive_theme(accent_color: str, bg_color: str) -> Dict[str, Any]:
+    """根据强调色和背景色自动派生完整主题字典。
+
+    通过 bg_color 的亮度自动判断深色/浅色变体，然后生成所有 ~30 个颜色键。
+    """
+    is_dark = _luminance(bg_color) < 0.5
+
+    if is_dark:
+        return {
+            # 基础颜色
+            'bg_color': bg_color,
+            'bg_secondary': _darken(bg_color, 0.05),
+            'border_color': _lighten(bg_color, 0.08),
+            'shadow_color': (0, 0, 0, 100),
+            # 文本颜色
+            'text_primary': '#ffffff',
+            'text_secondary': '#b0b0b0',
+            'text_muted': '#888888',
+            'text_placeholder': '#666666',
+            # 强调色
+            'accent_color': accent_color,
+            'accent_hover': _lighten(accent_color, 0.10),
+            'success_color': '#1a7f37',
+            'warning_color': '#d29922',
+            'error_color': '#ff6b6b',
+            # 交互元素
+            'button_bg': _lighten(bg_color, 0.08),
+            'button_hover': _lighten(bg_color, 0.15),
+            'button_active': _lighten(bg_color, 0.22),
+            'input_bg': _darken(bg_color, 0.05),
+            'input_border': _lighten(bg_color, 0.08),
+            'input_focus': accent_color,
+            # 滚动条
+            'scrollbar_bg': bg_color,
+            'scrollbar_handle': _lighten(bg_color, 0.22),
+            'scrollbar_hover': _lighten(bg_color, 0.30),
+            # 分隔器
+            'splitter_color': _lighten(bg_color, 0.08),
+            'splitter_hover': _lighten(bg_color, 0.22),
+            # 原文/译文
+            'original_bg': _darken(bg_color, 0.05),
+            'original_text': '#aaaaaa',
+            'result_text': '#ffffff',
+            # 列表项
+            'list_item_bg': _darken(bg_color, 0.05),
+            'list_item_hover': _lighten(bg_color, 0.08),
+            'list_item_selected': accent_color,
+            # 分组框
+            'group_title': accent_color,
+            # 关闭按钮悬停
+            'close_hover': '#ff6b6b',
+        }
+    else:
+        return {
+            # 基础颜色
+            'bg_color': bg_color,
+            'bg_secondary': _lighten(bg_color, 0.03),
+            'border_color': _darken(bg_color, 0.10),
+            'shadow_color': (0, 0, 0, 50),
+            # 文本颜色
+            'text_primary': '#333333',
+            'text_secondary': '#666666',
+            'text_muted': '#888888',
+            'text_placeholder': '#aaaaaa',
+            # 强调色
+            'accent_color': accent_color,
+            'accent_hover': _lighten(accent_color, 0.10),
+            'success_color': '#1a7f37',
+            'warning_color': '#d29922',
+            'error_color': '#d32f2f',
+            # 交互元素
+            'button_bg': _darken(bg_color, 0.08),
+            'button_hover': _darken(bg_color, 0.14),
+            'button_active': _darken(bg_color, 0.20),
+            'input_bg': _lighten(bg_color, 0.03),
+            'input_border': _darken(bg_color, 0.10),
+            'input_focus': accent_color,
+            # 滚动条
+            'scrollbar_bg': _darken(bg_color, 0.03),
+            'scrollbar_handle': _darken(bg_color, 0.20),
+            'scrollbar_hover': _darken(bg_color, 0.30),
+            # 分隔器
+            'splitter_color': _darken(bg_color, 0.10),
+            'splitter_hover': _darken(bg_color, 0.14),
+            # 原文/译文
+            'original_bg': _darken(bg_color, 0.04),
+            'original_text': '#555555',
+            'result_text': '#333333',
+            # 列表项
+            'list_item_bg': _lighten(bg_color, 0.03),
+            'list_item_hover': _darken(bg_color, 0.06),
+            'list_item_selected': accent_color,
+            # 分组框
+            'group_title': accent_color,
+            # 关闭按钮悬停
+            'close_hover': '#ff6b6b',
+        }
+
+
+# ---------------------------------------------------------------------------
+# 主题样式定义（保留原有手工调优的深色/浅色主题）
+# ---------------------------------------------------------------------------
+
 THEMES = {
     'dark': {
         # 基础颜色
@@ -111,40 +270,83 @@ THEMES = {
     }
 }
 
+# ---------------------------------------------------------------------------
+# 预置主题注册 (display_name, accent_color, bg_color)
+# ---------------------------------------------------------------------------
+
+_THEME_PRESETS = {
+    'ocean_blue':   ('海洋蓝',   '#0078D4', '#1b2838'),
+    'forest_green': ('森林绿',   '#2ea043', '#1a2b1a'),
+    'royal_purple': ('皇家紫',   '#8b5cf6', '#1e1b2e'),
+    'warm_orange':  ('暖橙',     '#f97316', '#2a1f14'),
+    'rose_pink':    ('玫瑰粉',   '#e11d48', '#2a1520'),
+    'mint_light':   ('薄荷浅色', '#10b981', '#f0fdf4'),
+}
+
+for _key, (_, _accent, _bg) in _THEME_PRESETS.items():
+    THEMES[_key] = derive_theme(_accent, _bg)
+
+# 主题显示名称映射（有序，用于设置界面）
+THEME_DISPLAY_NAMES = OrderedDict([
+    ('dark',         '深色'),
+    ('light',        '浅色'),
+    ('ocean_blue',   '海洋蓝'),
+    ('forest_green', '森林绿'),
+    ('royal_purple', '皇家紫'),
+    ('warm_orange',  '暖橙'),
+    ('rose_pink',    '玫瑰粉'),
+    ('mint_light',   '薄荷浅色'),
+    ('custom',       '自定义'),
+])
+
+
+# ---------------------------------------------------------------------------
+# 配置读取辅助
+# ---------------------------------------------------------------------------
+
+def _get_config():
+    """获取全局配置实例"""
+    try:
+        from ..config import get_config
+        return get_config()
+    except ImportError:
+        from src.config import get_config
+        return get_config()
+
 
 def get_theme(theme_name: str = None) -> Dict[str, Any]:
     """获取主题配置
 
     Args:
-        theme_name: 主题名称 ('dark' 或 'light')，如果为 None 则从配置读取
+        theme_name: 主题名称，如果为 None 则从配置读取。
+                    支持所有预置主题名 + 'custom'（自定义主题）。
 
     Returns:
         主题字典
     """
     if theme_name is None:
-        try:
-            from ..config import get_config
-            theme_name = get_config().get('theme.popup_style', 'dark')
-        except ImportError:
-            from src.config import get_config
-            theme_name = get_config().get('theme.popup_style', 'dark')
+        theme_name = _get_config().get('theme.popup_style', 'dark')
 
-    return THEMES.get(theme_name, THEMES['dark'])
+    if theme_name in THEMES:
+        return THEMES[theme_name]
+    elif theme_name == 'custom':
+        config = _get_config()
+        accent = config.get('theme.custom_accent', '#007AFF')
+        bg = config.get('theme.custom_bg', '#2d2d2d')
+        return derive_theme(accent, bg)
+    else:
+        return THEMES['dark']
 
 
 def get_theme_name() -> str:
     """获取当前主题名称"""
-    try:
-        from ..config import get_config
-        return get_config().get('theme.popup_style', 'dark')
-    except ImportError:
-        from src.config import get_config
-        return get_config().get('theme.popup_style', 'dark')
+    return _get_config().get('theme.popup_style', 'dark')
 
 
 def is_dark_theme() -> bool:
-    """判断是否为深色主题"""
-    return get_theme_name() == 'dark'
+    """判断是否为深色主题（基于当前主题背景色亮度）"""
+    theme = get_theme()
+    return _luminance(theme['bg_color']) < 0.5
 
 
 # 常用样式模板

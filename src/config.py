@@ -136,7 +136,9 @@ class Config:
             },
             'target_language': '中文',
             'theme': {
-                'popup_style': 'dark',  # 'dark' 或 'light'
+                'popup_style': 'dark',  # 主题名称：dark/light/ocean_blue/forest_green/royal_purple/warm_orange/rose_pink/mint_light/custom
+                'custom_accent': '#007AFF',  # 自定义主题强调色
+                'custom_bg': '#2d2d2d',  # 自定义主题背景色
                 'opacity': 0.95,
             },
             'font': {

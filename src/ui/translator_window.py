@@ -12,11 +12,11 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect, QPointF, QTimer
 from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QKeySequence, QIcon, QFont, QPixmap, QPainter, QPen, QBrush, QLinearGradient
 
 try:
-    from ..utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style, get_hidden_scrollbar_style
+    from ..utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style, get_hidden_scrollbar_style, _luminance
     from ..config import get_config
     from ..utils.tts import get_tts
 except ImportError:
-    from src.utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style, get_hidden_scrollbar_style
+    from src.utils.theme import get_theme, get_scrollbar_style, get_splitter_style, get_menu_style, get_combobox_style, get_hidden_scrollbar_style, _luminance
     from src.config import get_config
     from src.utils.tts import get_tts
 
@@ -1212,8 +1212,8 @@ class TranslatorWindow(QWidget):
             }}
         """)
 
-        # 根据主题设置悬停/点击效果
-        if self._theme_style == 'dark':
+        # 根据主题背景亮度设置悬停/点击效果
+        if _luminance(theme['bg_color']) < 0.5:
             hover_bg = "rgba(255, 255, 255, 0.15)"
             pressed_bg = "rgba(255, 255, 255, 0.25)"
         else:

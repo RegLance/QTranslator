@@ -6,7 +6,7 @@
 
 优化：
 - 使用 keyboard 库返回的句柄进行精确注销，避免字符串匹配失败导致的钩子泄漏
-- 添加定期健康检查，在锁屏/解锁后自动重新注册热键
+- 通过系统空闲时间检测锁屏/解锁，自动重新注册热键
 """
 import sys
 from typing import Optional, Callable, Dict, Any
@@ -16,6 +16,24 @@ try:
     from ..utils.logger import log_info, log_error, log_debug
 except ImportError:
     from src.utils.logger import log_info, log_error, log_debug
+
+
+def _get_system_idle_ms() -> int:
+    """获取系统空闲时间（毫秒），仅 Windows"""
+    if sys.platform != 'win32':
+        return 0
+    try:
+        import ctypes
+
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+        lii = LASTINPUTINFO()
+        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii))
+        return ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+    except Exception:
+        return 0
 
 
 class HotkeyManager(QObject):
@@ -32,9 +50,12 @@ class HotkeyManager(QObject):
         self._keyboard = None
         self._is_listening = False
 
-        # 健康检查计时器：每 60 秒检查一次热键是否仍然有效
+        # 上一次检查时记录的系统空闲时间，用于检测"从空闲中恢复"
+        self._prev_idle_ms: int = 0
+
+        # 健康检查计时器：每 30 秒检查一次
         self._health_check_timer = QTimer()
-        self._health_check_timer.setInterval(60000)
+        self._health_check_timer.setInterval(30000)
         self._health_check_timer.timeout.connect(self._check_hotkey_health)
 
     def register_hotkey(self, hotkey: str, callback: Callable = None, name: str = "translator_window") -> bool:
@@ -137,26 +158,31 @@ class HotkeyManager(QObject):
     def _check_hotkey_health(self):
         """定期检查热键是否仍然有效
 
-        Windows 在锁屏/解锁后，keyboard 库的低级键盘钩子可能被系统卸载。
-        通过尝试重新注册来恢复。
+        原理：通过 GetLastInputInfo 追踪系统空闲时间。
+        - 锁屏期间没有用户输入，空闲时间持续增长（几小时）
+        - 用户解锁时需要输入密码/PIN，空闲时间骤降到接近 0
+        - 当检测到"上次空闲时间很长，这次空闲时间很短"时，
+          说明用户刚从锁屏/长时间离开中回来
+
+        Windows 在锁屏期间会切换到安全桌面(Winlogon)，导致
+        WH_KEYBOARD_LL 低级键盘钩子被静默卸载。keyboard 库
+        自身无法感知这一变化，因此需要主动重装。
         """
-        if not self._is_listening or not self._keyboard:
+        if not self._is_listening:
             return
 
-        try:
-            # 检查 keyboard 的内部钩子是否还存活
-            # keyboard 库使用一个全局的钩子线程，如果线程死了需要重新注册
-            import keyboard
-            # 尝试调用一个轻量操作来检测钩子是否还活着
-            # 如果 keyboard 内部的钩子线程已经终止，这里会出错
-            if hasattr(keyboard, '_listener') and keyboard._listener is not None:
-                if hasattr(keyboard._listener, 'is_alive') and not keyboard._listener.is_alive():
-                    log_info("[热键管理器] 检测到键盘钩子线程已终止，正在重新注册...")
-                    self._reinstall_all_hotkeys()
-        except Exception as e:
-            log_debug(f"热键健康检查异常: {e}")
-            # 出现异常可能意味着钩子已损坏，尝试重装
-            self._reinstall_all_hotkeys()
+        idle_ms = _get_system_idle_ms()
+
+        # 检测"从长时间空闲中恢复"：
+        # 上次检查时空闲 > 60秒，当前空闲 < 5秒 → 用户刚回来
+        if self._prev_idle_ms > 60000 and idle_ms < 5000:
+            log_info(f"[热键管理器] 检测到用户从空闲中恢复"
+                     f"（空闲了 {self._prev_idle_ms // 1000}秒），"
+                     f"2秒后重新注册热键...")
+            # 延迟 2 秒，等桌面环境完全就绪
+            QTimer.singleShot(2000, self._reinstall_all_hotkeys)
+
+        self._prev_idle_ms = idle_ms
 
     def _reinstall_all_hotkeys(self):
         """重新安装所有热键"""

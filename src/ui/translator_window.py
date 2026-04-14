@@ -1552,6 +1552,37 @@ class TranslatorWindow(QWidget):
         if self._current_worker is not None:
             self._current_worker.deleteLater()
             self._current_worker = None
+
+        # 清空输出
+        self._output_text.clear()
+        self._streaming_text = ""
+
+        # 初始化流式状态
+        self._is_streaming = True
+        self._last_adjusted_height = 0
+        self._scrollbar_hidden = False
+        self._user_resized_during_streaming = False
+        self._char_queue.clear()
+        self._char_timer.stop()
+        self._pending_finish_callback = None
+
+        # 锁定原文框高度，防止流式输出期间 splitter 重新分配导致文字跳动
+        self._lock_input_height()
+
+        # 流式输出开始时隐藏滚动条（固定高度模式下不隐藏）
+        if not self._fixed_height_mode:
+            self._hide_output_scrollbar()
+
+        # 禁用所有操作按钮
+        self._translate_btn.setEnabled(False)
+        self._polishing_btn.setEnabled(False)
+        self._summarize_btn.setEnabled(False)
+
+        # 启动分隔线动画（指示正在润色）
+        self._splitter.start_animation()
+
+        # 启动润色线程
+        self._current_worker = StreamingPolishingWorker(text)
         self._current_worker.chunk_received.connect(self._on_chunk_received)
         self._current_worker.polishing_finished.connect(self._on_polishing_finished)
         self._current_worker.polishing_error.connect(self._on_polishing_error)

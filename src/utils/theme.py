@@ -1,5 +1,40 @@
 """全局主题管理模块 - QTranslator"""
+import os
+import tempfile
 from typing import Dict, Any
+
+
+# 缓存对勾图片路径
+_checkmark_path: str = None
+
+
+def _ensure_checkmark_image() -> str:
+    """生成白色对勾 PNG 图片并返回路径（仅生成一次）"""
+    global _checkmark_path
+    if _checkmark_path and os.path.exists(_checkmark_path):
+        return _checkmark_path
+
+    from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
+    from PyQt6.QtCore import Qt
+
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(QColor(0, 0, 0, 0))
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(
+        QColor(255, 255, 255), 2.0,
+        Qt.PenStyle.SolidLine,
+        Qt.PenCapStyle.RoundCap,
+        Qt.PenJoinStyle.RoundJoin
+    ))
+    painter.drawLine(3, 8, 6, 12)
+    painter.drawLine(6, 12, 13, 4)
+    painter.end()
+
+    _checkmark_path = os.path.join(tempfile.gettempdir(), 'qtranslator_checkmark.png')
+    pixmap.save(_checkmark_path)
+    return _checkmark_path
 
 # 主题样式定义
 THEMES = {
@@ -332,7 +367,8 @@ def get_lineedit_style(theme: Dict[str, Any]) -> str:
 
 
 def get_checkbox_style(theme: Dict[str, Any]) -> str:
-    """获取复选框样式 - 使用图标而非默认指示器"""
+    """获取复选框样式 - 直接样式化原生指示器"""
+    checkmark_url = _ensure_checkmark_image().replace('\\', '/')
     return f"""
         QCheckBox {{
             color: {theme['text_primary']};
@@ -340,8 +376,19 @@ def get_checkbox_style(theme: Dict[str, Any]) -> str:
             spacing: 8px;
         }}
         QCheckBox::indicator {{
-            width: 0px;
-            height: 0px;
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+            border: 1.5px solid {theme['scrollbar_handle']};
+            background-color: {theme['input_bg']};
+        }}
+        QCheckBox::indicator:hover {{
+            border-color: {theme['accent_color']};
+        }}
+        QCheckBox::indicator:checked {{
+            background-color: {theme['accent_color']};
+            border-color: {theme['accent_color']};
+            image: url({checkmark_url});
         }}
     """
 

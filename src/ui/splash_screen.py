@@ -28,12 +28,15 @@ class SplashScreen(QWidget):
         """初始化启动动画窗口"""
         super().__init__()
 
-        # 设置窗口属性：无边框、置顶、透明背景
+        # 设置窗口属性：无边框、置顶、透明背景、无阴影
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool |
+            Qt.WindowType.NoDropShadowWindowHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
         self._setup_ui()
         self._position_window()

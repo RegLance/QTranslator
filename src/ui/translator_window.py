@@ -605,14 +605,14 @@ class TranslatorWindow(QWidget):
         # 最小化按钮
         self._minimize_btn = QPushButton("─")
         self._minimize_btn.setObjectName("minimizeBtn")
-        self._minimize_btn.setFixedSize(20, 20)
+        self._minimize_btn.setFixedSize(22, 22)
         self._minimize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._minimize_btn.setStyleSheet(f"""
             QPushButton#minimizeBtn {{
                 background-color: transparent;
                 color: {theme['text_muted']};
                 border: none;
-                border-radius: 10px;
+                border-radius: 11px;
                 font-size: 10px;
                 font-weight: bold;
             }}
@@ -627,16 +627,17 @@ class TranslatorWindow(QWidget):
         # 最大化按钮
         self._maximize_btn = QPushButton("□")
         self._maximize_btn.setObjectName("maximizeBtn")
-        self._maximize_btn.setFixedSize(20, 20)
+        self._maximize_btn.setFixedSize(22, 22)
         self._maximize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._maximize_btn.setStyleSheet(f"""
             QPushButton#maximizeBtn {{
                 background-color: transparent;
                 color: {theme['text_muted']};
                 border: none;
-                border-radius: 10px;
+                border-radius: 11px;
                 font-size: 12px;
                 font-weight: bold;
+                padding-bottom: 2px;
             }}
             QPushButton#maximizeBtn:hover {{
                 background-color: {theme['button_hover']};
@@ -649,16 +650,17 @@ class TranslatorWindow(QWidget):
         # 关闭按钮
         self._close_btn = QPushButton("×")
         self._close_btn.setObjectName("closeBtn")
-        self._close_btn.setFixedSize(20, 20)
+        self._close_btn.setFixedSize(22, 22)
         self._close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._close_btn.setStyleSheet(f"""
             QPushButton#closeBtn {{
                 background-color: transparent;
                 color: {theme['text_muted']};
                 border: none;
-                border-radius: 10px;
+                border-radius: 11px;
                 font-size: 14px;
                 font-weight: bold;
+                padding-bottom: 1px;
             }}
             QPushButton#closeBtn:hover {{
                 background-color: {theme['close_hover']};
@@ -1137,7 +1139,7 @@ class TranslatorWindow(QWidget):
                 background-color: transparent;
                 color: {theme['text_muted']};
                 border: none;
-                border-radius: 10px;
+                border-radius: 11px;
                 font-size: 10px;
                 font-weight: bold;
             }}
@@ -1152,9 +1154,10 @@ class TranslatorWindow(QWidget):
                 background-color: transparent;
                 color: {theme['text_muted']};
                 border: none;
-                border-radius: 10px;
+                border-radius: 11px;
                 font-size: 12px;
                 font-weight: bold;
+                padding-bottom: 2px;
             }}
             QPushButton#maximizeBtn:hover {{
                 background-color: {theme['button_hover']};
@@ -1167,9 +1170,10 @@ class TranslatorWindow(QWidget):
                 background-color: transparent;
                 color: {theme['text_muted']};
                 border: none;
-                border-radius: 10px;
+                border-radius: 11px;
                 font-size: 14px;
                 font-weight: bold;
+                padding-bottom: 1px;
             }}
             QPushButton#closeBtn:hover {{
                 background-color: {theme['close_hover']};
@@ -1421,6 +1425,23 @@ class TranslatorWindow(QWidget):
         self._show_output_scrollbar()
         self._scrollbar_hidden = False
 
+    def _cancel_current_worker(self):
+        """取消当前正在运行的工作线程，断开所有信号连接"""
+        if self._current_worker:
+            # 先断开所有可能的信号连接，防止旧 worker 的残留信号干扰新任务
+            for signal_name in ('chunk_received', 'translation_finished', 'translation_error',
+                                'polishing_finished', 'polishing_error',
+                                'summarize_finished', 'summarize_error'):
+                try:
+                    getattr(self._current_worker, signal_name).disconnect()
+                except (TypeError, RuntimeError, AttributeError):
+                    pass
+            if self._current_worker.isRunning():
+                self._current_worker.cancel()
+                # 短暂等待，不阻塞 UI；旧线程会在检测到取消标志后自行退出
+                self._current_worker.wait(100)
+            self._current_worker = None
+
     def _start_translation(self):
         """开始翻译"""
         text = self._input_text.toPlainText().strip()
@@ -1428,10 +1449,7 @@ class TranslatorWindow(QWidget):
             return
 
         # 取消之前的翻译
-        if self._current_worker and self._current_worker.isRunning():
-            self._current_worker.cancel()
-            self._current_worker.wait(1000)
-            self._current_worker = None
+        self._cancel_current_worker()
 
         # 清空输出
         self._output_text.clear()
@@ -1637,10 +1655,7 @@ class TranslatorWindow(QWidget):
             return
 
         # 取消之前的任务
-        if self._current_worker and self._current_worker.isRunning():
-            self._current_worker.cancel()
-            self._current_worker.wait(1000)
-            self._current_worker = None
+        self._cancel_current_worker()
 
         # 清空输出
         self._output_text.clear()
@@ -1750,10 +1765,7 @@ class TranslatorWindow(QWidget):
             return
 
         # 取消之前的任务
-        if self._current_worker and self._current_worker.isRunning():
-            self._current_worker.cancel()
-            self._current_worker.wait(1000)
-            self._current_worker = None
+        self._cancel_current_worker()
 
         # 清空输出
         self._output_text.clear()
@@ -2933,6 +2945,26 @@ class TranslatorWindow(QWidget):
         # 记忆窗口位置：在隐藏前保存当前位置
         if self._remember_window_position:
             self._saved_window_pos = self.pos()
+
+        # 停止一切正在进行的翻译任务
+        self._cancel_current_worker()
+        self._char_timer.stop()
+        self._char_queue.clear()
+        self._pending_finish_callback = None
+        self._is_streaming = False
+
+        # 停止分隔线动画
+        self._splitter.stop_animation()
+
+        # 清空内容
+        self._input_text.clear()
+        self._output_text.clear()
+        self._streaming_text = ""
+
+        # 恢复按钮状态
+        self._translate_btn.setEnabled(True)
+        self._polishing_btn.setEnabled(True)
+        self._summarize_btn.setEnabled(True)
 
         # 重置自动翻译模式状态
         self._auto_mode = False

@@ -280,7 +280,7 @@ try:
     from .ui.translator_window import get_translator_window
     from .ui.history_window import get_history_window
     from .ui.help_window import get_help_window
-    from .ui.splash_screen import show_splash_screen
+
     from .utils.logger import get_logger, log_info, log_error, log_debug
     from .utils.history import add_translation_history
     from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
@@ -298,7 +298,7 @@ except ImportError:
     from src.ui.translator_window import get_translator_window
     from src.ui.history_window import get_history_window
     from src.ui.help_window import get_help_window
-    from src.ui.splash_screen import show_splash_screen
+
     from src.utils.logger import get_logger, log_info, log_error, log_debug
     from src.utils.history import add_translation_history
     from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
@@ -2069,8 +2069,14 @@ class MainController(QObject):
         if not text or not text.strip():
             return
 
-        # 检查是否已经有相同的文本正在翻译
-        if text == self._last_text and self._translator_window.isVisible() and self._translator_window.is_auto_mode():
+        # 相同文本且翻译窗口可见时，不重复翻译，只移动窗口到新位置并置顶
+        if text.strip() == self._last_text and self._translator_window.isVisible():
+            cursor_pos = QCursor.pos()
+            mouse_pos = (cursor_pos.x(), cursor_pos.y())
+            x, y = self._translator_window._calculate_position(mouse_pos)
+            self._translator_window.move(x, y)
+            self._translator_window.raise_()
+            self._translator_window.activateWindow()
             return
 
         self._last_text = text.strip()
@@ -2223,22 +2229,28 @@ def main():
         from PyQt6.QtGui import QIcon
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    # 主控制器引用（延迟初始化）
-    controller = None
+    # 主控制器引用
+    controller = MainController()
+    controller.start()
 
-    # 定义启动完成后的初始化函数
-    def on_splash_finished():
-        nonlocal controller
-        controller = MainController()
-        controller.start()
-
-    # 显示启动动画，动画完成后初始化主控制器
-    show_splash_screen(on_splash_finished)
+    # 启动时在屏幕中心显示翻译窗口
+    screen = app.primaryScreen()
+    if screen:
+        geo = screen.availableGeometry()
+        tw = controller._translator_window
+        tw.update_theme()
+        tw._reset_window_height()
+        win_w, win_h = tw.width(), tw.height()
+        x = geo.x() + (geo.width() - win_w) // 2
+        y = geo.y() + (geo.height() - win_h) // 2
+        tw.move(x, y)
+        tw.show()
+        tw.raise_()
+        tw.activateWindow()
 
     exit_code = app.exec()
 
-    if controller:
-        controller.stop()
+    controller.stop()
     # 释放单实例锁
     single_instance.release()
     sys.exit(exit_code)

@@ -2053,12 +2053,12 @@ class MainController(QObject):
         from PyQt6.QtWidgets import QApplication
         QApplication.processEvents()
 
-        # 保存选中文本
-        self._last_text = text.strip()
-        self._translate_button.set_selected_text(self._last_text)
+        # 保存选中文本到翻译按钮（不更新 _last_text，它只记录最后一次发起翻译的文本）
+        selected_text = text.strip()
+        self._translate_button.set_selected_text(selected_text)
 
         # 显示翻译图标按钮（统一方式）
-        self._translate_button.show_at_position(mouse_pos, self._last_text, program_name)
+        self._translate_button.show_at_position(mouse_pos, selected_text, program_name)
 
         # 再次强制处理事件
         QApplication.processEvents()

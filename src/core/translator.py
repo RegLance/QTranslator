@@ -215,11 +215,13 @@ class Translator:
         # 判断是否翻译成中文
         to_chinese = target_lang in ['中文', 'zh', 'zh-cn', 'zh-hans']
         
-        # 判断是否是单词模式（短文本且无空格或只有一个单词）
-        is_single_word = len(text.strip()) <= 20 and (
-            ' ' not in text.strip() or 
-            (text.strip().count(' ') == 0 and len(text.strip()) < 15)
+        # 判断是否是单词模式（仅适用于拉丁字母为主的短文本，如英文单词）
+        # 韩文、日文等 CJK 文字即使无空格也可能是完整短语，不应触发单词词典模式
+        stripped = text.strip()
+        is_latin_dominant = stripped.isascii() or all(
+            c.isascii() or c in '·''""—–' for c in stripped
         )
+        is_single_word = is_latin_dominant and len(stripped) <= 20 and ' ' not in stripped
         
         if to_chinese:
             # 翻译成中文
@@ -239,7 +241,7 @@ class Translator:
                 user_prompt = f"单词是：{text}"
             else:
                 # 普通翻译模式
-                system_prompt = f"""你是一个专业的翻译引擎，请将文本翻译成{target_lang}。
+                system_prompt = f"""你是一个专业的翻译引擎，请将以下{source_lang}文本翻译成{target_lang}。
 翻译要求：
 1. 保持原文的风格和语气
 2. 对于专业术语，给出准确的翻译
@@ -265,7 +267,7 @@ Examples:
             else:
                 # 普通翻译模式
                 system_prompt = f"""You are a professional translation engine.
-Please translate the text into {target_lang} without explanation.
+Please translate the following {source_lang} text into {target_lang} without explanation.
 
 Requirements:
 1. Keep the style and tone of the original text

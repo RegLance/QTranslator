@@ -694,7 +694,10 @@ class TranslatorWindow(QWidget):
         self._lang_combo = QComboBox()
         self._lang_combo.addItems(["自动检测", "中文", "英文", "日文", "韩文"])
         self._lang_combo.setFixedHeight(28)
+        self._lang_combo.setMaxVisibleItems(5)  # 避免弹出视图滚动
         self._lang_combo.setStyleSheet(get_combobox_style(theme))
+        # 预创建弹出视图，避免首次打开时懒加载导致的卡顿
+        self._lang_combo.view()
         control_layout.addWidget(self._lang_combo)
         control_layout.addStretch()
 

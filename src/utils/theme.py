@@ -510,8 +510,8 @@ def get_combobox_style(theme: Dict[str, Any]) -> str:
             selection-background-color: {theme['accent_color']};
             selection-color: #ffffff;
             border: 1px solid {theme['border_color']};
-            border-radius: 4px;
             padding: 2px;
+            outline: none;
         }}
     """
 

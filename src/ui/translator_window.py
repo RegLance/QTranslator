@@ -1435,6 +1435,18 @@ class TranslatorWindow(QWidget):
         self._show_output_scrollbar()
         self._scrollbar_hidden = False
 
+    def _disconnect_worker_signals(self):
+        """断开当前工作线程的所有信号连接，防止残留信号污染新任务"""
+        if not self._current_worker:
+            return
+        for signal_name in ['chunk_received', 'translation_finished', 'translation_error',
+                            'polishing_finished', 'polishing_error',
+                            'summarize_finished', 'summarize_error']:
+            try:
+                getattr(self._current_worker, signal_name).disconnect()
+            except (TypeError, RuntimeError, AttributeError):
+                pass
+
     def _start_translation(self):
         """开始翻译"""
         text = self._input_text.toPlainText().strip()
@@ -1445,7 +1457,9 @@ class TranslatorWindow(QWidget):
         if self._current_worker and self._current_worker.isRunning():
             self._current_worker.cancel()
             self._current_worker.wait(1000)
-            self._current_worker = None
+        # 断开旧 worker 信号，防止事件队列中的残留信号污染新任务
+        self._disconnect_worker_signals()
+        self._current_worker = None
 
         # 清空输出
         self._output_text.clear()
@@ -1490,6 +1504,10 @@ class TranslatorWindow(QWidget):
     def _on_chunk_received(self, chunk: str):
         """收到翻译片段 - 将字符加入逐字输出缓冲区"""
         try:
+            # 忽略来自已取消/旧工作线程的残留信号
+            if self.sender() is not self._current_worker:
+                return
+
             if not hasattr(self, '_streaming_text'):
                 self._streaming_text = ""
                 self._is_streaming = True
@@ -1557,6 +1575,8 @@ class TranslatorWindow(QWidget):
 
     def _on_translation_finished(self, result: str):
         """翻译完成 - 等待逐字缓冲区清空后再执行完成逻辑"""
+        if self.sender() is not self._current_worker:
+            return
         from PyQt6.QtCore import QTimer
         if self._char_queue:
             # 缓冲区还有字符，延迟执行完成逻辑
@@ -1617,6 +1637,8 @@ class TranslatorWindow(QWidget):
 
     def _on_translation_error(self, error: str):
         """翻译错误"""
+        if self.sender() is not self._current_worker:
+            return
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(0, lambda: self._do_translation_error(error))
 
@@ -1654,7 +1676,9 @@ class TranslatorWindow(QWidget):
         if self._current_worker and self._current_worker.isRunning():
             self._current_worker.cancel()
             self._current_worker.wait(1000)
-            self._current_worker = None
+        # 断开旧 worker 信号，防止事件队列中的残留信号污染新任务
+        self._disconnect_worker_signals()
+        self._current_worker = None
 
         # 清空输出
         self._output_text.clear()
@@ -1693,6 +1717,8 @@ class TranslatorWindow(QWidget):
 
     def _on_polishing_finished(self, result: str):
         """润色完成 - 等待逐字缓冲区清空后再执行完成逻辑"""
+        if self.sender() is not self._current_worker:
+            return
         from PyQt6.QtCore import QTimer
         if self._char_queue:
             self._pending_finish_callback = lambda: self._do_polishing_finished(result)
@@ -1732,6 +1758,8 @@ class TranslatorWindow(QWidget):
 
     def _on_polishing_error(self, error: str):
         """润色错误"""
+        if self.sender() is not self._current_worker:
+            return
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(0, lambda: self._do_polishing_error(error))
 
@@ -1767,7 +1795,9 @@ class TranslatorWindow(QWidget):
         if self._current_worker and self._current_worker.isRunning():
             self._current_worker.cancel()
             self._current_worker.wait(1000)
-            self._current_worker = None
+        # 断开旧 worker 信号，防止事件队列中的残留信号污染新任务
+        self._disconnect_worker_signals()
+        self._current_worker = None
 
         # 清空输出
         self._output_text.clear()
@@ -1811,6 +1841,8 @@ class TranslatorWindow(QWidget):
 
     def _on_summarize_finished(self, result: str):
         """总结完成 - 等待逐字缓冲区清空后再执行完成逻辑"""
+        if self.sender() is not self._current_worker:
+            return
         from PyQt6.QtCore import QTimer
         if self._char_queue:
             self._pending_finish_callback = lambda: self._do_summarize_finished(result)
@@ -1853,6 +1885,8 @@ class TranslatorWindow(QWidget):
 
     def _on_summarize_error(self, error: str):
         """总结错误"""
+        if self.sender() is not self._current_worker:
+            return
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(0, lambda: self._do_summarize_error(error))
 

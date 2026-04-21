@@ -292,7 +292,12 @@ Examples:
 
         system_prompt = 'You are an expert translator, translate directly without explanation.'
 
-        command_prompt = f"""Please edit the following sentences in {source_lang} to improve clarity, conciseness, and coherence, making them match the expression of native speakers. Use Markdown format to highlight the changes: use ~~strikethrough~~ for deleted text and **bold** for added or modified text. Keep the unchanged parts as they are."""
+        # 根据配置决定是否显示润色差异
+        polishing_show_diff = get_config().get('polishing.show_diff', False)
+        if polishing_show_diff:
+            command_prompt = f"Please edit the following sentences in {source_lang} to improve clarity, conciseness, and coherence, making them match the expression of native speakers. Use Markdown format to highlight the changes: use ~~strikethrough~~ for deleted text and **bold** for added or modified text. Keep the unchanged parts as they are."
+        else:
+            command_prompt = f"Please edit the following sentences in {source_lang} to improve clarity, conciseness, and coherence, making them match the expression of native speakers."
 
         user_prompt = f"Only reply the result and nothing else. {command_prompt}:\n\n{text.strip()}"
 

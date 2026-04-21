@@ -158,6 +158,12 @@ class Config:
             },
             'writing': {
                 'keep_original': False,  # 保留原文
+                'newline_hotkey': 'enter',  # 换行快捷键：enter / shift+enter / ctrl+enter
+                'animation': True,  # 动画逐字输入
+                'paste_threshold': 10,  # 超过此字符数用剪贴板粘贴
+            },
+            'polishing': {
+                'show_diff': False,  # 显示润色差异（默认不勾选）
             },
             'translator_window': {
                 'fixed_height_mode': False,  # 固定高度模式（勾选后不自动调整窗口高度）

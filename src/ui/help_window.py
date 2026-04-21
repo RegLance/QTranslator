@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QTextEdit
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QUrl
-from PyQt6.QtGui import QFont, QColor, QCursor, QDesktopServices
+from PyQt6.QtGui import QFont, QColor, QCursor, QDesktopServices, QMouseEvent
 
 try:
     from ..config import get_config, APP_NAME, APP_VERSION, BUILD_TIME
@@ -40,6 +40,11 @@ class HelpWindow(QWidget):
         # 加载配置
         config = get_config()
         self._theme_style = config.get('theme.popup_style', 'dark')
+
+        # 拖动相关
+        self._is_dragging = False
+        self._drag_start_pos = None
+        self._drag_window_start_pos = None
 
         # 窗口属性
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
@@ -183,7 +188,7 @@ class HelpWindow(QWidget):
 主要功能：
 • 划词翻译：选中文本后自动出现翻译按钮，点击即可翻译
 • 翻译窗口：独立窗口支持输入长文本，可选择目标语言
-• 润色功能：对文本进行润色改进，使用Markdown标记修改部分
+• 润色功能：对文本进行润色改进，可在设置中开启差异标记
 • 总结功能：对长文本进行智能总结
 • 划词写作：翻译并直接替换原文，支持保留原文选项
 • 翻译历史：自动保存历史记录，方便查阅和管理
@@ -213,7 +218,12 @@ class HelpWindow(QWidget):
    • 翻译结果会直接替换原文或插入在原文下方
    • 可在设置中开启"保留原文"选项
 
-5. 快捷键（可在设置中自定义）
+5. 润色差异
+   • 在设置中勾选"显示润色差异"后，润色结果将标记修改部分
+   • 删除线（~~删除~~）标记被删除的文字
+   • 粗体（**新增**）标记新增或修改的文字
+
+6. 快捷键（可在设置中自定义）
    • Ctrl+O：唤醒翻译窗口
    • Ctrl+I：划词写作
    • Esc：关闭窗口
@@ -313,6 +323,32 @@ class HelpWindow(QWidget):
         """)
         label.setWordWrap(True)
         layout.addWidget(label)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        """鼠标按下事件 - 支持标题栏拖动"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint()
+            # 标题栏区域（标题栏高度约28px）
+            if pos.y() <= 28:
+                self._is_dragging = True
+                self._drag_start_pos = event.globalPosition().toPoint()
+                self._drag_window_start_pos = self.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        """鼠标移动事件 - 拖动窗口"""
+        if self._is_dragging and self._drag_start_pos:
+            delta = event.globalPosition().toPoint() - self._drag_start_pos
+            new_pos = self._drag_window_start_pos + delta
+            self.move(new_pos)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        """鼠标释放事件 - 结束拖动"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._is_dragging = False
+            self._drag_start_pos = None
+        super().mouseReleaseEvent(event)
 
     def closeEvent(self, event):
         """关闭事件"""

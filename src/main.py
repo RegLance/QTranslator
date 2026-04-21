@@ -617,7 +617,41 @@ class SettingsDialog(QDialog):
         self._writing_hint_label.setWordWrap(True)
         writing_layout.addWidget(self._writing_hint_label)
 
+        # 换行快捷键选择
+        newline_layout = QHBoxLayout()
+        self._newline_hotkey_label = QLabel("换行快捷键:")
+        self._newline_hotkey_combo = QComboBox()
+        self._newline_hotkey_combo.addItems(["enter", "shift+enter", "ctrl+enter"])
+        self._newline_hotkey_combo.setMinimumHeight(32)
+        newline_layout.addWidget(self._newline_hotkey_label)
+        newline_layout.addWidget(self._newline_hotkey_combo)
+        newline_layout.addStretch()
+        writing_layout.addLayout(newline_layout)
+
+        # 动画输入勾选
+        self._animation_check = QCheckBox("动画输入（逐字输入效果）")
+        self._animation_check.toggled.connect(self._on_checkbox_toggled)
+        writing_layout.addWidget(self._animation_check)
+
         scroll_layout.addWidget(self._writing_group)
+
+        # 润色设置组
+        self._polishing_group = QGroupBox("润色设置")
+        polishing_layout = QVBoxLayout(self._polishing_group)
+        polishing_layout.setSpacing(8)
+        polishing_layout.setContentsMargins(12, 20, 12, 12)
+
+        self._polishing_show_diff_check = QCheckBox("显示润色差异")
+        self._polishing_show_diff_check.toggled.connect(self._on_checkbox_toggled)
+        polishing_layout.addWidget(self._polishing_show_diff_check)
+
+        # 添加说明文字
+        self._polishing_show_diff_hint_label = QLabel("勾选后，润色结果将使用删除线标记被删除的文字，使用粗体标记新增或修改的文字")
+        self._polishing_show_diff_hint_label.setProperty("class", "hint")
+        self._polishing_show_diff_hint_label.setWordWrap(True)
+        polishing_layout.addWidget(self._polishing_show_diff_hint_label)
+
+        scroll_layout.addWidget(self._polishing_group)
 
         # 翻译窗口设置组
         self._translator_window_group = QGroupBox("翻译窗口设置")
@@ -1001,7 +1035,8 @@ class SettingsDialog(QDialog):
         self._cached_uncheck_icon = self._create_uncheck_icon()
         for cb in (self._auto_start_check, self._keep_original_check,
                    self._fixed_height_check, self._remember_size_check,
-                   self._remember_position_check, self._always_on_top_check):
+                   self._remember_position_check, self._always_on_top_check,
+                   self._polishing_show_diff_check, self._animation_check):
             cb.setIcon(self._cached_check_icon if cb.isChecked() else self._cached_uncheck_icon)
 
     def _start_hotkey_capture(self, target: str):
@@ -1188,6 +1223,20 @@ class SettingsDialog(QDialog):
         keep_original = self._config.get('writing.keep_original', False)
         self._keep_original_check.setChecked(keep_original)
 
+        # 换行快捷键选项
+        newline_hotkey = self._config.get('writing.newline_hotkey', 'enter')
+        index = self._newline_hotkey_combo.findText(newline_hotkey)
+        if index >= 0:
+            self._newline_hotkey_combo.setCurrentIndex(index)
+
+        # 动画输入选项
+        animation = self._config.get('writing.animation', True)
+        self._animation_check.setChecked(animation)
+
+        # 显示润色差异选项
+        polishing_show_diff = self._config.get('polishing.show_diff', False)
+        self._polishing_show_diff_check.setChecked(polishing_show_diff)
+
         # 固定高度模式选项
         fixed_height_mode = self._config.get('translator_window.fixed_height_mode', False)
         self._fixed_height_check.setChecked(fixed_height_mode)
@@ -1211,10 +1260,12 @@ class SettingsDialog(QDialog):
         self._disable_wheel_event(self._popup_style_combo)
         self._disable_wheel_event(self._font_size_spin)
         self._disable_wheel_event(self._browser_delay_spin)
+        self._disable_wheel_event(self._newline_hotkey_combo)
 
         # 预初始化 ComboBox 下拉视图，避免首次点击卡顿
         self._target_lang_combo.view()
         self._popup_style_combo.view()
+        self._newline_hotkey_combo.view()
 
     def _disable_wheel_event(self, widget):
         """禁用控件的鼠标滚轮事件，防止误触"""
@@ -1313,6 +1364,12 @@ class SettingsDialog(QDialog):
             # 写作设置
             keep_original = self._keep_original_check.isChecked()
             self._config.set('writing.keep_original', keep_original)
+            self._config.set('writing.newline_hotkey', self._newline_hotkey_combo.currentText())
+            self._config.set('writing.animation', self._animation_check.isChecked())
+
+            # 润色设置
+            polishing_show_diff = self._polishing_show_diff_check.isChecked()
+            self._config.set('polishing.show_diff', polishing_show_diff)
 
             # 翻译窗口固定高度模式
             fixed_height_mode = self._fixed_height_check.isChecked()
@@ -1829,9 +1886,14 @@ class MainController(QObject):
     def _on_writing_hotkey_triggered(self):
         """写作热键触发时执行写作功能
 
-        获取文本的方式：
-        1. 优先使用 selection-hook 获取用户选中的文本（与划词翻译一致）
+        获取文本的方式（优先级从高到低）：
+        1. 使用 Ctrl+C + 标记检测当前是否真的有选中文本
+           （比 selection-hook 更可靠，因为 selection-hook 可能返回陈旧数据）
         2. 如果没有选中，则使用 ctrl+a + ctrl+c 获取全文
+
+        关键改进：不再优先使用 selection-hook，因为它无法区分
+        "当前真的有选中"和"之前选中过但现在已经没有选中了"，
+        会导致用户未选中文本时误判为有选中，从而跳过 ctrl+a。
         """
         log_debug("写作热键触发")
 
@@ -1847,37 +1909,13 @@ class MainController(QObject):
 
         try:
             import keyboard
+            import pyperclip
+            import uuid
 
             # 释放热键相关的按键（Ctrl/Shift 可能仍处于按下状态）
             keyboard.release('ctrl')
             keyboard.release('shift')
             time.sleep(0.05)
-
-            # 方式1：使用 selection-hook 获取选中文本
-            # 检查最近 3 秒内是否有新的选择（用户选中后按热键，时间应该很近）
-            current_time = time.time()
-            selection_threshold = 3.0  # 3秒内认为是"当前选中"
-
-            if self._text_capture.has_new_selection(current_time - selection_threshold):
-                # 有最近的选中内容，直接使用
-                selected_text = self._text_capture.capture_direct()
-                if selected_text and selected_text.strip():
-                    log_info(f"通过 selection-hook 获取选中文本: '{selected_text[:100]}...'")
-                    self._start_writing(selected_text.strip(), has_selection=True)
-                    return
-
-            # 方式2：selection-hook 没有有效选中，尝试获取全文
-            log_info("没有检测到最近的选中文本，尝试获取全文")
-            self._get_all_text_for_writing_async()
-
-        except Exception as e:
-            log_error(f"写作热键处理失败: {e}")
-
-    def _get_all_text_for_writing_async(self):
-        """异步获取全文并开始写作"""
-        try:
-            import keyboard
-            import pyperclip
 
             # 保存当前剪贴板内容
             saved_clipboard = ""
@@ -1885,6 +1923,103 @@ class MainController(QObject):
                 saved_clipboard = pyperclip.paste()
             except Exception:
                 pass
+
+            # 设置唯一标记到剪贴板，用于检测 Ctrl+C 是否成功更新剪贴板
+            # 如果 Ctrl+C 后剪贴板仍为此标记，说明没有选中文本
+            # （比比较 saved_clipboard 更可靠，因为选中文本可能恰好与旧剪贴板相同）
+            marker = f"__QTRANSLATOR_SEL_{uuid.uuid4().hex}__"
+            try:
+                pyperclip.copy(marker)
+            except Exception:
+                pass
+            time.sleep(0.03)
+
+            # 释放修饰键确保 Ctrl+C 能正常工作
+            keyboard.release('ctrl')
+            keyboard.release('shift')
+            time.sleep(0.05)
+
+            # 尝试 Ctrl+C 复制当前选中内容
+            keyboard.press('ctrl')
+            time.sleep(0.02)
+            keyboard.press('c')
+            time.sleep(0.02)
+            keyboard.release('c')
+            time.sleep(0.02)
+            keyboard.release('ctrl')
+            time.sleep(0.1)
+
+            keyboard.release('ctrl')
+            keyboard.release('shift')
+
+            # 读取剪贴板内容
+            clipboard_text = ""
+            try:
+                clipboard_text = pyperclip.paste()
+            except Exception:
+                pass
+
+            # 判断是否有选中文本：剪贴板不再是标记值，说明 Ctrl+C 成功复制了选中内容
+            has_real_selection = (clipboard_text
+                                  and clipboard_text.strip()
+                                  and clipboard_text != marker)
+
+            if has_real_selection:
+                log_info(f"通过 Ctrl+C 检测到选中文本: '{clipboard_text[:100]}...'")
+                # 恢复剪贴板
+                if saved_clipboard:
+                    try:
+                        pyperclip.copy(saved_clipboard)
+                    except Exception:
+                        pass
+                # 不取消选中！文本保持选中状态，交给 _prepare_for_input 处理：
+                #   keep_original=True: right 键移到选区末尾 → 插入换行 → 翻译在原文下方
+                #   keep_original=False: delete 键删除选中文本 → 替换为翻译
+                # 如果这里按 left 取消选中，光标会移到选区开头，
+                # 后续 right 只移1个字符，翻译会被插入原文中间
+                self._start_writing(clipboard_text.strip(), has_selection=True)
+                return
+
+            # 没有选中内容，恢复剪贴板并获取全文
+            log_info("未检测到选中文本，获取全文")
+            if saved_clipboard:
+                try:
+                    pyperclip.copy(saved_clipboard)
+                except Exception:
+                    pass
+            self._get_all_text_for_writing_async()
+
+        except Exception as e:
+            log_error(f"写作热键处理失败: {e}")
+
+    def _get_all_text_for_writing_async(self):
+        """异步获取全文并开始写作
+
+        通过在 ctrl+a + ctrl+c 前设置唯一标记到剪贴板，
+        操作后检测剪贴板是否被更新，避免因目标应用不支持
+        ctrl+a 而误用旧剪贴板内容作为全文。
+        """
+        try:
+            import keyboard
+            import pyperclip
+            import uuid
+
+            # 保存当前剪贴板内容
+            saved_clipboard = ""
+            try:
+                saved_clipboard = pyperclip.paste()
+            except Exception:
+                pass
+
+            # 生成唯一标记，设置到剪贴板
+            # 这样如果 ctrl+a + ctrl+c 失败（如目标应用不支持全选），
+            # 剪贴板仍为此标记，我们可以检测到并报错
+            clipboard_marker = f"__QTRANSLATOR_MARKER_{uuid.uuid4().hex}__"
+            try:
+                pyperclip.copy(clipboard_marker)
+            except Exception:
+                pass
+            time.sleep(0.03)
 
             # 再次确保按键状态正确
             keyboard.release('ctrl')
@@ -1910,18 +2045,38 @@ class MainController(QObject):
             keyboard.release('ctrl')
 
             # 等待剪贴板更新
-            QTimer.singleShot(200, lambda: self._process_full_text_for_writing(saved_clipboard))
+            QTimer.singleShot(200, lambda: self._process_full_text_for_writing(
+                saved_clipboard, clipboard_marker))
 
         except Exception as e:
             log_error(f"获取全文失败: {e}")
 
-    def _process_full_text_for_writing(self, saved_clipboard: str):
-        """处理全文获取结果并开始写作"""
+    def _process_full_text_for_writing(self, saved_clipboard: str,
+                                        clipboard_marker: str = ""):
+        """处理全文获取结果并开始写作
+
+        Args:
+            saved_clipboard: 操作前的剪贴板内容，用于恢复
+            clipboard_marker: 操作前设置的唯一标记，用于检测 ctrl+a+ctrl+c 是否成功
+        """
         try:
             import pyperclip
             import keyboard
 
             text = pyperclip.paste()
+
+            # 检测 ctrl+a + ctrl+c 是否成功
+            # 如果剪贴板仍是标记值，说明目标应用不支持全选或复制失败
+            if clipboard_marker and text == clipboard_marker:
+                log_warning("ctrl+a+ctrl+c 未能更新剪贴板，目标应用可能不支持全选")
+                # 取消可能存在的选中状态
+                keyboard.release('ctrl')
+                keyboard.release('shift')
+                time.sleep(0.03)
+                keyboard.press_and_release('left')
+                self._restore_clipboard(saved_clipboard)
+                return
+
             log_info(f"全文内容: '{text[:100] if text else '(空)'}'")
 
             if text and text.strip():
@@ -1931,8 +2086,8 @@ class MainController(QObject):
                 time.sleep(0.05)
                 keyboard.press_and_release('left')
 
-                # 延迟恢复剪贴板
-                QTimer.singleShot(500, lambda: self._restore_clipboard(saved_clipboard))
+                # 立即恢复剪贴板（不用定时器，避免与写作线程的剪贴板操作竞态）
+                self._restore_clipboard(saved_clipboard)
 
                 # 开始写作（全文模式）
                 self._start_writing(text.strip(), has_selection=False)
@@ -1979,7 +2134,7 @@ class MainController(QObject):
                 ToastWidget.show_message("写作完成", "文本已处理完成", "success")
                 log_info(f"写作完成: {result.source_language} -> {result.target_language}")
 
-        self._writing_service.start_writing(
+        self._writing_service.writing_command(
             text,
             has_selection=has_selection,
             keep_original=keep_original,
@@ -2079,8 +2234,6 @@ class MainController(QObject):
 
     def _on_history_requested(self):
         """显示翻译历史窗口"""
-        # 先隐藏其他窗口
-        self._translator_window.hide()
         self._translate_button.hide()
         self._last_text = ""
 
@@ -2090,8 +2243,6 @@ class MainController(QObject):
 
     def _on_help_requested(self):
         """显示帮助窗口"""
-        # 先隐藏其他窗口
-        self._translator_window.hide()
         self._translate_button.hide()
 
         # 显示帮助窗口

@@ -500,7 +500,7 @@ class TranslatorWindow(QWidget):
             self.setMinimumSize(450, 630)
             self.resize(500, 660)
         else:
-            self.setMinimumSize(450, 400)
+            self.setMinimumSize(450, 450)
             self.resize(500, 450)
 
         # 开启鼠标追踪
@@ -1361,7 +1361,7 @@ class TranslatorWindow(QWidget):
                 self.resize(500, 660)
             else:
                 self._splitter.setSizes([120, 180])
-                self.setMinimumSize(450, 400)
+                self.setMinimumSize(450, 450)
                 # 注意：不再在这里 resize，让 show_window 来处理大小
 
         if new_theme != self._theme_style or new_font_size != self._font_size:
@@ -2615,7 +2615,7 @@ class TranslatorWindow(QWidget):
             self.resize(500, 660)
         # 记忆窗口大小模式下，应用上次保存的大小
         elif self._remember_window_size and self._saved_window_size is not None:
-            self.setMinimumSize(450, 400)
+            self.setMinimumSize(450, 450)
             self.resize(self._saved_window_size)
 
         # 记忆窗口位置：优先使用保存的位置，否则居中显示
@@ -3302,7 +3302,7 @@ class TranslatorWindow(QWidget):
                 self.resize(500, 660)
             elif self._remember_window_size and self._saved_window_size is not None:
                 # 记忆窗口大小模式下，应用保存的大小
-                self.setMinimumSize(450, 400)
+                self.setMinimumSize(450, 450)
                 self.resize(self._saved_window_size)
             else:
                 self.resize(500, 400)

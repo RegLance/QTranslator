@@ -861,7 +861,7 @@ class TranslatorWindow(QWidget):
             QPushButton {{
                 background-color: {theme['accent_color']};
                 color: #ffffff;
-                border: none;
+                border: 1px solid transparent;
                 border-radius: 4px;
                 padding: 0 8px;
                 font-size: 13px;
@@ -869,6 +869,10 @@ class TranslatorWindow(QWidget):
             }}
             QPushButton:hover {{
                 background-color: {theme['accent_hover']};
+            }}
+            QPushButton:focus {{
+                border: 1px solid transparent;
+                outline: none;
             }}
             QPushButton:disabled {{
                 background-color: {theme['scrollbar_handle']};
@@ -895,6 +899,10 @@ class TranslatorWindow(QWidget):
             QPushButton:hover {{
                 background-color: {theme['button_hover']};
             }}
+            QPushButton:focus {{
+                border: 1px solid {theme['border_color']};
+                outline: none;
+            }}
             QPushButton:disabled {{
                 background-color: {theme['scrollbar_handle']};
                 color: {theme['text_muted']};
@@ -919,6 +927,10 @@ class TranslatorWindow(QWidget):
             }}
             QPushButton:hover {{
                 background-color: {theme['button_hover']};
+            }}
+            QPushButton:focus {{
+                border: 1px solid {theme['border_color']};
+                outline: none;
             }}
             QPushButton:disabled {{
                 background-color: {theme['scrollbar_handle']};
@@ -1516,7 +1528,7 @@ class TranslatorWindow(QWidget):
             QPushButton {{
                 background-color: {theme['accent_color']};
                 color: #ffffff;
-                border: none;
+                border: 1px solid transparent;
                 border-radius: 4px;
                 padding: 0 16px;
                 font-size: 13px;
@@ -1524,6 +1536,10 @@ class TranslatorWindow(QWidget):
             }}
             QPushButton:hover {{
                 background-color: {theme['accent_hover']};
+            }}
+            QPushButton:focus {{
+                border: 1px solid transparent;
+                outline: none;
             }}
             QPushButton:disabled {{
                 background-color: {theme['scrollbar_handle']};
@@ -1544,6 +1560,10 @@ class TranslatorWindow(QWidget):
             QPushButton:hover {{
                 background-color: {theme['button_hover']};
             }}
+            QPushButton:focus {{
+                border: 1px solid {theme['border_color']};
+                outline: none;
+            }}
             QPushButton:disabled {{
                 background-color: {theme['scrollbar_handle']};
                 color: {theme['text_muted']};
@@ -1562,6 +1582,10 @@ class TranslatorWindow(QWidget):
             }}
             QPushButton:hover {{
                 background-color: {theme['button_hover']};
+            }}
+            QPushButton:focus {{
+                border: 1px solid {theme['border_color']};
+                outline: none;
             }}
             QPushButton:disabled {{
                 background-color: {theme['scrollbar_handle']};
@@ -2623,7 +2647,7 @@ class TranslatorWindow(QWidget):
             QPushButton {{
                 background-color: {theme['accent_color']};
                 color: #ffffff;
-                border: none;
+                border: 1px solid transparent;
                 border-radius: 4px;
                 padding: 0 8px;
                 font-size: 13px;
@@ -2632,12 +2656,16 @@ class TranslatorWindow(QWidget):
             QPushButton:hover {{
                 background-color: {theme['accent_hover']};
             }}
+            QPushButton:focus {{
+                border: 1px solid transparent;
+                outline: none;
+            }}
             QPushButton:disabled {{
                 background-color: {theme['scrollbar_handle']};
                 color: {theme['text_muted']};
             }}
         """
-        
+
         # 未选中的按钮样式
         normal_style = f"""
             QPushButton {{
@@ -2650,6 +2678,10 @@ class TranslatorWindow(QWidget):
             }}
             QPushButton:hover {{
                 background-color: {theme['button_hover']};
+            }}
+            QPushButton:focus {{
+                border: 1px solid {theme['border_color']};
+                outline: none;
             }}
             QPushButton:disabled {{
                 background-color: {theme['scrollbar_handle']};

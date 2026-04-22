@@ -169,6 +169,41 @@ class SelectionDetector(QObject):
     def set_enabled(self, enabled: bool):
         self._is_enabled = enabled
 
+    def _is_user_copying(self) -> bool:
+        """检测用户是否正在手动复制（Ctrl+C 或 Ctrl+X）
+        
+        多次采样检测，提高准确性，避免竞态条件
+        这是方案 4 + 方案 1 的组合修复
+        
+        Returns:
+            bool: 如果用户正在复制，返回 True
+        """
+        if sys.platform != 'win32':
+            return False
+        
+        try:
+            import ctypes
+            
+            VK_CONTROL = 0x11
+            VK_C = 0x43
+            VK_X = 0x58  # X 键的虚拟键码
+            
+            # 多次采样检测（方案 1：增加检测精度）
+            # 检查 3 次，每次间隔 5ms
+            for _ in range(3):
+                ctrl_pressed = (ctypes.windll.user32.GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0
+                c_pressed = (ctypes.windll.user32.GetAsyncKeyState(VK_C) & 0x8000) != 0
+                x_pressed = (ctypes.windll.user32.GetAsyncKeyState(VK_X) & 0x8000) != 0
+                
+                if ctrl_pressed and (c_pressed or x_pressed):
+                    return True
+                
+                time.sleep(0.005)  # 5ms 延迟后再次采样
+            
+            return False
+        except Exception:
+            return False
+
     def _on_poll(self):
         """轮询检查是否有新的文本选择"""
         current_wall_time = time.time()
@@ -191,6 +226,12 @@ class SelectionDetector(QObject):
 
         # 检查是否在我们自己的窗口中选择
         if self._is_own_window_active():
+            return
+
+        # 方案 4 修复：检测用户是否正在手动复制
+        # 如果是，跳过自动取词，避免与用户的 Ctrl+C 冲突
+        if self._is_user_copying():
+            log_debug("用户正在复制，跳过自动取词")
             return
 
         tc = self._get_text_capture()

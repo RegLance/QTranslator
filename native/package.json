@@ -4,6 +4,6 @@
   "description": "Native text selection service for hover-translator",
   "main": "selection-service.js",
   "dependencies": {
-    "selection-hook": "^1.0.0"
+    "selection-hook": "^2.0.1"
   }
 }

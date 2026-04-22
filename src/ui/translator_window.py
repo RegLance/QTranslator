@@ -1385,10 +1385,10 @@ class TranslatorWindow(QWidget):
                 self.setMinimumSize(450, 450)
                 # 注意：不再在这里 resize，让 show_window 来处理大小
 
-        if new_theme != self._theme_style or new_font_size != self._font_size:
-            self._theme_style = new_theme
-            self._font_size = new_font_size
-            self._apply_theme()
+        # 即使主题名称未变，自定义主题的颜色也可能改变，因此始终更新
+        self._theme_style = new_theme
+        self._font_size = new_font_size
+        self._apply_theme()
 
     def _apply_theme(self):
         """应用主题"""
@@ -2651,7 +2651,6 @@ class TranslatorWindow(QWidget):
                 border-radius: 4px;
                 padding: 0 8px;
                 font-size: 13px;
-                font-weight: bold;
             }}
             QPushButton:hover {{
                 background-color: {theme['accent_hover']};

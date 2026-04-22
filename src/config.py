@@ -66,7 +66,7 @@ class Config:
         """验证配置是否有效"""
         if config is None:
             return False
-        required_keys = ['target_language', 'theme']
+        required_keys = ['theme']
         for key in required_keys:
             if key not in config:
                 print(f"配置缺少必需字段: {key}", file=sys.stderr)
@@ -136,7 +136,6 @@ class Config:
                 'timeout': 60,  # 请求超时时间（秒）
                 'no_proxy': '109.105.120.122',  # 不使用代理的地址，多个用逗号分隔
             },
-            'target_language': '中文',
             'theme': {
                 'popup_style': 'dark',  # 主题名称：dark/light/ocean_blue/forest_green/royal_purple/warm_orange/rose_pink/mint_light/custom
                 'custom_accent': '#007AFF',  # 自定义主题强调色
@@ -282,11 +281,6 @@ class Config:
     def translator(self) -> Dict[str, Any]:
         """翻译服务配置"""
         return self._config.get('translator', {})
-
-    @property
-    def target_language(self) -> str:
-        """目标语言"""
-        return self._config.get('target_language', '中文')
 
     @property
     def theme(self) -> Dict[str, Any]:

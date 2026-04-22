@@ -37,6 +37,15 @@ HIDE_DISTANCE_THRESHOLD = 50
 # 浏览器环境下延迟显示时间（毫秒）- 等待网站原生悬浮窗消失
 DEFAULT_BROWSER_DELAY_MS = 450
 
+# 点击动画参数（弹跳 + 渐隐）
+CLICK_ANIM_BOUNCE_MS = 200          # 弹跳阶段时长（毫秒）
+CLICK_ANIM_FADE_MS = 150            # 渐隐阶段时长（毫秒）
+CLICK_ANIM_DURATION_MS = CLICK_ANIM_BOUNCE_MS + CLICK_ANIM_FADE_MS
+CLICK_ANIM_FRAME_MS = 16            # 每帧间隔（约60fps）
+CLICK_ANIM_FRAMES = CLICK_ANIM_DURATION_MS // CLICK_ANIM_FRAME_MS
+CLICK_ANIM_BOUNCE_HEIGHT = 10      # 弹跳高度（逻辑像素）
+CLICK_ANIM_BOUNCE_RATIO = CLICK_ANIM_BOUNCE_MS / CLICK_ANIM_DURATION_MS  # 弹跳阶段占比
+
 
 # ============================================================================
 # Windows 平台：UpdateLayeredWindow（无 DWM 阴影）+ DPI-aware 物理像素定位
@@ -287,6 +296,8 @@ if sys.platform == 'win32':
             self._hdc_mem = None
             self._hbitmap = None
             self._old_bitmap = None
+            self._original_bgra: Optional[bytes] = None       # 原始位图数据（动画恢复用）
+            self._bits_ptr = None                             # DIB section 位指针
 
             self._create_native_window()
             self._prepare_layered_bitmap()
@@ -303,6 +314,12 @@ if sys.platform == 'win32':
             self._show_delay_timer = QTimer()
             self._show_delay_timer.setSingleShot(True)
             self._show_delay_timer.timeout.connect(self._do_delayed_show)
+
+            # 点击动画
+            self._click_anim_step: int = 0
+            self._click_anim_timer = QTimer()
+            self._click_anim_timer.setInterval(CLICK_ANIM_FRAME_MS)
+            self._click_anim_timer.timeout.connect(self._on_click_anim_frame)
 
         # ---- 窗口创建 ----
         def _create_native_window(self):
@@ -339,6 +356,7 @@ if sys.platform == 'win32':
 
             phys_size = self._phys_size
             bgra = _load_icon_as_bgra_premultiplied(str(icon_path), phys_size)
+            self._original_bgra = bgra
 
             bmi = _BITMAPINFO()
             bmi.bmiHeader.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
@@ -360,6 +378,7 @@ if sys.platform == 'win32':
             if not hbitmap or not bits_ptr.value:
                 raise OSError("CreateDIBSection failed")
             self._hbitmap = hbitmap
+            self._bits_ptr = bits_ptr
 
             ctypes.memmove(bits_ptr, bgra, len(bgra))
 
@@ -371,8 +390,10 @@ if sys.platform == 'win32':
         def _wndproc_handler(self, hwnd, msg, wparam, lparam):
             """分层窗口不收 WM_PAINT，只处理点击。"""
             if msg == _WM_LBUTTONDOWN:
+                if self._click_anim_timer.isActive():
+                    return 0
                 self.clicked.emit()
-                QTimer.singleShot(100, self.hide)
+                self._start_click_animation()
                 return 0
             if msg == _WM_DESTROY:
                 return 0
@@ -425,6 +446,7 @@ if sys.platform == 'win32':
             self._auto_hide_timer.stop()
             self._mouse_check_timer.stop()
             self._show_delay_timer.stop()
+            self._click_anim_timer.stop()
             self._selected_text = ""
             self._pending_text = ""
             self._visible = False
@@ -436,6 +458,11 @@ if sys.platform == 'win32':
             """(cursor_phys_x, cursor_phys_y) 必须是物理像素。
             图标出现在鼠标右下方 +8 逻辑像素（按 DPI 缩放后的物理像素）。
             """
+            # 停止可能正在进行的点击动画，恢复原始位图
+            self._click_anim_timer.stop()
+            if self._original_bgra and self._bits_ptr and self._bits_ptr.value:
+                ctypes.memmove(self._bits_ptr, self._original_bgra, len(self._original_bgra))
+
             size = self._phys_size
             off = self._phys_offset
             new_x = cursor_phys_x + off
@@ -534,6 +561,78 @@ if sys.platform == 'win32':
         def _reset_just_shown(self):
             self._is_just_shown = False
 
+        # ---- 点击动画（弹跳 + 渐隐）----
+        def _start_click_animation(self):
+            """启动点击动画：先弹跳向上再落回，然后渐隐消失。"""
+            if not self._bits_ptr or not self._bits_ptr.value:
+                QTimer.singleShot(100, self.hide)
+                return
+            self._mouse_check_timer.stop()
+            self._auto_hide_timer.stop()
+            self._click_anim_step = 0
+            self._anim_start_x = self._pos_x
+            self._anim_start_y = self._pos_y
+            self._click_anim_timer.start()
+
+        def _on_click_anim_frame(self):
+            """每一帧更新位置和透明度。
+
+            动画分两阶段：
+            - 弹跳阶段（0 ~ BOUNCE_RATIO）：图标向上弹起再落回原位
+            - 渐隐阶段（BOUNCE_RATIO ~ 1.0）：图标原地渐隐消失
+            """
+            self._click_anim_step += 1
+            if self._click_anim_step > CLICK_ANIM_FRAMES:
+                self._click_anim_timer.stop()
+                self.hide()
+                return
+
+            progress = self._click_anim_step / CLICK_ANIM_FRAMES
+
+            # 弹跳阶段：抛物线 Y 偏移（上弹后回落）
+            bounce_px = int(CLICK_ANIM_BOUNCE_HEIGHT * self._scale)
+            if progress <= CLICK_ANIM_BOUNCE_RATIO:
+                # 归一化弹跳进度 0~1
+                bp = progress / CLICK_ANIM_BOUNCE_RATIO
+                # 抛物线：4 * bp * (1 - bp) 在 bp=0.5 时达到峰值1
+                offset_y = int(bounce_px * 4 * bp * (1 - bp))
+                opacity = 1.0
+            else:
+                # 渐隐阶段：图标回到原位，透明度线性降为0
+                offset_y = 0
+                fp = (progress - CLICK_ANIM_BOUNCE_RATIO) / (1.0 - CLICK_ANIM_BOUNCE_RATIO)
+                opacity = 1.0 - fp
+
+            # 恢复原始位图数据
+            if self._original_bgra:
+                ctypes.memmove(self._bits_ptr, self._original_bgra, len(self._original_bgra))
+
+            new_x = self._anim_start_x
+            new_y = self._anim_start_y - offset_y
+            self._pos_x = new_x
+            self._pos_y = new_y
+
+            phys_size = self._phys_size
+            pt_dst = _POINT(new_x, new_y)
+            sz = _SIZE(phys_size, phys_size)
+            pt_src = _POINT(0, 0)
+            alpha_byte = max(0, int(255 * opacity))
+            blend = _BLENDFUNCTION(_AC_SRC_OVER, 0, alpha_byte, _AC_SRC_ALPHA)
+
+            hdc_screen = _user32.GetDC(None)
+            _user32.UpdateLayeredWindow(
+                ctypes.c_void_p(self.hwnd),
+                ctypes.c_void_p(hdc_screen),
+                ctypes.byref(pt_dst),
+                ctypes.byref(sz),
+                ctypes.c_void_p(self._hdc_mem),
+                ctypes.byref(pt_src),
+                0,
+                ctypes.byref(blend),
+                _ULW_ALPHA,
+            )
+            _user32.ReleaseDC(None, hdc_screen)
+
         def __del__(self):
             try:
                 if self._hdc_mem and self._old_bitmap:
@@ -554,6 +653,7 @@ if sys.platform == 'win32':
 else:
     from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout
     from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont, QIcon, QRegion
+    from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, pyqtProperty
     from pathlib import Path
 
     class TranslateButton(QWidget):
@@ -573,6 +673,7 @@ else:
             self._show_delay_timer: Optional[QTimer] = None
             self._pending_show_pos: Optional[Tuple[int, int]] = None
             self._pending_text: str = ""
+            self._click_anim_running: bool = False
 
             self._setup_window_properties()
             self._setup_ui()
@@ -667,6 +768,9 @@ else:
             self._selected_text = self._pending_text
             self._pending_show_pos = None
             self._pending_text = ""
+            self.setWindowOpacity(1.0)
+            self._icon_label.setFixedSize(BUTTON_SIZE, BUTTON_SIZE)
+            self._icon_label.setPixmap(self._create_icon())
             cursor_pos = QCursor.pos()
             new_x, new_y = cursor_pos.x() + 8, cursor_pos.y() + 8
             try:
@@ -709,6 +813,9 @@ else:
 
         def _do_immediate_show(self, x, y, selected_text):
             self._selected_text = selected_text
+            self.setWindowOpacity(1.0)
+            self._icon_label.setFixedSize(BUTTON_SIZE, BUTTON_SIZE)
+            self._icon_label.setPixmap(self._create_icon())
             new_x, new_y = x + 8, y + 8
             try:
                 screen = QApplication.primaryScreen()
@@ -750,6 +857,9 @@ else:
             else:
                 x, y = pos
             self._selected_text = selected_text
+            self.setWindowOpacity(1.0)
+            self._icon_label.setFixedSize(BUTTON_SIZE, BUTTON_SIZE)
+            self._icon_label.setPixmap(self._create_icon())
             new_x, new_y = x + 8, y + 8
             try:
                 screen = QApplication.primaryScreen()
@@ -785,6 +895,13 @@ else:
             self._auto_hide_timer.stop()
             self._mouse_check_timer.stop()
             self._show_delay_timer.stop()
+            # 停止可能正在进行的点击动画
+            if hasattr(self, '_pos_anim') and self._pos_anim.state() == QPropertyAnimation.State.Running:
+                self._pos_anim.stop()
+            if hasattr(self, '_opacity_anim') and self._opacity_anim.state() == QPropertyAnimation.State.Running:
+                self._opacity_anim.stop()
+            self._click_anim_running = False
+            self.setWindowOpacity(1.0)
             self._selected_text = ""
             self._pending_show_pos = None
             self._pending_text = ""
@@ -810,9 +927,63 @@ else:
 
         def mousePressEvent(self, event):
             if event.button() == Qt.MouseButton.LeftButton:
+                if self._click_anim_running:
+                    return
                 self.clicked.emit()
-                QTimer.singleShot(100, self.hide)
+                self._start_click_animation()
             super().mousePressEvent(event)
+
+        # ---- 点击动画（弹跳 + 渐隐）----
+        def _start_click_animation(self):
+            """启动点击动画：先弹跳向上再落回，然后渐隐消失。"""
+            if self._click_anim_running:
+                return
+            self._mouse_check_timer.stop()
+            self._auto_hide_timer.stop()
+            self._click_anim_running = True
+            self._anim_start_y = self.y()
+
+            # 弹跳动画：0 → BOUNCE_HEIGHT → 0，InOutQuad 产生平滑上下
+            self._pos_anim = QPropertyAnimation(self, b"iconBounceY")
+            self._pos_anim.setDuration(CLICK_ANIM_BOUNCE_MS)
+            self._pos_anim.setStartValue(0)
+            self._pos_anim.setKeyValueAt(0.5, CLICK_ANIM_BOUNCE_HEIGHT)
+            self._pos_anim.setEndValue(0)
+            self._pos_anim.setEasingCurve(
+                QEasingCurve.Type.OutQuad
+            )
+
+            # 渐隐动画：弹跳结束后开始
+            self._opacity_anim = QPropertyAnimation(self, b"windowOpacity")
+            self._opacity_anim.setDuration(CLICK_ANIM_FADE_MS)
+            self._opacity_anim.setStartValue(1.0)
+            self._opacity_anim.setEndValue(0.0)
+            self._opacity_anim.setEasingCurve(
+                QEasingCurve.Type.OutQuad
+            )
+
+            def _on_bounce_finished():
+                # 弹跳结束，开始渐隐
+                self._opacity_anim.start()
+
+            def _on_fade_finished():
+                self._click_anim_running = False
+                self.setWindowOpacity(1.0)
+                self.move(self.x(), self._anim_start_y)
+                self.hide()
+
+            self._pos_anim.finished.connect(_on_bounce_finished)
+            self._opacity_anim.finished.connect(_on_fade_finished)
+            self._pos_anim.start()
+
+        @pyqtProperty(int)
+        def iconBounceY(self):
+            return getattr(self, '_icon_bounce_y', 0)
+
+        @iconBounceY.setter
+        def iconBounceY(self, offset):
+            self._icon_bounce_y = offset
+            self.move(self.x(), self._anim_start_y - offset)
 
 
 # 全局实例

@@ -510,8 +510,19 @@ def get_combobox_style(theme: Dict[str, Any]) -> str:
             selection-background-color: {theme['accent_color']};
             selection-color: #ffffff;
             border: 1px solid {theme['border_color']};
-            padding: 2px;
             outline: none;
+        }}
+        QComboBox QAbstractItemView::item {{
+            border: none;
+            padding: 2px;
+        }}
+        QComboBox QAbstractItemView::item:hover {{
+            background-color: {theme['button_hover']};
+            color: {theme['text_primary']};
+        }}
+        QComboBox QAbstractItemView::item:selected {{
+            background-color: {theme['accent_color']};
+            color: #ffffff;
         }}
     """
 

@@ -78,9 +78,6 @@ translator:
   timeout: 60                   # 超时时间（秒）
   no_proxy: ""                  # 不使用代理的地址，多个用逗号分隔
 
-# 翻译目标语言
-target_language: "中文"
-
 # 界面配置
 theme:
   popup_style: "dark"           # 窗口样式：dark/light/ocean_blue/forest_green/royal_purple/warm_orange/rose_pink/mint_light/custom

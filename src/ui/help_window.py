@@ -370,9 +370,9 @@ class HelpWindow(QWidget):
     def update_theme(self):
         """更新主题"""
         new_theme = get_config().get('theme.popup_style', 'dark')
-        if new_theme != self._theme_style:
-            self._theme_style = new_theme
-            self._apply_theme()
+        # 即使主题名称未变，自定义主题的颜色也可能改变，因此始终更新
+        self._theme_style = new_theme
+        self._apply_theme()
 
     def _apply_theme(self):
         """应用主题"""

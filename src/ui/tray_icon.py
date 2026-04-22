@@ -83,21 +83,21 @@ class TrayIcon(QObject):
         return QIcon(pixmap)
 
     def _create_check_icon(self) -> QIcon:
-        """创建勾选图标"""
+        """创建勾选图标（使用主题强调色）"""
+        theme = get_theme(self._theme_style)
         pixmap = QPixmap(16, 16)
         pixmap.fill(QColor(0, 0, 0, 0))
 
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # 绘制蓝色圆角背景
-        painter.setBrush(QColor(0, 122, 255))  # macOS 风格现代蓝
+        # 绘制圆角背景（使用主题强调色）
+        painter.setBrush(QColor(theme['accent_color']))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(0, 0, 16, 16, 3, 3)
 
         # 绘制白色勾选符号 ✓
         painter.setPen(QPen(QColor(255, 255, 255), 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        # 勾选符号的路径
         painter.drawLine(3, 8, 6, 12)  # 左下到中下
         painter.drawLine(6, 12, 13, 4)  # 中下到右上
 
@@ -106,16 +106,17 @@ class TrayIcon(QObject):
         return QIcon(pixmap)
 
     def _create_uncheck_icon(self) -> QIcon:
-        """创建未勾选图标（空白边框）"""
+        """创建未勾选图标（使用主题输入背景色和边框色）"""
+        theme = get_theme(self._theme_style)
         pixmap = QPixmap(16, 16)
         pixmap.fill(QColor(0, 0, 0, 0))
 
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # 绘制灰色边框
-        painter.setBrush(QColor(45, 45, 45))  # 与菜单背景色相近
-        painter.setPen(QPen(QColor(85, 85, 85), 1))
+        # 绘制边框（使用主题输入背景色和边框色）
+        painter.setBrush(QColor(theme['input_bg']))
+        painter.setPen(QPen(QColor(theme['scrollbar_handle']), 1))
         painter.drawRoundedRect(0, 0, 16, 16, 3, 3)
 
         painter.end()
@@ -189,12 +190,14 @@ class TrayIcon(QObject):
     def update_theme(self):
         """更新主题"""
         new_theme = get_config().get('theme.popup_style', 'dark')
-        if new_theme != self._theme_style:
-            self._theme_style = new_theme
-            self._apply_menu_style()
-            # 更新勾选图标
-            self._check_icon = self._create_check_icon()
-            self._uncheck_icon = self._create_uncheck_icon()
+        # 即使主题名称未变，自定义主题的颜色也可能改变，因此始终更新
+        self._theme_style = new_theme
+        self._apply_menu_style()
+        # 更新勾选图标
+        self._check_icon = self._create_check_icon()
+        self._uncheck_icon = self._create_uncheck_icon()
+        # 更新当前 action 显示的图标
+        self._update_action_icon()
 
     def _create_tray(self):
         """创建托盘图标"""

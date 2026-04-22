@@ -198,7 +198,8 @@ class Translator:
             source_lang, target_lang, source_code = get_translation_direction(text)
         else:
             if target_language is None:
-                target_language = get_config().target_language
+                # 默认使用中文作为目标语言
+                target_language = '中文'
             source_code, source_lang = detect_language(text)
             target_lang = target_language
 

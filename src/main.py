@@ -15,9 +15,10 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect, QScrollArea, QMenu, QWidget,
     QSpinBox, QKeySequenceEdit, QColorDialog
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect, QByteArray
 from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence, QPalette, QPolygonF, QBrush
 from PyQt6.QtCore import QPointF
+from PyQt6.QtSvg import QSvgRenderer
 
 # 设置高 DPI 支持
 if sys.platform == 'win32':
@@ -33,12 +34,12 @@ if sys.platform == 'win32':
 # ============================================================================
 
 class StyledSpinBox(QSpinBox):
-    """带自定义三角形箭头的 SpinBox"""
+    """带自定义小箭头的 SpinBox（精致对称设计）"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._arrow_color = QColor('#b0b0b0')
-        self._hover_color = QColor('#ffffff')
+        self._arrow_color = QColor('#999999')
+        self._hover_color = QColor('#cccccc')
         self._pressed_color = QColor('#ffffff')
         self._up_hover = False
         self._down_hover = False
@@ -49,6 +50,18 @@ class StyledSpinBox(QSpinBox):
         """设置箭头颜色"""
         self._arrow_color = QColor(color)
 
+    def _get_button_rects(self):
+        """计算上下按钮的矩形区域（对称布局）"""
+        btn_width = 18
+        rect = self.rect()
+        right = rect.right() - 1
+        top = rect.top() + 1
+        half_h = rect.height() // 2
+
+        up_rect = QRect(right - btn_width, top, btn_width, half_h)
+        down_rect = QRect(right - btn_width, top + half_h, btn_width, rect.height() - half_h - 1)
+        return up_rect, down_rect
+
     def paintEvent(self, event):
         """自定义绘制事件"""
         super().paintEvent(event)
@@ -56,17 +69,7 @@ class StyledSpinBox(QSpinBox):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # 计算按钮位置
-        btn_width = 24
-        btn_height = 14
-        rect = self.rect()
-        right = rect.right() - 1
-        top = rect.top() + 1
-
-        # 绘制上按钮区域背景
-        up_rect = QRect(right - btn_width, top, btn_width, btn_height)
-        # 绘制下按钮区域背景
-        down_rect = QRect(right - btn_width, rect.bottom() - btn_height - 1, btn_width, btn_height)
+        up_rect, down_rect = self._get_button_rects()
 
         # 绘制上箭头
         up_color = self._pressed_color if self._up_pressed else (self._hover_color if self._up_hover else self._arrow_color)
@@ -77,46 +80,42 @@ class StyledSpinBox(QSpinBox):
         self._draw_arrow(painter, down_rect, 'down', down_color)
 
     def _draw_arrow(self, painter: QPainter, rect: QRect, direction: str, color: QColor):
-        """绘制三角形箭头"""
+        """绘制精致小三角形箭头（箭头靠右，左右留白对称）"""
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(color))
 
         polygon = QPolygonF()
-        cx = rect.center().x()
+        # 箭头中心往右偏1.5px，补偿 border-left 分隔线，使箭头左右留白对称
+        cx = rect.center().x() + 1.5
         cy = rect.center().y()
-        size = 5
+        w = 3.5   # 半宽
+        h = 2.5   # 半高
 
         if direction == 'up':
-            polygon.append(QPointF(cx, cy - size + 1))      # 顶点
-            polygon.append(QPointF(cx - size, cy + 1))      # 左下
-            polygon.append(QPointF(cx + size, cy + 1))      # 右下
+            polygon.append(QPointF(cx, cy - h))
+            polygon.append(QPointF(cx - w, cy + h))
+            polygon.append(QPointF(cx + w, cy + h))
         else:
-            polygon.append(QPointF(cx - size, cy - 1))      # 左上
-            polygon.append(QPointF(cx + size, cy - 1))      # 右上
-            polygon.append(QPointF(cx, cy + size - 1))      # 底点
+            polygon.append(QPointF(cx - w, cy - h))
+            polygon.append(QPointF(cx + w, cy - h))
+            polygon.append(QPointF(cx, cy + h))
 
         painter.drawPolygon(polygon)
 
     def mousePressEvent(self, event):
         """鼠标按下事件"""
-        btn_width = 24
-        btn_height = 14
-        rect = self.rect()
-        right = rect.right() - 1
-
-        up_rect = QRect(right - btn_width, rect.top() + 1, btn_width, btn_height)
-        down_rect = QRect(right - btn_width, rect.bottom() - btn_height - 1, btn_width, btn_height)
+        up_rect, down_rect = self._get_button_rects()
 
         if up_rect.contains(event.pos()):
             self._up_pressed = True
             self.stepUp()
             self.update()
-            return  # 已手动处理，不再调用 super 避免重复步进
+            return
         elif down_rect.contains(event.pos()):
             self._down_pressed = True
             self.stepDown()
             self.update()
-            return  # 已手动处理，不再调用 super 避免重复步进
+            return
 
         super().mousePressEvent(event)
         self.update()
@@ -130,13 +129,7 @@ class StyledSpinBox(QSpinBox):
 
     def mouseMoveEvent(self, event):
         """鼠标移动事件"""
-        btn_width = 24
-        btn_height = 14
-        rect = self.rect()
-        right = rect.right() - 1
-
-        up_rect = QRect(right - btn_width, rect.top() + 1, btn_width, btn_height)
-        down_rect = QRect(right - btn_width, rect.bottom() - btn_height - 1, btn_width, btn_height)
+        up_rect, down_rect = self._get_button_rects()
 
         old_up_hover = self._up_hover
         old_down_hover = self._down_hover
@@ -458,7 +451,16 @@ class SettingsDialog(QDialog):
         self._api_key_edit.setMinimumHeight(32)
         self._api_key_edit.setPlaceholderText("sk-...")
         self._api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        # 设置右侧边距，为眼睛按钮留出空间
+        self._api_key_edit.setTextMargins(0, 0, 32, 0)
         self._api_key_label = QLabel("API Key:")
+        
+        # 创建眼睛按钮（作为 QAction 添加到输入框内部）
+        self._api_key_toggle_action = QAction(self._api_key_edit)
+        self._api_key_toggle_action.setIcon(self._get_eye_icon(False))  # 默认显示闭眼图标
+        self._api_key_toggle_action.triggered.connect(self._toggle_api_key_visibility)
+        self._api_key_edit.addAction(self._api_key_toggle_action, QLineEdit.ActionPosition.TrailingPosition)
+        
         api_layout.addRow(self._api_key_label, self._api_key_edit)
 
         self._model_edit = QLineEdit()
@@ -487,12 +489,6 @@ class SettingsDialog(QDialog):
         trans_layout.setSpacing(10)
         trans_layout.setContentsMargins(12, 20, 12, 12)
         trans_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
-        self._target_lang_combo = QComboBox()
-        self._target_lang_combo.addItems(["中文", "英文", "日文", "韩文", "法文", "德文", "西班牙文"])
-        self._target_lang_combo.setMinimumHeight(32)
-        self._target_lang_label = QLabel("目标语言:")
-        trans_layout.addRow(self._target_lang_label, self._target_lang_combo)
 
         self._browser_delay_spin = StyledSpinBox()
         self._browser_delay_spin.setRange(0, 2000)
@@ -613,12 +609,13 @@ class SettingsDialog(QDialog):
 
         # 添加说明文字
         self._writing_hint_label = QLabel("勾选后，写作时会在原文下方另起一行插入翻译结果")
-        self._writing_hint_label.setProperty("class", "hint")
+        self._writing_hint_label.setProperty("class", "checkbox-hint")
         self._writing_hint_label.setWordWrap(True)
         writing_layout.addWidget(self._writing_hint_label)
 
         # 换行快捷键选择
         newline_layout = QHBoxLayout()
+        newline_layout.setContentsMargins(28, 0, 0, 0)
         self._newline_hotkey_label = QLabel("换行快捷键:")
         self._newline_hotkey_combo = QComboBox()
         self._newline_hotkey_combo.addItems(["enter", "shift+enter", "ctrl+enter"])
@@ -647,7 +644,7 @@ class SettingsDialog(QDialog):
 
         # 添加说明文字
         self._polishing_show_diff_hint_label = QLabel("勾选后，润色结果将使用删除线标记被删除的文字，使用粗体标记新增或修改的文字")
-        self._polishing_show_diff_hint_label.setProperty("class", "hint")
+        self._polishing_show_diff_hint_label.setProperty("class", "checkbox-hint")
         self._polishing_show_diff_hint_label.setWordWrap(True)
         polishing_layout.addWidget(self._polishing_show_diff_hint_label)
 
@@ -665,7 +662,7 @@ class SettingsDialog(QDialog):
 
         # 添加说明文字
         self._fixed_height_hint_label = QLabel("勾选后，原文框固定180px，译文框固定360px，不随内容自动调整")
-        self._fixed_height_hint_label.setProperty("class", "hint")
+        self._fixed_height_hint_label.setProperty("class", "checkbox-hint")
         self._fixed_height_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._fixed_height_hint_label)
 
@@ -676,7 +673,7 @@ class SettingsDialog(QDialog):
 
         # 添加说明文字
         self._remember_size_hint_label = QLabel("勾选后，翻译窗口会记住用户最后一次手动调整的大小，下次唤醒时恢复")
-        self._remember_size_hint_label.setProperty("class", "hint")
+        self._remember_size_hint_label.setProperty("class", "checkbox-hint")
         self._remember_size_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._remember_size_hint_label)
 
@@ -687,7 +684,7 @@ class SettingsDialog(QDialog):
 
         # 添加说明文字
         self._remember_position_hint_label = QLabel("勾选后，翻译窗口会记住上次关闭时的位置。程序重启后位置重置")
-        self._remember_position_hint_label.setProperty("class", "hint")
+        self._remember_position_hint_label.setProperty("class", "checkbox-hint")
         self._remember_position_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._remember_position_hint_label)
 
@@ -698,7 +695,7 @@ class SettingsDialog(QDialog):
 
         # 添加说明文字
         self._always_on_top_hint_label = QLabel("勾选后，翻译窗口始终显示在所有窗口最上层。不勾选时，窗口可被其他窗口覆盖，通过快捷键、双击托盘图标或点击任务栏图标可重新唤醒")
-        self._always_on_top_hint_label.setProperty("class", "hint")
+        self._always_on_top_hint_label.setProperty("class", "checkbox-hint")
         self._always_on_top_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._always_on_top_hint_label)
 
@@ -742,17 +739,17 @@ class SettingsDialog(QDialog):
         content_layout.addWidget(self._btn_bar)
 
     def _create_uncheck_icon(self) -> QIcon:
-        """创建未勾选图标（空白边框）"""
-        pixmap = QPixmap(18, 18)
+        """创建未勾选图标（圆角方框，顶部留1px微调对齐）"""
+        pixmap = QPixmap(16, 17)
         pixmap.fill(QColor(0, 0, 0, 0))
 
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # 绘制边框
+        # 顶部偏移1px，让勾选框与文字垂直居中对齐
         painter.setBrush(QColor(self._theme['input_bg']))
-        painter.setPen(QPen(QColor(self._theme['scrollbar_handle']), 1.5))
-        painter.drawRoundedRect(0, 0, 18, 18, 4, 4)
+        painter.setPen(QPen(QColor(self._theme['scrollbar_handle']), 1.2))
+        painter.drawRoundedRect(1, 2, 14, 14, 4, 4)
 
         painter.end()
 
@@ -760,22 +757,22 @@ class SettingsDialog(QDialog):
 
 
     def _create_check_icon(self) -> QIcon:
-        """创建勾选图标"""
-        pixmap = QPixmap(18, 18)
+        """创建勾选图标（圆角填充 + 小对勾，顶部留1px微调对齐）"""
+        pixmap = QPixmap(16, 17)
         pixmap.fill(QColor(0, 0, 0, 0))
 
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # 绘制蓝色圆角背景
+        # 顶部偏移1px，让勾选框与文字垂直居中对齐
         painter.setBrush(QColor(self._theme['accent_color']))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(0, 0, 18, 18, 4, 4)
+        painter.drawRoundedRect(1, 2, 14, 14, 4, 4)
 
-        # 绘制白色勾选符号 ✓
-        painter.setPen(QPen(QColor(255, 255, 255), 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawLine(4, 9, 7, 14)  # 左下到中下
-        painter.drawLine(7, 14, 14, 5)  # 中下到右上
+        # 绘制白色小对勾 ✓
+        painter.setPen(QPen(QColor(255, 255, 255), 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.drawLine(4, 9, 6, 12)   # 短竖
+        painter.drawLine(6, 12, 12, 6)  # 长斜
 
         painter.end()
 
@@ -867,11 +864,18 @@ class SettingsDialog(QDialog):
                 font-size: 11px;
             }}
 
+            /* 勾选框下方提示标签（与勾选文字对齐） */
+            QLabel[class="checkbox-hint"] {{
+                color: {t['text_muted']};
+                font-size: 11px;
+                margin-left: 26px;
+            }}
+
             /* 输入框 */
             QLineEdit {{
                 background-color: {t['input_bg']};
                 border: 1px solid {t['input_border']};
-                border-radius: 4px;
+                border-radius: 6px;
                 padding: 6px 10px;
                 color: {t['text_primary']};
                 font-size: 13px;
@@ -885,7 +889,7 @@ class SettingsDialog(QDialog):
                 background-color: {t['input_bg']};
                 color: {t['text_primary']};
                 border: 1px solid {t['input_border']};
-                border-radius: 4px;
+                border-radius: 6px;
                 padding: 6px 10px;
                 font-size: 13px;
             }}
@@ -902,8 +906,20 @@ class SettingsDialog(QDialog):
                 selection-background-color: {t['accent_color']};
                 selection-color: #ffffff;
                 border: 1px solid {t['border_color']};
-                border-radius: 4px;
+                border-radius: 6px;
+                outline: none;
+            }}
+            QComboBox QAbstractItemView::item {{
+                border: none;
                 padding: 2px;
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: {t['button_hover']};
+                color: {t['text_primary']};
+            }}
+            QComboBox QAbstractItemView::item:selected {{
+                background-color: {t['accent_color']};
+                color: #ffffff;
             }}
 
             /* 数字输入框 */
@@ -912,7 +928,7 @@ class SettingsDialog(QDialog):
                 border: 1px solid {t['input_border']};
                 border-radius: 6px;
                 padding: 4px 8px;
-                padding-right: 32px;
+                padding-right: 26px;
                 color: {t['text_primary']};
                 font-size: 13px;
             }}
@@ -922,8 +938,7 @@ class SettingsDialog(QDialog):
             QSpinBox::up-button {{
                 subcontrol-origin: border;
                 subcontrol-position: right top;
-                width: 24px;
-                height: 14px;
+                width: 18px;
                 border: none;
                 border-top-right-radius: 5px;
                 border-left: 1px solid {t['input_border']};
@@ -938,8 +953,7 @@ class SettingsDialog(QDialog):
             QSpinBox::down-button {{
                 subcontrol-origin: border;
                 subcontrol-position: right bottom;
-                width: 24px;
-                height: 14px;
+                width: 18px;
                 border: none;
                 border-bottom-right-radius: 5px;
                 border-left: 1px solid {t['input_border']};
@@ -956,7 +970,7 @@ class SettingsDialog(QDialog):
             QPushButton#hotkeyBtn, QPushButton#hotkeyBtn2 {{
                 background-color: {t['input_bg']};
                 border: 1px solid {t['input_border']};
-                border-radius: 4px;
+                border-radius: 6px;
                 padding: 4px 12px;
                 color: {t['text_primary']};
                 font-size: 13px;
@@ -996,7 +1010,7 @@ class SettingsDialog(QDialog):
                 background-color: {t['button_bg']};
                 color: {t['text_primary']};
                 border: none;
-                border-radius: 4px;
+                border-radius: 6px;
                 padding: 0 20px;
                 font-size: 13px;
             }}
@@ -1009,7 +1023,7 @@ class SettingsDialog(QDialog):
                 background-color: {t['accent_color']};
                 color: #ffffff;
                 border: none;
-                border-radius: 4px;
+                border-radius: 6px;
                 padding: 0 20px;
                 font-size: 13px;
                 font-weight: bold;
@@ -1108,6 +1122,10 @@ class SettingsDialog(QDialog):
         """更新主题"""
         self._theme = get_theme()
         self._apply_theme()
+        # 更新眼睛按钮图标
+        if hasattr(self, '_api_key_toggle_action'):
+            current_mode = self._api_key_edit.echoMode()
+            self._api_key_toggle_action.setIcon(self._get_eye_icon(current_mode == QLineEdit.EchoMode.Normal))
 
     def _is_over_title_bar_button(self, pos: QPoint) -> bool:
         """判断鼠标是否在标题栏按钮区域内"""
@@ -1183,11 +1201,6 @@ class SettingsDialog(QDialog):
         self._model_edit.setText(self._config.get('translator.model', ''))
         self._no_proxy_edit.setText(self._config.get('translator.no_proxy', '109.105.120.122'))
 
-        target_lang = self._config.get('target_language', '中文')
-        index = self._target_lang_combo.findText(target_lang)
-        if index >= 0:
-            self._target_lang_combo.setCurrentIndex(index)
-
         # 浏览器划词延迟
         browser_delay = self._config.get('selection.browser_delay_ms', 450)
         self._browser_delay_spin.setValue(browser_delay)
@@ -1256,14 +1269,12 @@ class SettingsDialog(QDialog):
         self._auto_start_check.setChecked(self._config.get('startup.auto_start', False))
 
         # 禁用滚轮事件，避免误触
-        self._disable_wheel_event(self._target_lang_combo)
         self._disable_wheel_event(self._popup_style_combo)
         self._disable_wheel_event(self._font_size_spin)
         self._disable_wheel_event(self._browser_delay_spin)
         self._disable_wheel_event(self._newline_hotkey_combo)
 
         # 预初始化 ComboBox 下拉视图，避免首次点击卡顿
-        self._target_lang_combo.view()
         self._popup_style_combo.view()
         self._newline_hotkey_combo.view()
 
@@ -1298,13 +1309,52 @@ class SettingsDialog(QDialog):
             QPushButton {{
                 background-color: {hex_color};
                 border: 1px solid {self._theme.get('border_color', '#3d3d3d')};
-                border-radius: 4px;
+                border-radius: 6px;
             }}
             QPushButton:hover {{
                 border-color: {self._theme.get('accent_color', '#007AFF')};
                 border-width: 2px;
             }}
         """)
+
+    def _toggle_api_key_visibility(self):
+        """切换 API Key 显示/隐藏"""
+        current_mode = self._api_key_edit.echoMode()
+        if current_mode == QLineEdit.EchoMode.Password:
+            # 显示密码
+            self._api_key_edit.setEchoMode(QLineEdit.EchoMode.Normal)
+            self._api_key_toggle_action.setIcon(self._get_eye_icon(True))
+        else:
+            # 隐藏密码
+            self._api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+            self._api_key_toggle_action.setIcon(self._get_eye_icon(False))
+
+    def _get_eye_icon(self, visible: bool) -> QIcon:
+        """获取眼睛图标
+        
+        Args:
+            visible: True 表示显示睁眼图标，False 表示显示闭眼图标
+        """
+        if visible:
+            # 睁眼图标
+            svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                <path fill="''' + self._theme['text_secondary'] + '''" d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+            </svg>'''
+        else:
+            # 闭眼图标（带斜线）
+            svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                <path fill="''' + self._theme['text_secondary'] + '''" d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/>
+            </svg>'''
+        
+        # 使用 QSvgRenderer 渲染高清图标
+        renderer = QSvgRenderer(svg.encode('utf-8'))
+        pixmap = QPixmap(24, 24)  # 使用更大的尺寸确保清晰度
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+        
+        return QIcon(pixmap)
 
     def _pick_accent_color(self):
         """弹出颜色对话框选择强调色"""
@@ -1336,8 +1386,6 @@ class SettingsDialog(QDialog):
             # 写作快捷键
             old_writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+I')
             new_writing_hotkey = self._writing_hotkey_value
-
-            self._config.set('target_language', self._target_lang_combo.currentText())
 
             # API 配置
             self._config.set('translator.base_url', self._api_url_edit.text().strip())

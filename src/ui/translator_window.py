@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QComboBox, QFrame,
     QGraphicsDropShadowEffect, QApplication, QSplitter, QSplitterHandle
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect, QPointF, QTimer, QPropertyAnimation, QEasingCurve, QSize
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect, QRectF, QPointF, QTimer, QPropertyAnimation, QEasingCurve, QSize
 from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QKeySequence, QIcon, QFont, QPixmap, QPainter, QPen, QBrush, QLinearGradient
 
 try:
@@ -719,6 +719,29 @@ class TranslatorWindow(QWidget):
         self._update_btn.hide()  # 默认隐藏
         title_layout.addWidget(self._update_btn)
 
+        # 帮助按钮
+        self._help_btn = QPushButton("?")
+        self._help_btn.setObjectName("helpBtn")
+        self._help_btn.setFixedSize(22, 22)
+        self._help_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._help_btn.setToolTip("帮助")
+        self._help_btn.setStyleSheet(f"""
+            QPushButton#helpBtn {{
+                background-color: transparent;
+                color: {theme['text_muted']};
+                border: none;
+                border-radius: 11px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QPushButton#helpBtn:hover {{
+                background-color: {theme['button_hover']};
+                color: {theme['text_primary']};
+            }}
+        """)
+        self._help_btn.clicked.connect(self._on_help_clicked)
+        title_layout.addWidget(self._help_btn)
+
         # 设置按钮
         self._settings_btn = QPushButton("⛭")
         self._settings_btn.setObjectName("settingsBtn")
@@ -980,14 +1003,9 @@ class TranslatorWindow(QWidget):
         self._splitter.addWidget(self._input_text)
 
         # 翻译结果显示区域 - 包装在容器中以支持右下角悬浮按钮
+        # 容器仅用于定位，不设置 border-radius 避免裁剪遮罩在子控件滚动时产生残影
         self._output_container = QWidget()
-        self._output_container.setStyleSheet(f"""
-            QWidget {{
-                background-color: {theme['bg_secondary']};
-                border: 1px solid {theme['border_color']};
-                border-radius: 4px;
-            }}
-        """)
+        self._output_container.setStyleSheet("QWidget { background-color: transparent; border: none; }")
         # 不使用布局，使用绝对定位放置文本框和悬浮按钮
         # 固定高度模式下译文框高度为360px，否则为180px
         output_min_height = 360 if self._fixed_height_mode else 180
@@ -1005,9 +1023,9 @@ class TranslatorWindow(QWidget):
         self._output_text.setPlaceholderText("翻译结果...")
         self._output_text.setStyleSheet(f"""
             QTextEdit {{
-                background-color: transparent;
+                background-color: {theme['bg_secondary']};
                 color: {theme['text_primary']};
-                border: none;
+                border: 1px solid {theme['border_color']};
                 border-radius: 4px;
                 padding: 8px;
                 font-family: {self._FONT_FAMILY_CSS};
@@ -1170,6 +1188,17 @@ class TranslatorWindow(QWidget):
             from src.ui.history_window import get_history_window
         history_window = get_history_window()
         history_window.show_window()
+
+    def _on_help_clicked(self):
+        """点击帮助按钮，打开帮助窗口"""
+        try:
+            from ..ui.help_window import get_help_window
+        except ImportError:
+            from src.ui.help_window import get_help_window
+        help_window = get_help_window()
+        help_window.show()
+        help_window.activateWindow()
+        help_window.raise_()
 
     def _check_for_update(self):
         """启动版本更新检查（在后台线程中执行）"""
@@ -1439,6 +1468,22 @@ class TranslatorWindow(QWidget):
             }}
         """)
 
+        # 更新帮助按钮样式
+        self._help_btn.setStyleSheet(f"""
+            QPushButton#helpBtn {{
+                background-color: transparent;
+                color: {theme['text_muted']};
+                border: none;
+                border-radius: 11px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QPushButton#helpBtn:hover {{
+                background-color: {theme['button_hover']};
+                color: {theme['text_primary']};
+            }}
+        """)
+
         # 更新设置按钮样式
         self._settings_btn.setStyleSheet(f"""
             QPushButton#settingsBtn {{
@@ -1616,22 +1661,16 @@ class TranslatorWindow(QWidget):
             {get_scrollbar_style(theme)}
         """)
 
-        # 更新输出框容器
-        self._output_container.setStyleSheet(f"""
-            QWidget {{
-                background-color: {theme['bg_secondary']};
-                border: 1px solid {theme['border_color']};
-                border-radius: 4px;
-            }}
-        """)
+        # 更新输出框容器 - 仅定位用，不渲染
+        self._output_container.setStyleSheet("QWidget { background-color: transparent; border: none; }")
 
         # 更新输出框
         self._output_text.setFont(self._create_text_font())
         self._output_text.setStyleSheet(f"""
             QTextEdit {{
-                background-color: transparent;
+                background-color: {theme['bg_secondary']};
                 color: {theme['text_primary']};
-                border: none;
+                border: 1px solid {theme['border_color']};
                 border-radius: 4px;
                 padding: 8px;
                 font-family: {self._FONT_FAMILY_CSS};
@@ -3520,9 +3559,9 @@ class TranslatorWindow(QWidget):
             # 使用隐藏滚动条的样式
             self._output_text.setStyleSheet(f"""
                 QTextEdit {{
-                    background-color: transparent;
+                    background-color: {theme['bg_secondary']};
                     color: {theme['text_primary']};
-                    border: none;
+                    border: 1px solid {theme['border_color']};
                     border-radius: 4px;
                     padding: 8px;
                     font-family: {self._FONT_FAMILY_CSS};
@@ -3543,9 +3582,9 @@ class TranslatorWindow(QWidget):
             # 恢复正常的滚动条样式
             self._output_text.setStyleSheet(f"""
                 QTextEdit {{
-                    background-color: transparent;
+                    background-color: {theme['bg_secondary']};
                     color: {theme['text_primary']};
-                    border: none;
+                    border: 1px solid {theme['border_color']};
                     border-radius: 4px;
                     padding: 8px;
                     font-family: {self._FONT_FAMILY_CSS};

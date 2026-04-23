@@ -881,7 +881,7 @@ class HistoryWindow(QWidget):
     def _load_history(self):
         """加载历史记录"""
         self._history_list.clear()
-        items = self._history.get_history()
+        items = self._history.get_history(limit=100)
 
         for item in items:
             # 显示原文前50字符作为列表项
@@ -902,7 +902,7 @@ class HistoryWindow(QWidget):
         if keyword.strip():
             items = self._history.search_history(keyword)
         else:
-            items = self._history.get_history()
+            items = self._history.get_history(limit=100)
 
         for item in items:
             display_text = item.original_text[:50]

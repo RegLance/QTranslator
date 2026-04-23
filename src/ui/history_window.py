@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect, QLineEdit, QDialog,
     QAbstractItemView, QSplitter, QScrollArea, QFileDialog
 )
-from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QRect
+from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QRect, QTimer
 from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QIcon, QPainter, QPixmap, QPen
 
 try:
@@ -311,7 +311,13 @@ class HistoryWindow(QWidget):
             }}
             QLineEdit:focus {{ border-color: {theme['accent_color']}; }}
         """)
-        self._search_input.textChanged.connect(self._search_history)
+        self._search_input.textChanged.connect(self._on_search_input_changed)
+        # 搜索防抖定时器：用户停止输入 300ms 后才执行搜索，避免每个字符都重建列表
+        self._search_debounce_timer = QTimer()
+        self._search_debounce_timer.setSingleShot(True)
+        self._search_debounce_timer.setInterval(300)
+        self._search_debounce_timer.timeout.connect(self._do_search)
+        self._pending_search_keyword: str = ""
         search_layout.addWidget(self._search_input)
 
         content_layout.addWidget(search_bar)
@@ -894,6 +900,15 @@ class HistoryWindow(QWidget):
             self._history_list.addItem(list_item)
 
         self._status_label.setText(f"共 {len(items)} 条记录")
+
+    def _on_search_input_changed(self, keyword: str):
+        """搜索框内容变化时启动防抖定时器"""
+        self._pending_search_keyword = keyword
+        self._search_debounce_timer.start()  # 重置定时器，300ms 后执行
+
+    def _do_search(self):
+        """防抖定时器触发后执行实际搜索"""
+        self._search_history(self._pending_search_keyword)
 
     def _search_history(self, keyword: str):
         """搜索历史"""

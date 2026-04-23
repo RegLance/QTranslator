@@ -2215,19 +2215,12 @@ class MainController(QObject):
             from src.core.text_capture import get_last_program_name
             program_name = get_last_program_name()
 
-        # 强制处理所有待处理事件，确保窗口显示
-        from PyQt6.QtWidgets import QApplication
-        QApplication.processEvents()
-
         # 保存选中文本到翻译按钮（不更新 _last_text，它只记录最后一次发起翻译的文本）
         selected_text = text.strip()
         self._translate_button.set_selected_text(selected_text)
 
         # 显示翻译图标按钮（统一方式）
         self._translate_button.show_at_position(mouse_pos, selected_text, program_name)
-
-        # 再次强制处理事件
-        QApplication.processEvents()
 
     def _on_translate_button_clicked(self):
         """翻译按钮点击 - 使用 translator_window 进行翻译"""

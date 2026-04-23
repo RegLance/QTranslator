@@ -42,30 +42,21 @@ class TTSEngine:
         self._on_finish_callback: Optional[Callable] = None
         self._on_stop_callback: Optional[Callable] = None
 
-        # 尝试初始化引擎
-        self._init_engine()
-
-    def _init_engine(self):
-        """初始化 TTS 引擎"""
-        # 优先使用 Windows SAPI (在子线程中更可靠)
+        # 不在主线程初始化引擎：COM 对象不能跨线程使用，
+        # 主线程创建的引擎在 speak 子线程中无法使用，
+        # 子线程会自行初始化需要的引擎。这里只检测可用性。
+        self._backend = None
         try:
             import win32com.client
-            self._engine = win32com.client.Dispatch("SAPI.SpVoice")
             self._backend = 'sapi'
-            return
-        except Exception:
+        except ImportError:
             pass
-
-        # 回退到 pyttsx3
-        try:
-            import pyttsx3
-            self._engine = pyttsx3.init()
-            self._backend = 'pyttsx3'
-            return
-        except Exception:
-            pass
-
-        self._backend = None
+        if self._backend is None:
+            try:
+                import pyttsx3
+                self._backend = 'pyttsx3'
+            except ImportError:
+                pass
 
     def is_available(self) -> bool:
         """检查 TTS 是否可用"""

@@ -12,29 +12,59 @@ except ImportError:
 
 
 class FileLogHandler(logging.Handler):
-    """文件日志处理器"""
-    
-    def __init__(self, log_path: Path):
+    """文件日志处理器（带缓冲，避免每条日志都同步写文件）
+
+    使用内存缓冲区积累日志，定期 flush 到磁盘。
+    这避免了每条 debug 日志都触发 open → write → close 的 I/O 开销，
+    防止在主线程频繁调用 log_debug() 时造成 UI 卡顿。
+    """
+
+    def __init__(self, log_path: Path, buffer_size: int = 50, flush_interval: float = 5.0):
         super().__init__()
         self._log_path = log_path
+        self._buffer: list[str] = []
+        self._buffer_size = buffer_size
+        self._flush_interval = flush_interval
+        self._last_flush_time = 0.0
         self._ensure_log_file()
-        
+
     def _ensure_log_file(self):
         """确保日志文件存在"""
         if not self._log_path.parent.exists():
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
     def emit(self, record: logging.LogRecord):
-        """写入日志记录"""
+        """缓冲日志记录，达到阈值或间隔时 flush"""
         try:
             msg = self.format(record)
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             log_line = f"[{timestamp}] [{record.levelname}] {msg}\n"
-            
-            with open(self._log_path, 'a', encoding='utf-8') as f:
-                f.write(log_line)
+            self._buffer.append(log_line)
+
+            import time as _time
+            now = _time.time()
+            # 缓冲区满或超过 flush 间隔，写入磁盘
+            if len(self._buffer) >= self._buffer_size or (now - self._last_flush_time) >= self._flush_interval:
+                self.flush()
+                self._last_flush_time = now
         except Exception:
             pass
+
+    def flush(self):
+        """将缓冲区中的日志写入文件"""
+        if not self._buffer:
+            return
+        try:
+            with open(self._log_path, 'a', encoding='utf-8') as f:
+                f.writelines(self._buffer)
+            self._buffer.clear()
+        except Exception:
+            pass
+
+    def close(self):
+        """关闭时 flush 剩余日志"""
+        self.flush()
+        super().close()
 
 
 class Logger:

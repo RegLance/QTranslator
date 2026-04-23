@@ -57,7 +57,12 @@ class SelectionDetector(QObject):
         # 轮询定时器 - 检查是否有新的选择
         self._poll_timer = QTimer()
         self._poll_timer.timeout.connect(self._on_poll)
-        self._poll_interval = 50  # 50ms 检查一次
+        self._poll_interval = 200  # 200ms 检查一次（避免频繁调用 Win32 API 导致主线程阻塞）
+
+        # _is_own_window_active 缓存：避免每次轮询都调用 Win32 API
+        self._own_window_cache: bool = False
+        self._own_window_cache_time: float = 0.0
+        self._own_window_cache_ttl: float = 0.5  # 缓存有效期 500ms
 
         # 文本捕获引用（延迟获取）
         self._text_capture = None
@@ -83,32 +88,25 @@ class SelectionDetector(QObject):
 
     def _is_own_window_active(self) -> bool:
         """检查当前活动窗口是否是应用自己的窗口
-        
+
         如果用户在我们的翻译窗口、历史窗口或设置窗口中选择文本，
         不应该触发翻译按钮。
+
+        使用缓存减少 Win32 API 调用频率，避免主线程阻塞。
         """
+        # 缓存检查：500ms 内直接返回上次结果
+        now = time.time()
+        if now - self._own_window_cache_time < self._own_window_cache_ttl:
+            return self._own_window_cache
+
+        result = self._is_own_window_active_uncached()
+        self._own_window_cache = result
+        self._own_window_cache_time = now
+        return result
+
+    def _is_own_window_active_uncached(self) -> bool:
+        """_is_own_window_active 的实际检查逻辑（无缓存）"""
         try:
-            # 获取应用程序的所有顶层窗口
-            app = QApplication.instance()
-            if not app:
-                return False
-            
-            # 获取当前活动窗口（前台窗口）
-            for widget in app.topLevelWidgets():
-                if widget.isVisible() and widget.isActiveWindow():
-                    # 如果有我们的窗口是活动的，忽略选择
-                    widget_name = widget.objectName() or widget.__class__.__name__
-                    # 检查是否是我们的窗口
-                    if widget_name in ['TranslatorWindow', 'HistoryWindow', 'SettingsDialog', 
-                                       'PopupWindow', 'TranslatorWindow']:
-                        return True
-                    # 也检查类名
-                    if 'TranslatorWindow' in str(type(widget)) or \
-                       'HistoryWindow' in str(type(widget)) or \
-                       'SettingsDialog' in str(type(widget)) or \
-                       'PopupWindow' in str(type(widget)):
-                        return True
-            
             # 使用 Windows API 检查前台窗口是否是应用自己的窗口
             # 注意：不再使用窗口标题判断，因为会导致误判（如 PyCharm 打开 QTranslator 项目）
             if sys.platform == 'win32':
@@ -134,10 +132,22 @@ class SelectionDetector(QObject):
                                 return True
                 except Exception:
                     pass
-                    
+
+            # 回退到 Qt API 检查（跨平台兜底）
+            app = QApplication.instance()
+            if not app:
+                return False
+
+            for widget in app.topLevelWidgets():
+                if widget.isVisible() and widget.isActiveWindow():
+                    widget_name = widget.objectName() or widget.__class__.__name__
+                    if widget_name in ['TranslatorWindow', 'HistoryWindow', 'SettingsDialog',
+                                       'PopupWindow']:
+                        return True
+
         except Exception:
             pass
-        
+
         return False
 
     def start(self):
@@ -171,36 +181,29 @@ class SelectionDetector(QObject):
 
     def _is_user_copying(self) -> bool:
         """检测用户是否正在手动复制（Ctrl+C 或 Ctrl+X）
-        
-        多次采样检测，提高准确性，避免竞态条件
-        这是方案 4 + 方案 1 的组合修复
-        
+
+        单次采样检测，避免在主线程中 sleep 导致 UI 卡顿。
+        GetAsyncKeyState 本身已经能可靠检测当前按键状态，
+        无需多次采样 + sleep。
+
         Returns:
             bool: 如果用户正在复制，返回 True
         """
         if sys.platform != 'win32':
             return False
-        
+
         try:
             import ctypes
-            
+
             VK_CONTROL = 0x11
             VK_C = 0x43
-            VK_X = 0x58  # X 键的虚拟键码
-            
-            # 多次采样检测（方案 1：增加检测精度）
-            # 检查 3 次，每次间隔 5ms
-            for _ in range(3):
-                ctrl_pressed = (ctypes.windll.user32.GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0
-                c_pressed = (ctypes.windll.user32.GetAsyncKeyState(VK_C) & 0x8000) != 0
-                x_pressed = (ctypes.windll.user32.GetAsyncKeyState(VK_X) & 0x8000) != 0
-                
-                if ctrl_pressed and (c_pressed or x_pressed):
-                    return True
-                
-                time.sleep(0.005)  # 5ms 延迟后再次采样
-            
-            return False
+            VK_X = 0x58
+
+            ctrl_pressed = (ctypes.windll.user32.GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0
+            c_pressed = (ctypes.windll.user32.GetAsyncKeyState(VK_C) & 0x8000) != 0
+            x_pressed = (ctypes.windll.user32.GetAsyncKeyState(VK_X) & 0x8000) != 0
+
+            return bool(ctrl_pressed and (c_pressed or x_pressed))
         except Exception:
             return False
 
@@ -209,7 +212,7 @@ class SelectionDetector(QObject):
         current_wall_time = time.time()
 
         # 检测系统休眠/锁屏恢复：如果两次轮询间隔远超预期，说明系统经历了休眠
-        # 正常间隔约 50ms，超过 60 秒说明系统刚恢复
+        # 正常间隔约 200ms，超过 60 秒说明系统刚恢复
         wall_gap = current_wall_time - self._last_poll_wall_time
         self._last_poll_wall_time = current_wall_time
 

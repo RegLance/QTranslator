@@ -14,7 +14,7 @@ except ImportError:
 UPDATE_CHECK_URL = "http://109.105.111.17:5005/update"
 UPDATE_GITHUB_URL = "https://github.com/SQAG/QTranslator/releases"
 TOOL_NAME = "QTranslator"
-CHECK_TIMEOUT = 10  # 请求超时时间（秒）
+CHECK_TIMEOUT = 5  # 请求超时时间（秒），避免网络不通时长时间等待
 
 
 def check_for_update() -> Optional[str]:

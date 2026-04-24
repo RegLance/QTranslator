@@ -1502,6 +1502,22 @@ class SettingsDialog(QDialog):
         # 延迟显示简洁 Toast
         QTimer.singleShot(100, lambda: SimpleToastWidget.show_message("保存成功"))
 
+    def closeEvent(self, event):
+        """隐藏而非销毁，保持单例可用"""
+        event.ignore()
+        self.hide()
+
+
+_settings_dialog_instance: Optional[SettingsDialog] = None
+
+
+def get_settings_dialog() -> SettingsDialog:
+    """获取设置对话框单例"""
+    global _settings_dialog_instance
+    if _settings_dialog_instance is None:
+        _settings_dialog_instance = SettingsDialog()
+    return _settings_dialog_instance
+
 
 class FadeableToastBase(QWidget):
     """Toast 淡出动画基类"""
@@ -1858,10 +1874,79 @@ class MainController(QObject):
         self._hotkey_retry_count = 0
         self._hotkey_manager.reinstall_all()
 
+    def _pre_render_windows(self):
+        """预创建并预渲染所有窗口，消除首次显示延迟"""
+        windows_to_prerender = []
+
+        # 翻译窗口（已在 __init__ 创建，但未渲染）
+        windows_to_prerender.append(self._translator_window)
+
+        # 历史窗口（懒加载单例，此处触发创建）
+        try:
+            from .ui.history_window import get_history_window
+        except ImportError:
+            from src.ui.history_window import get_history_window
+        try:
+            windows_to_prerender.append(get_history_window())
+        except Exception as e:
+            log_error(f"预创建历史窗口失败: {e}")
+
+        # 帮助窗口（懒加载单例，此处触发创建）
+        try:
+            from .ui.help_window import get_help_window
+        except ImportError:
+            from src.ui.help_window import get_help_window
+        try:
+            windows_to_prerender.append(get_help_window())
+        except Exception as e:
+            log_error(f"预创建帮助窗口失败: {e}")
+
+        # 设置对话框（新增单例，此处触发创建）
+        try:
+            windows_to_prerender.append(get_settings_dialog())
+        except Exception as e:
+            log_error(f"预创建设置对话框失败: {e}")
+
+        # 离屏预渲染：移至屏幕外 → show → 处理渲染事件 → hide
+        offscreen_pos = QPoint(-9999, -9999)
+        for widget in windows_to_prerender:
+            try:
+                original_pos = widget.pos()
+                widget.move(offscreen_pos)
+                widget.show()
+                QApplication.processEvents()
+                widget.hide()
+                widget.move(original_pos)
+            except Exception as e:
+                log_error(f"预渲染窗口失败: {type(widget).__name__}: {e}")
+
+        log_info("窗口预渲染完成")
+
+        # 预热翻译器（后台线程，不阻塞UI）
+        import threading
+        def _warmup():
+            try:
+                # 预热语言检测模型
+                from .utils.language_detector import detect_language
+                detect_language("Hello")
+                log_debug("语言检测预热完成")
+            except Exception:
+                pass
+            try:
+                # 预热API连接（建立DNS+TCP+SSL连接，后续翻译复用）
+                if self._translator and self._translator._client:
+                    self._translator._client.models.list(limit=1, timeout=5)
+                    log_debug("API连接预热完成")
+            except Exception:
+                pass  # 预热失败不影响正常使用
+        threading.Thread(target=_warmup, daemon=True).start()
+
     def start(self):
         self._selection_detector.start()
         self._tray_icon.show()
         log_info(f"{APP_NAME} 已启动")
+        # 延迟预渲染所有窗口，消除首次打开延迟
+        QTimer.singleShot(800, self._pre_render_windows)
 
     def stop(self):
         # 停止系统健康检查
@@ -2256,7 +2341,9 @@ class MainController(QObject):
             self._translator_window.hide()
 
     def _on_settings_requested(self):
-        dialog = SettingsDialog()
+        dialog = get_settings_dialog()
+        dialog._load_settings()
+        dialog._center_window()
         dialog.exec()
 
     def _on_translator_window_requested(self):

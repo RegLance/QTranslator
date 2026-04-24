@@ -2359,6 +2359,7 @@ class MainController(QObject):
     def _on_settings_requested(self):
         dialog = get_settings_dialog()
         dialog._load_settings()
+        dialog._apply_theme()
         dialog._center_window()
         dialog.exec()
 

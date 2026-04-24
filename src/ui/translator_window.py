@@ -1196,9 +1196,7 @@ class TranslatorWindow(QWidget):
         except ImportError:
             from src.ui.help_window import get_help_window
         help_window = get_help_window()
-        help_window.show()
-        help_window.activateWindow()
-        help_window.raise_()
+        help_window.show_window()
 
     def _check_for_update(self):
         """启动版本更新检查（在后台线程中执行）"""

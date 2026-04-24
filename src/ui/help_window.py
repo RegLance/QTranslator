@@ -51,6 +51,7 @@ class HelpWindow(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(500, 450)
+        self.resize(560, 520)
 
         self._setup_ui()
 

@@ -724,6 +724,7 @@ class TranslatorWindow(QWidget):
         self._help_btn.setObjectName("helpBtn")
         self._help_btn.setFixedSize(22, 22)
         self._help_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._help_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._help_btn.setToolTip("帮助")
         self._help_btn.setStyleSheet(f"""
             QPushButton#helpBtn {{
@@ -769,6 +770,7 @@ class TranslatorWindow(QWidget):
         self._minimize_btn.setObjectName("minimizeBtn")
         self._minimize_btn.setFixedSize(22, 22)
         self._minimize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._minimize_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._minimize_btn.setStyleSheet(f"""
             QPushButton#minimizeBtn {{
                 background-color: transparent;
@@ -791,6 +793,7 @@ class TranslatorWindow(QWidget):
         self._maximize_btn.setObjectName("maximizeBtn")
         self._maximize_btn.setFixedSize(22, 22)
         self._maximize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._maximize_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._maximize_btn.setStyleSheet(f"""
             QPushButton#maximizeBtn {{
                 background-color: transparent;
@@ -814,6 +817,7 @@ class TranslatorWindow(QWidget):
         self._close_btn.setObjectName("closeBtn")
         self._close_btn.setFixedSize(22, 22)
         self._close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._close_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._close_btn.setStyleSheet(f"""
             QPushButton#closeBtn {{
                 background-color: transparent;
@@ -2836,10 +2840,10 @@ class TranslatorWindow(QWidget):
                 self.move(x, y)
 
         if not self.isVisible():
+            self._input_text.setFocus()
             self.show()
         self.raise_()
         self.activateWindow()
-        self._input_text.setFocus()
 
     def keyPressEvent(self, event):
         """键盘事件处理"""
@@ -2957,6 +2961,7 @@ class TranslatorWindow(QWidget):
         # 计算并移动到鼠标位置
         x, y = self._calculate_position(mouse_pos)
         self.move(x, y)
+        self._input_text.setFocus()
         self.show()
         self.raise_()
         self.activateWindow()
@@ -3671,10 +3676,13 @@ class TranslatorWindow(QWidget):
         """解除原文框高度锁定（流式输出结束后）
 
         恢复原文框的 min/max 高度约束，让用户可以手动拖动分割条。
+        先固定当前高度再解锁最大值，避免 splitter 重新分配空间导致布局抖动。
         """
         try:
             input_min_height = 180 if self._fixed_height_mode else 120
+            current_height = self._input_text.height()
             self._input_text.setMinimumHeight(input_min_height)
+            self._input_text.setFixedHeight(current_height)
             self._input_text.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
         except RuntimeError:
             pass

@@ -381,6 +381,7 @@ class TranslatorWindow(QWidget):
 
     # 信号
     closed = pyqtSignal()
+    settings_requested = pyqtSignal()
     translation_completed = pyqtSignal(str, str)  # 原文, 译文 - 翻译完成信号
 
     def __init__(self):
@@ -523,9 +524,6 @@ class TranslatorWindow(QWidget):
 
     def _enable_taskbar_minimize(self):
         """在 Windows 上启用任务栏点击最小化功能"""
-        if sys.platform != 'win32':
-            return
-
         try:
             import ctypes
             # 获取窗口句柄
@@ -1177,12 +1175,7 @@ class TranslatorWindow(QWidget):
 
     def _on_settings_clicked(self):
         """点击设置按钮，打开设置对话框"""
-        try:
-            from ..main import SettingsDialog
-        except ImportError:
-            from src.main import SettingsDialog
-        dialog = SettingsDialog()
-        dialog.exec()
+        self.settings_requested.emit()
 
     def _on_history_clicked(self):
         """点击历史按钮，打开翻译历史窗口"""
@@ -1281,14 +1274,13 @@ class TranslatorWindow(QWidget):
     @property
     def is_foreground(self) -> bool:
         """使用 Win32 API 精确检测窗口是否为当前前台窗口"""
-        if sys.platform == 'win32':
-            try:
-                import ctypes
-                hwnd = int(self.winId())
-                foreground_hwnd = ctypes.windll.user32.GetForegroundWindow()
-                return hwnd == foreground_hwnd
-            except Exception:
-                pass
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            foreground_hwnd = ctypes.windll.user32.GetForegroundWindow()
+            return hwnd == foreground_hwnd
+        except Exception:
+            pass
         return self.isActiveWindow()
 
     def bring_to_front(self):
@@ -1301,40 +1293,39 @@ class TranslatorWindow(QWidget):
             self.show_window()
             return
 
-        if sys.platform == 'win32':
-            try:
-                import ctypes
-                hwnd = int(self.winId())
-                user32 = ctypes.windll.user32
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            user32 = ctypes.windll.user32
 
-                # 获取当前前台窗口的线程 ID
-                foreground_hwnd = user32.GetForegroundWindow()
-                foreground_tid = user32.GetWindowThreadProcessId(foreground_hwnd, None)
-                # 获取当前线程 ID
-                current_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+            # 获取当前前台窗口的线程 ID
+            foreground_hwnd = user32.GetForegroundWindow()
+            foreground_tid = user32.GetWindowThreadProcessId(foreground_hwnd, None)
+            # 获取当前线程 ID
+            current_tid = ctypes.windll.kernel32.GetCurrentThreadId()
 
-                # AttachThreadInput 技巧：将本线程的输入处理关联到前台窗口线程
-                # 这样 SetForegroundWindow 才能可靠地将窗口置前
-                attached = False
-                if foreground_tid != current_tid:
-                    attached = user32.AttachThreadInput(current_tid, foreground_tid, True)
+            # AttachThreadInput 技巧：将本线程的输入处理关联到前台窗口线程
+            # 这样 SetForegroundWindow 才能可靠地将窗口置前
+            attached = False
+            if foreground_tid != current_tid:
+                attached = user32.AttachThreadInput(current_tid, foreground_tid, True)
 
-                if not self._always_on_top:
-                    # 非置顶模式：先 TOPMOST 再 NOTOPMOST，窗口拉到最前但不保持置顶
-                    SWP_NOMOVE = 0x0002
-                    SWP_NOSIZE = 0x0001
-                    SWP_SHOWWINDOW = 0x0040
-                    swp_flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
-                    user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, swp_flags)   # HWND_TOPMOST
-                    user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, swp_flags)   # HWND_NOTOPMOST
+            if not self._always_on_top:
+                # 非置顶模式：先 TOPMOST 再 NOTOPMOST，窗口拉到最前但不保持置顶
+                SWP_NOMOVE = 0x0002
+                SWP_NOSIZE = 0x0001
+                SWP_SHOWWINDOW = 0x0040
+                swp_flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+                user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, swp_flags)   # HWND_TOPMOST
+                user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, swp_flags)   # HWND_NOTOPMOST
 
-                user32.SetForegroundWindow(hwnd)
-                user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            user32.BringWindowToTop(hwnd)
 
-                if attached:
-                    user32.AttachThreadInput(current_tid, foreground_tid, False)
-            except Exception:
-                pass
+            if attached:
+                user32.AttachThreadInput(current_tid, foreground_tid, False)
+        except Exception:
+            pass
 
         self.raise_()
         self.activateWindow()

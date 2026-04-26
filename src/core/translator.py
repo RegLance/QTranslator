@@ -68,6 +68,7 @@ class Translator:
         """初始化翻译服务"""
         self._client: Optional[OpenAI] = None
         self._cache: OrderedDict[str, TranslationResult] = OrderedDict()
+        self._cache_lock = threading.RLock()
         self._last_error: Optional[str] = None
         self._load_api_config()
         self._init_client()
@@ -116,11 +117,20 @@ class Translator:
 
     def _put_cache(self, key: str, result: TranslationResult):
         """存入缓存（LRU 淘汰策略）"""
-        if key in self._cache:
-            self._cache.move_to_end(key)
-        self._cache[key] = result
-        while len(self._cache) > self.MAX_CACHE_SIZE:
-            self._cache.popitem(last=False)
+        with self._cache_lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            self._cache[key] = result
+            while len(self._cache) > self.MAX_CACHE_SIZE:
+                self._cache.popitem(last=False)
+
+    def _get_cached_result(self, key: str) -> Optional[TranslationResult]:
+        """读取缓存并刷新 LRU 顺序。"""
+        with self._cache_lock:
+            result = self._cache.get(key)
+            if result is not None:
+                self._cache.move_to_end(key)
+            return result
 
     def _ensure_client(self) -> bool:
         """确保客户端可用，返回是否成功"""
@@ -384,9 +394,9 @@ Examples:
             self._resolve_language_and_prompt(text, target_language, auto_detect)
 
         # 检查缓存
-        if cache_key in self._cache:
-            self._cache.move_to_end(cache_key)
-            yield self._cache[cache_key].translated_text
+        cached_result = self._get_cached_result(cache_key)
+        if cached_result:
+            yield cached_result.translated_text
             return
 
         # 执行流式请求
@@ -421,9 +431,9 @@ Examples:
             self._resolve_language_and_prompt(text, target_language, auto_detect)
 
         # 检查缓存
-        if cache_key in self._cache:
-            self._cache.move_to_end(cache_key)
-            return self._cache[cache_key]
+        cached_result = self._get_cached_result(cache_key)
+        if cached_result:
+            return cached_result
 
         # 检查客户端
         if not self._ensure_client():
@@ -467,7 +477,8 @@ Examples:
 
     def clear_cache(self):
         """清除翻译缓存"""
-        self._cache.clear()
+        with self._cache_lock:
+            self._cache.clear()
 
     def reinitialize(self):
         """重新初始化客户端（配置变更后）"""

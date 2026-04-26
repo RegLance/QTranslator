@@ -176,7 +176,7 @@ THEMES = {
         'text_placeholder': '#666666',
 
         # 强调色
-        'accent_color': '#007AFF',     # macOS 风格现代蓝
+        'accent_color': '#007AFF',     # 现代蓝
         'accent_hover': '#0A84FF',     # iOS 风格亮蓝
         'success_color': '#1a7f37',
         'warning_color': '#d29922',
@@ -229,7 +229,7 @@ THEMES = {
         'text_placeholder': '#aaaaaa',
 
         # 强调色
-        'accent_color': '#007AFF',     # macOS 风格现代蓝
+        'accent_color': '#007AFF',     # 现代蓝
         'accent_hover': '#0A84FF',     # iOS 风格亮蓝
         'success_color': '#1a7f37',
         'warning_color': '#d29922',

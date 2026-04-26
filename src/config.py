@@ -30,17 +30,10 @@ UPDATE_INFO_TEXT = "暂无更新信息"  # 帮助窗口更新信息占位文本
 
 
 def get_app_data_dir() -> Path:
-    """获取应用数据目录（在用户AppData目录下）"""
-    if sys.platform == 'win32':
-        # Windows: C:\Users\用户名\AppData\Local\QTranslator
-        base_dir = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
-        app_dir = Path(base_dir) / APP_NAME
-    elif sys.platform == 'darwin':
-        # macOS: ~/Library/Application Support/QTranslator
-        app_dir = Path.home() / "Library" / "Application Support" / APP_NAME
-    else:
-        # Linux: ~/.config/qtranslator
-        app_dir = Path.home() / ".config" / "qtranslator"
+    """获取 Windows 应用数据目录（在用户 AppData 目录下）"""
+    # Windows: C:\Users\用户名\AppData\Local\QTranslator
+    base_dir = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
+    app_dir = Path(base_dir) / APP_NAME
 
     # 确保目录存在
     app_dir.mkdir(parents=True, exist_ok=True)

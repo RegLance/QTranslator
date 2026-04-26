@@ -69,14 +69,7 @@ class TextCapture:
         self._start_service()
 
     def _find_node(self):
-        """查找 Node.js 可执行文件路径
-
-        优先级：
-        1. 嵌入式 Node.js (打包环境或开发环境的 native/node/win-x64/node.exe)
-        2. 系统 PATH 环境变量中的 node.exe
-        3. 常见安装路径
-        4. 回退到系统 "node" 命令
-        """
+        """查找 Windows Node.js 可执行文件路径"""
         # 1. 优先检测嵌入式 Node.js
         embedded_node = _get_embedded_node_path()
         if embedded_node:
@@ -91,29 +84,27 @@ class TextCapture:
             print(f"[TextCapture] 使用开发环境 Node.js: {dev_node}", file=sys.stderr)
             return
 
-        # 3. Windows 上查找系统安装的 node.exe
-        if sys.platform == 'win32':
-            # 检查 PATH 环境变量
-            path_env = os.environ.get('PATH', '').split(os.pathsep)
-            for p in path_env:
-                node_exe = os.path.join(p, 'node.exe')
-                if os.path.isfile(node_exe):
-                    self._node_path = node_exe
-                    print(f"[TextCapture] 使用系统 Node.js: {node_exe}", file=sys.stderr)
-                    return
+        # 3. 检查 PATH 环境变量
+        path_env = os.environ.get('PATH', '').split(os.pathsep)
+        for p in path_env:
+            node_exe = os.path.join(p, 'node.exe')
+            if os.path.isfile(node_exe):
+                self._node_path = node_exe
+                print(f"[TextCapture] 使用系统 Node.js: {node_exe}", file=sys.stderr)
+                return
 
-            # 尝试常见安装路径
-            common_paths = [
-                r"C:\Program Files\nodejs\node.exe",
-                r"C:\Program Files (x86)\nodejs\node.exe",
-            ]
-            for p in common_paths:
-                if os.path.isfile(p):
-                    self._node_path = p
-                    print(f"[TextCapture] 使用系统 Node.js: {p}", file=sys.stderr)
-                    return
+        # 4. 尝试 Windows 常见安装路径
+        common_paths = [
+            r"C:\Program Files\nodejs\node.exe",
+            r"C:\Program Files (x86)\nodejs\node.exe",
+        ]
+        for p in common_paths:
+            if os.path.isfile(p):
+                self._node_path = p
+                print(f"[TextCapture] 使用系统 Node.js: {p}", file=sys.stderr)
+                return
 
-        # 4. 回退到系统 "node" 命令
+        # 5. 回退到系统 "node" 命令
         self._node_path = "node"
         print("[TextCapture] 使用系统 PATH 中的 node 命令", file=sys.stderr)
 
@@ -148,11 +139,11 @@ class TextCapture:
             self._process = subprocess.Popen(
                 [self._node_path, service_path],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
                 cwd=str(native_dir),  # 设置工作目录
                 env=env,  # 设置环境变量
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
+                creationflags=subprocess.CREATE_NO_WINDOW,
                 text=True,
                 encoding='utf-8',
                 errors='replace'
@@ -164,16 +155,8 @@ class TextCapture:
             self._reader_thread = threading.Thread(target=self._read_output, daemon=True)
             self._reader_thread.start()
 
-            # 等待就绪信号
-            timeout = 5.0
-            start_time = time.time()
-            while not self._ready and time.time() - start_time < timeout:
-                time.sleep(0.1)
-
-            if self._ready:
-                print("[TextCapture] selection-hook 服务已启动", file=sys.stderr)
-            else:
-                print("[TextCapture] 警告: selection-hook 服务启动超时", file=sys.stderr)
+            # 就绪信号由读取线程异步设置，避免阻塞 UI 主线程。
+            print("[TextCapture] selection-hook 服务启动中", file=sys.stderr)
 
         except Exception as e:
             print(f"[TextCapture] 启动服务失败: {e}", file=sys.stderr)

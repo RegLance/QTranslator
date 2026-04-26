@@ -59,6 +59,11 @@ class SelectionDetector(QObject):
         self._poll_timer.timeout.connect(self._on_poll)
         self._poll_interval = 200  # 200ms 检查一次（避免频繁调用 Win32 API 导致主线程阻塞）
 
+        # selection-hook 就绪检查定时器，避免启动时在主线程 sleep。
+        self._ready_check_timer = QTimer()
+        self._ready_check_timer.timeout.connect(self._on_ready_check)
+        self._ready_check_deadline: Optional[float] = None
+
         # _is_own_window_active 缓存：避免每次轮询都调用 Win32 API
         self._own_window_cache: bool = False
         self._own_window_cache_time: float = 0.0
@@ -109,31 +114,30 @@ class SelectionDetector(QObject):
         try:
             # 使用 Windows API 检查前台窗口是否是应用自己的窗口
             # 注意：不再使用窗口标题判断，因为会导致误判（如 PyCharm 打开 QTranslator 项目）
-            if sys.platform == 'win32':
-                try:
-                    import ctypes
-                    hwnd = ctypes.windll.user32.GetForegroundWindow()
-                    if hwnd:
-                        # 获取窗口类名来判断是否是我们的 PyQt 窗口
-                        # PyQt6 窗口类名通常包含 "Qt6" 或 "QWidget"
-                        class_name_buffer = ctypes.create_unicode_buffer(256)
-                        ctypes.windll.user32.GetClassNameW(hwnd, class_name_buffer, 256)
-                        class_name = class_name_buffer.value
+            try:
+                import ctypes
+                hwnd = ctypes.windll.user32.GetForegroundWindow()
+                if hwnd:
+                    # 获取窗口类名来判断是否是我们的 PyQt 窗口
+                    # PyQt6 窗口类名通常包含 "Qt6" 或 "QWidget"
+                    class_name_buffer = ctypes.create_unicode_buffer(256)
+                    ctypes.windll.user32.GetClassNameW(hwnd, class_name_buffer, 256)
+                    class_name = class_name_buffer.value
 
-                        # 检查是否是 Qt 窗口类（我们的应用窗口）
-                        # PyQt6 主窗口类名通常是 "Qt6QWindowIcon" 或类似
-                        if class_name and ('Qt6' in class_name or 'QWidget' in class_name):
-                            # 进一步检查：获取窗口进程ID，确认是否是我们自己的进程
-                            process_id = ctypes.c_ulong()
-                            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
-                            current_pid = ctypes.windll.kernel32.GetCurrentProcessId()
-                            # 只有进程ID也匹配，才是我们自己的窗口
-                            if process_id.value == current_pid:
-                                return True
-                except Exception:
-                    pass
+                    # 检查是否是 Qt 窗口类（我们的应用窗口）
+                    # PyQt6 主窗口类名通常是 "Qt6QWindowIcon" 或类似
+                    if class_name and ('Qt6' in class_name or 'QWidget' in class_name):
+                        # 进一步检查：获取窗口进程ID，确认是否是我们自己的进程
+                        process_id = ctypes.c_ulong()
+                        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+                        current_pid = ctypes.windll.kernel32.GetCurrentProcessId()
+                        # 只有进程ID也匹配，才是我们自己的窗口
+                        if process_id.value == current_pid:
+                            return True
+            except Exception:
+                pass
 
-            # 回退到 Qt API 检查（跨平台兜底）
+            # 回退到 Qt API 检查
             app = QApplication.instance()
             if not app:
                 return False
@@ -158,22 +162,17 @@ class SelectionDetector(QObject):
         # 确保 text_capture 服务已启动
         tc = self._get_text_capture()
         if tc:
-            # 等待服务就绪
-            timeout = 5.0
-            start = time.time()
-            while not tc.is_ready() and time.time() - start < timeout:
-                time.sleep(0.1)
-
-            if tc.is_ready():
-                print("[INFO] Selection detector started (selection-hook mode)", file=sys.stderr)
-            else:
-                print("[WARN] Selection service not ready, using fallback mode", file=sys.stderr)
+            self._ready_check_deadline = time.time() + 5.0
+            self._on_ready_check()
+            if not tc.is_ready():
+                self._ready_check_timer.start(100)
 
         self._poll_timer.start(self._poll_interval)
 
     def stop(self):
         """停止检测"""
         self._poll_timer.stop()
+        self._ready_check_timer.stop()
         print("[INFO] Selection detector stopped", file=sys.stderr)
 
     def set_enabled(self, enabled: bool):
@@ -189,9 +188,6 @@ class SelectionDetector(QObject):
         Returns:
             bool: 如果用户正在复制，返回 True
         """
-        if sys.platform != 'win32':
-            return False
-
         try:
             import ctypes
 
@@ -206,6 +202,18 @@ class SelectionDetector(QObject):
             return bool(ctrl_pressed and (c_pressed or x_pressed))
         except Exception:
             return False
+
+    def _on_ready_check(self):
+        """异步检查 selection-hook 是否就绪，不阻塞主线程。"""
+        tc = self._get_text_capture()
+        if tc and tc.is_ready():
+            self._ready_check_timer.stop()
+            print("[INFO] Selection detector started (selection-hook mode)", file=sys.stderr)
+            return
+
+        if self._ready_check_deadline and time.time() >= self._ready_check_deadline:
+            self._ready_check_timer.stop()
+            print("[WARN] Selection service not ready, using fallback mode", file=sys.stderr)
 
     def _on_poll(self):
         """轮询检查是否有新的文本选择"""

@@ -20,13 +20,12 @@ from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPi
 from PyQt6.QtCore import QPointF
 from PyQt6.QtSvg import QSvgRenderer
 
-# 设置高 DPI 支持
-if sys.platform == 'win32':
-    import ctypes
-    try:
-        ctypes.windll.user32.SetProcessDpiAwareness(2)
-    except Exception:
-        pass
+# 设置 Windows 高 DPI 支持
+import ctypes
+try:
+    ctypes.windll.user32.SetProcessDpiAwareness(2)
+except Exception:
+    pass
 
 
 # ============================================================================
@@ -163,12 +162,9 @@ class CrashHandler:
     def __init__(self):
         # 获取崩溃日志路径
         try:
-            # 尝试从配置获取路径
-            if sys.platform == 'win32':
-                base_dir = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
-                app_dir = base_dir / "QTranslator"
-            else:
-                app_dir = Path.home() / ".config" / "qtranslator"
+            # Windows: C:\Users\用户名\AppData\Local\QTranslator
+            base_dir = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
+            app_dir = base_dir / "QTranslator"
 
             app_dir.mkdir(parents=True, exist_ok=True)
             self._crash_log_path = app_dir / "crash.log"
@@ -298,9 +294,6 @@ except ImportError:
 
 def setup_auto_start(enable: bool):
     """设置开机自启（Windows）"""
-    if sys.platform != 'win32':
-        return False
-    
     try:
         import winreg
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -1502,6 +1495,19 @@ class SettingsDialog(QDialog):
         # 延迟显示简洁 Toast
         QTimer.singleShot(100, lambda: SimpleToastWidget.show_message("保存成功"))
 
+    def show_window(self):
+        """显示设置窗口；如果已打开则复用并唤醒。"""
+        self._theme = get_theme()
+        self._load_settings()
+        self._apply_theme()
+
+        if not self.isVisible():
+            self._center_window()
+
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     def closeEvent(self, event):
         """隐藏而非销毁，保持单例可用"""
         event.ignore()
@@ -1687,7 +1693,7 @@ class ToastWidget(FadeableToastBase):
             bg_color = "#cf222e"
             icon = "✕"
         else:
-            bg_color = "#007AFF"  # macOS 风格现代蓝
+            bg_color = "#007AFF"  # 现代蓝
             icon = "✓"
 
         self.setStyleSheet(f"""
@@ -1740,6 +1746,8 @@ class ToastWidget(FadeableToastBase):
 class MainController(QObject):
     """主控制器"""
 
+    writing_completed = pyqtSignal(object)
+
     def __init__(self):
         super().__init__()
 
@@ -1779,8 +1787,10 @@ class MainController(QObject):
         self._tray_icon.help_requested.connect(self._on_help_requested)
         # 翻译窗口关闭信号
         self._translator_window.closed.connect(self._on_translator_window_closed)
+        self._translator_window.settings_requested.connect(self._on_settings_requested)
         self._hotkey_manager.hotkey_triggered.connect(self._on_hotkey_triggered)
         self._hotkey_manager.writing_hotkey_triggered.connect(self._on_writing_hotkey_triggered)
+        self.writing_completed.connect(self._on_writing_completed)
 
     def _check_config(self):
         """检查配置（API 配置已硬编码，无需检查）"""
@@ -1839,8 +1849,7 @@ class MainController(QObject):
             return
 
         # 场景2：检测 Windows 锁屏/解锁（通过 OpenInputDesktop API）
-        if sys.platform == 'win32':
-            self._check_session_lock_state()
+        self._check_session_lock_state()
 
     def _check_session_lock_state(self):
         """检测 Windows 会话锁定状态变化
@@ -2061,10 +2070,8 @@ class MainController(QObject):
             import pyperclip
             import uuid
 
-            # 释放热键相关的按键（Ctrl/Shift 可能仍处于按下状态）
-            keyboard.release('ctrl')
-            keyboard.release('shift')
-            time.sleep(0.05)
+            # 等待用户松开触发热键时按住的 Ctrl/Shift，避免后续模拟 Ctrl+C 退化成普通 c。
+            self._wait_for_modifier_release(keyboard)
 
             # 保存当前剪贴板内容
             saved_clipboard = ""
@@ -2083,19 +2090,8 @@ class MainController(QObject):
                 pass
             time.sleep(0.03)
 
-            # 释放修饰键确保 Ctrl+C 能正常工作
-            keyboard.release('ctrl')
-            keyboard.release('shift')
-            time.sleep(0.05)
-
             # 尝试 Ctrl+C 复制当前选中内容
-            keyboard.press('ctrl')
-            time.sleep(0.02)
-            keyboard.press('c')
-            time.sleep(0.02)
-            keyboard.release('c')
-            time.sleep(0.02)
-            keyboard.release('ctrl')
+            self._send_hotkey_safely(keyboard, 'ctrl+c')
             time.sleep(0.1)
 
             keyboard.release('ctrl')
@@ -2141,6 +2137,31 @@ class MainController(QObject):
         except Exception as e:
             log_error(f"写作热键处理失败: {e}")
 
+    def _wait_for_modifier_release(self, keyboard_module, timeout: float = 0.8):
+        """等待真实修饰键释放，避免物理松键事件打断模拟组合键。"""
+        modifiers = ('ctrl', 'shift', 'alt')
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                if not any(keyboard_module.is_pressed(key) for key in modifiers):
+                    break
+            except Exception:
+                break
+            time.sleep(0.02)
+
+        # 清理 keyboard 库可能保留的模拟状态；真实按键若还未松开，上面的等待已尽量避开竞态。
+        for key in modifiers:
+            try:
+                keyboard_module.release(key)
+            except Exception:
+                pass
+        time.sleep(0.05)
+
+    def _send_hotkey_safely(self, keyboard_module, hotkey: str):
+        """安全发送组合键，优先避免组合键退化成普通字符输入。"""
+        self._wait_for_modifier_release(keyboard_module)
+        keyboard_module.press_and_release(hotkey)
+
     def _get_all_text_for_writing_async(self):
         """异步获取全文并开始写作
 
@@ -2170,28 +2191,11 @@ class MainController(QObject):
                 pass
             time.sleep(0.03)
 
-            # 再次确保按键状态正确
-            keyboard.release('ctrl')
-            keyboard.release('shift')
-            time.sleep(0.05)
-
             # 全选并复制
-            keyboard.press('ctrl')
-            time.sleep(0.02)
-            keyboard.press('a')
-            time.sleep(0.02)
-            keyboard.release('a')
-            time.sleep(0.02)
-            keyboard.release('ctrl')
+            self._send_hotkey_safely(keyboard, 'ctrl+a')
             time.sleep(0.05)
 
-            keyboard.press('ctrl')
-            time.sleep(0.02)
-            keyboard.press('c')
-            time.sleep(0.02)
-            keyboard.release('c')
-            time.sleep(0.02)
-            keyboard.release('ctrl')
+            self._send_hotkey_safely(keyboard, 'ctrl+c')
 
             # 等待剪贴板更新
             QTimer.singleShot(200, lambda: self._process_full_text_for_writing(
@@ -2276,11 +2280,8 @@ class MainController(QObject):
 
         # 开始写作
         def on_complete(result: WritingResult):
-            if result.error:
-                ToastWidget.show_message("写作失败", result.error, "error")
-            else:
-                ToastWidget.show_message("写作完成", "文本已处理完成", "success")
-                log_info(f"写作完成: {result.source_language} -> {result.target_language}")
+            # writing_command 的 on_complete 在后台线程中触发，UI 交给 Qt 信号回到主线程处理。
+            self.writing_completed.emit(result)
 
         self._writing_service.writing_command(
             text,
@@ -2288,6 +2289,14 @@ class MainController(QObject):
             keep_original=keep_original,
             on_complete=on_complete
         )
+
+    def _on_writing_completed(self, result: WritingResult):
+        """写作完成回调（运行在 Qt 主线程）。"""
+        if result.error:
+            ToastWidget.show_message("写作失败", result.error, "error")
+        else:
+            SimpleToastWidget.show_message("写作完成")
+            log_info(f"写作完成: {result.source_language} -> {result.target_language}")
 
     def _on_selection_finished(self):
         """划词选择完成 - 显示翻译图标按钮"""
@@ -2358,11 +2367,7 @@ class MainController(QObject):
 
     def _on_settings_requested(self):
         dialog = get_settings_dialog()
-        dialog._theme = get_theme()
-        dialog._load_settings()
-        dialog._apply_theme()
-        dialog._center_window()
-        dialog.exec()
+        dialog.show_window()
 
     def _on_translator_window_requested(self):
         """双击托盘或点击菜单显示翻译窗口"""
@@ -2409,34 +2414,30 @@ class SingleInstance:
 
     def try_lock(self) -> bool:
         """尝试获取实例锁，返回是否是第一个实例"""
-        if sys.platform == 'win32':
-            try:
-                import ctypes
-                # 创建命名 Mutex
-                mutex_name = f"Global\\{self._app_id}"
-                self._mutex = ctypes.windll.kernel32.CreateMutexW(
-                    None, False, mutex_name
-                )
-                last_error = ctypes.windll.kernel32.GetLastError()
+        try:
+            import ctypes
+            # 创建命名 Mutex
+            mutex_name = f"Global\\{self._app_id}"
+            self._mutex = ctypes.windll.kernel32.CreateMutexW(
+                None, False, mutex_name
+            )
+            last_error = ctypes.windll.kernel32.GetLastError()
 
-                # ERROR_ALREADY_EXISTS = 183，表示 Mutex 已存在
-                if last_error == 183:
-                    self._is_first_instance = False
-                    return False
-                else:
-                    self._is_first_instance = True
-                    return True
-            except Exception as e:
-                log_error(f"创建 Mutex 失败: {e}")
-                # 如果创建失败，允许程序继续运行
+            # ERROR_ALREADY_EXISTS = 183，表示 Mutex 已存在
+            if last_error == 183:
+                self._is_first_instance = False
+                return False
+            else:
+                self._is_first_instance = True
                 return True
-        else:
-            # 非 Windows 平台，暂时允许多实例
+        except Exception as e:
+            log_error(f"创建 Mutex 失败: {e}")
+            # 如果创建失败，允许程序继续运行
             return True
 
     def release(self):
         """释放实例锁"""
-        if sys.platform == 'win32' and self._mutex:
+        if self._mutex:
             try:
                 import ctypes
                 ctypes.windll.kernel32.ReleaseMutex(self._mutex)

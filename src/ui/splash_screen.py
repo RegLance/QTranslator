@@ -100,7 +100,7 @@ class SplashScreen(QWidget):
 
         # 绘制蓝色圆形背景
         margin = 8
-        painter.setBrush(QColor(0, 122, 255))  # macOS 风格现代蓝
+        painter.setBrush(QColor(0, 122, 255))  # 现代蓝
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(margin, margin, self.ICON_SIZE - 2*margin, self.ICON_SIZE - 2*margin)
 

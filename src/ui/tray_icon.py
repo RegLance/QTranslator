@@ -384,10 +384,7 @@ class TrayIcon(QObject):
                 from src.config import get_config
                 crash_path = get_config().app_dir / "crash.log"
             except Exception:
-                if sys.platform == 'win32':
-                    base_dir = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
-                else:
-                    base_dir = Path.home()
+                base_dir = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
                 crash_path = base_dir / "QTranslator" / "crash.log"
                 crash_path.parent.mkdir(parents=True, exist_ok=True)
 

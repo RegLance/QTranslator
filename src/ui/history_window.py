@@ -51,6 +51,7 @@ class HistoryWindow(QWidget):
 
         # 加载主题
         self._theme_style = get_config().get('theme.popup_style', 'dark')
+        self._applied_theme_signature = None
 
         # 设置无边框窗口属性
         self.setWindowFlags(
@@ -77,6 +78,7 @@ class HistoryWindow(QWidget):
         except ImportError:
             from src.utils.theme import get_theme_manager
         get_theme_manager().theme_changed.connect(self.update_theme)
+        self._applied_theme_signature = self._get_theme_signature()
 
     def _set_window_icon(self):
         """设置窗口图标（任务栏图标）"""
@@ -578,10 +580,21 @@ class HistoryWindow(QWidget):
 
     def update_theme(self):
         """更新主题"""
-        new_theme = get_config().get('theme.popup_style', 'dark')
-        # 即使主题名称未变，自定义主题的颜色也可能改变，因此始终更新
-        self._theme_style = new_theme
+        new_signature = self._get_theme_signature()
+        if self._applied_theme_signature == new_signature:
+            return
+        self._theme_style = new_signature[0]
         self._apply_theme()
+        self._applied_theme_signature = new_signature
+
+    def _get_theme_signature(self):
+        """获取影响历史窗口样式的主题签名。"""
+        config = get_config()
+        return (
+            config.get('theme.popup_style', 'dark'),
+            config.get('theme.custom_accent', '#007AFF'),
+            config.get('theme.custom_bg', '#2d2d2d'),
+        )
 
     def _apply_theme(self):
         """应用主题"""

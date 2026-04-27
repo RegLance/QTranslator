@@ -68,6 +68,8 @@ class Config:
                 self._config = self._get_default_config()
                 self.save()
 
+        self._migrate_default_values()
+
     def _validate_config(self, config: Dict[str, Any]) -> bool:
         """验证配置是否有效"""
         if config is None:
@@ -177,9 +179,20 @@ class Config:
                 'default_function': 'translate',  # 默认功能：translate/polishing/summarize
             },
             'selection': {
-                'browser_delay_ms': 450,  # 浏览器环境下划词延迟（毫秒）
+                'browser_delay_ms': 300,  # 浏览器环境下划词延迟（毫秒）
             },
         }
+
+    def _migrate_default_values(self):
+        """迁移已写入配置文件的旧默认值。"""
+        changed = False
+
+        if self.get('selection.browser_delay_ms') == 450:
+            self.set('selection.browser_delay_ms', 300)
+            changed = True
+
+        if changed:
+            self.save()
 
     def _merge_with_defaults(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """合并用户配置与默认配置"""

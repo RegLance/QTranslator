@@ -38,6 +38,7 @@ class HelpWindow(QWidget):
         # 加载配置
         config = get_config()
         self._theme_style = config.get('theme.popup_style', 'dark')
+        self._applied_theme_signature = None
 
         # 拖动相关
         self._is_dragging = False
@@ -51,6 +52,7 @@ class HelpWindow(QWidget):
         self.resize(560, 520)
 
         self._setup_ui()
+        self._applied_theme_signature = self._get_theme_signature()
 
         # 连接主题变更信号
         try:
@@ -383,10 +385,21 @@ class HelpWindow(QWidget):
 
     def update_theme(self):
         """更新主题"""
-        new_theme = get_config().get('theme.popup_style', 'dark')
-        # 即使主题名称未变，自定义主题的颜色也可能改变，因此始终更新
-        self._theme_style = new_theme
+        new_signature = self._get_theme_signature()
+        if self._applied_theme_signature == new_signature:
+            return
+        self._theme_style = new_signature[0]
         self._apply_theme()
+        self._applied_theme_signature = new_signature
+
+    def _get_theme_signature(self):
+        """获取影响帮助窗口样式的主题签名。"""
+        config = get_config()
+        return (
+            config.get('theme.popup_style', 'dark'),
+            config.get('theme.custom_accent', '#007AFF'),
+            config.get('theme.custom_bg', '#2d2d2d'),
+        )
 
     def _apply_theme(self):
         """应用主题"""

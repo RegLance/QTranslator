@@ -9,7 +9,7 @@ import time
 from typing import Optional, Tuple
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer, Qt
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import QApplication
 

@@ -350,6 +350,7 @@ class SettingsDialog(QDialog):
         self.resize(500, 680)
 
         self._config = get_config()
+        self._applied_theme_signature = None
         self._setup_ui()
         self._load_settings()
 
@@ -485,7 +486,7 @@ class SettingsDialog(QDialog):
 
         self._browser_delay_spin = StyledSpinBox()
         self._browser_delay_spin.setRange(0, 2000)
-        self._browser_delay_spin.setValue(450)
+        self._browser_delay_spin.setValue(300)
         self._browser_delay_spin.setMinimumHeight(32)
         self._browser_delay_spin.setSuffix(" ms")
         self._browser_delay_label = QLabel("浏览器划词延迟:")
@@ -1045,6 +1046,15 @@ class SettingsDialog(QDialog):
                    self._remember_position_check, self._always_on_top_check,
                    self._polishing_show_diff_check, self._animation_check):
             cb.setIcon(self._cached_check_icon if cb.isChecked() else self._cached_uncheck_icon)
+        self._applied_theme_signature = self._get_theme_signature()
+
+    def _get_theme_signature(self):
+        """获取影响设置窗口样式的主题签名。"""
+        return (
+            self._config.get('theme.popup_style', 'dark'),
+            self._config.get('theme.custom_accent', '#007AFF'),
+            self._config.get('theme.custom_bg', '#2d2d2d'),
+        )
 
     def _start_hotkey_capture(self, target: str):
         """开始捕获快捷键"""
@@ -1195,7 +1205,7 @@ class SettingsDialog(QDialog):
         self._no_proxy_edit.setText(self._config.get('translator.no_proxy', '109.105.120.122'))
 
         # 浏览器划词延迟
-        browser_delay = self._config.get('selection.browser_delay_ms', 450)
+        browser_delay = self._config.get('selection.browser_delay_ms', 300)
         self._browser_delay_spin.setValue(browser_delay)
 
         popup_style = self._config.get('theme.popup_style', 'dark')
@@ -1497,9 +1507,10 @@ class SettingsDialog(QDialog):
 
     def show_window(self):
         """显示设置窗口；如果已打开则复用并唤醒。"""
-        self._theme = get_theme()
         self._load_settings()
-        self._apply_theme()
+        if self._applied_theme_signature != self._get_theme_signature():
+            self._theme = get_theme()
+            self._apply_theme()
 
         if not self.isVisible():
             self._center_window()
@@ -2047,11 +2058,14 @@ class MainController(QObject):
         获取文本的方式（优先级从高到低）：
         1. 使用 Ctrl+C + 标记检测当前是否真的有选中文本
            （比 selection-hook 更可靠，因为 selection-hook 可能返回陈旧数据）
-        2. 如果没有选中，则使用 ctrl+a + ctrl+c 获取全文
+        2. 如果 Ctrl+C 探测失败但 selection-hook 有近期选区，则使用近期选区
+        3. 如果没有选中，则使用 ctrl+a + ctrl+c 获取全文
 
         关键改进：不再优先使用 selection-hook，因为它无法区分
         "当前真的有选中"和"之前选中过但现在已经没有选中了"，
         会导致用户未选中文本时误判为有选中，从而跳过 ctrl+a。
+        但 Ctrl+C 在部分编辑器/网页里会因热键竞争失败；此时优先使用近期选区，
+        避免误走 ctrl+a 把整行或全文选中后写作。
         """
         log_debug("写作热键触发")
 
@@ -2125,6 +2139,17 @@ class MainController(QObject):
                 self._start_writing(clipboard_text.strip(), has_selection=True)
                 return
 
+            recent_selection = self._get_recent_selection_text()
+            if recent_selection:
+                log_info(f"Ctrl+C 未复制选区，使用近期 selection-hook 选区: '{recent_selection[:100]}...'")
+                if saved_clipboard:
+                    try:
+                        pyperclip.copy(saved_clipboard)
+                    except Exception:
+                        pass
+                self._start_writing(recent_selection, has_selection=True)
+                return
+
             # 没有选中内容，恢复剪贴板并获取全文
             log_info("未检测到选中文本，获取全文")
             if saved_clipboard:
@@ -2136,6 +2161,21 @@ class MainController(QObject):
 
         except Exception as e:
             log_error(f"写作热键处理失败: {e}")
+
+    def _get_recent_selection_text(self, max_age: float = 2.0) -> str:
+        """获取最近一次划词选区，避免 Ctrl+C 探测失败时误触发全文写作。"""
+        try:
+            capture_time = self._text_capture.get_last_capture_time()
+            if capture_time <= 0 or time.time() - capture_time > max_age:
+                return ""
+
+            text = capture_text_direct()
+            if text and text.strip():
+                return text.strip()
+        except Exception:
+            pass
+
+        return ""
 
     def _wait_for_modifier_release(self, keyboard_module, timeout: float = 0.8):
         """等待真实修饰键释放，避免物理松键事件打断模拟组合键。"""
@@ -2304,6 +2344,12 @@ class MainController(QObject):
             return
 
         text = capture_text_direct()
+        try:
+            from .core.text_capture import get_last_program_name
+            program_name = get_last_program_name()
+        except ImportError:
+            from src.core.text_capture import get_last_program_name
+            program_name = get_last_program_name()
 
         if not text or not text.strip():
             self._translate_button.hide()
@@ -2316,14 +2362,6 @@ class MainController(QObject):
             from PyQt6.QtGui import QCursor
             cursor = QCursor.pos()
             mouse_pos = (cursor.x(), cursor.y())
-
-        # 获取来源程序名（用于判断是否是浏览器，决定图标显示延迟）
-        try:
-            from .core.text_capture import get_last_program_name
-            program_name = get_last_program_name()
-        except ImportError:
-            from src.core.text_capture import get_last_program_name
-            program_name = get_last_program_name()
 
         # 保存选中文本到翻译按钮（不更新 _last_text，它只记录最后一次发起翻译的文本）
         selected_text = text.strip()

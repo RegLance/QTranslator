@@ -413,6 +413,7 @@ class TranslatorWindow(QWidget):
 
         # 字体大小
         self._font_size = get_config().get('font.size', 14)
+        self._applied_style_signature = None
 
         # 划词翻译相关
         self._auto_mode = False  # 是否处于自动翻译模式
@@ -1362,6 +1363,7 @@ class TranslatorWindow(QWidget):
         new_theme = get_config().get('theme.popup_style', 'dark')
         new_font_size = get_config().get('font.size', 14)
         new_fixed_height_mode = get_config().get('translator_window.fixed_height_mode', False)
+        new_style_signature = self._get_style_signature()
 
         # 同步记忆窗口位置配置
         self._remember_window_position = get_config().get('translator_window.remember_window_position', False)
@@ -1407,10 +1409,21 @@ class TranslatorWindow(QWidget):
                 self.setMinimumSize(450, 450)
                 # 注意：不再在这里 resize，让 show_window 来处理大小
 
-        # 即使主题名称未变，自定义主题的颜色也可能改变，因此始终更新
         self._theme_style = new_theme
         self._font_size = new_font_size
-        self._apply_theme()
+        if self._applied_style_signature != new_style_signature:
+            self._apply_theme()
+            self._applied_style_signature = new_style_signature
+
+    def _get_style_signature(self):
+        """获取影响翻译窗口样式的配置签名。"""
+        config = get_config()
+        return (
+            config.get('theme.popup_style', 'dark'),
+            config.get('theme.custom_accent', '#007AFF'),
+            config.get('theme.custom_bg', '#2d2d2d'),
+            config.get('font.size', 14),
+        )
 
     def _apply_theme(self):
         """应用主题"""

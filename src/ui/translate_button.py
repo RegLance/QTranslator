@@ -34,7 +34,7 @@ BUTTON_SIZE = 24
 HIDE_DISTANCE_THRESHOLD = 50
 
 # 浏览器环境下延迟显示时间（毫秒）- 等待网站原生悬浮窗消失
-DEFAULT_BROWSER_DELAY_MS = 450
+DEFAULT_BROWSER_DELAY_MS = 300
 
 # 点击动画参数（弹跳 + 渐隐）
 CLICK_ANIM_BOUNCE_MS = 200          # 弹跳阶段时长（毫秒）

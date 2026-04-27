@@ -1967,9 +1967,20 @@ class MainController(QObject):
             except Exception as e:
                 log_info(f"语言检测预热失败: {e}")
             try:
-                # 预热API连接（建立DNS+TCP+SSL连接，后续翻译复用）
+                # 预热 API 连接：使用实际翻译同一路径的 chat/completions。
+                # 不使用 models.list()，因为部分内部 OpenAI 兼容网关只暴露聊天补全接口，
+                # 请求 {base_url}/models 会返回误导性的 404。
                 if self._translator and self._translator._client:
-                    self._translator._client.models.list(timeout=5)
+                    self._translator._client.chat.completions.create(
+                        model=self._translator._model,
+                        messages=[
+                            {"role": "system", "content": "You are a connection warmup probe."},
+                            {"role": "user", "content": "ping"},
+                        ],
+                        temperature=0,
+                        max_tokens=1,
+                        timeout=5,
+                    )
                     log_info("API连接预热完成")
                 else:
                     log_info("API连接预热失败: 翻译客户端未初始化")
@@ -2056,18 +2067,14 @@ class MainController(QObject):
         """写作热键触发时执行写作功能
 
         获取文本的方式（优先级从高到低）：
-        1. 使用 Ctrl+C + 标记检测当前是否真的有选中文本
-           （比 selection-hook 更可靠，因为 selection-hook 可能返回陈旧数据）
-        2. 如果 Ctrl+C 探测失败但 selection-hook 有近期选区，则使用近期选区
-        3. 如果没有选中，则使用 ctrl+a + ctrl+c 获取全文
+        1. 使用 selection-hook.getCurrentSelection() 主动查询当前真实选区
+        2. 如果没有选中，则使用 ctrl+a + ctrl+a + ctrl+c 获取全文
 
-        关键改进：不再优先使用 selection-hook，因为它无法区分
-        "当前真的有选中"和"之前选中过但现在已经没有选中了"，
-        会导致用户未选中文本时误判为有选中，从而跳过 ctrl+a。
-        但 Ctrl+C 在部分编辑器/网页里会因热键竞争失败；此时优先使用近期选区，
-        避免误走 ctrl+a 把整行或全文选中后写作。
+        这样避免 Notepad++、VS Code、JetBrains 等编辑器在无选区时
+        Ctrl+C 复制当前行/当前段，导致误判为用户选中了文本。
         """
         log_debug("写作热键触发")
+        log_info(f"[写作诊断] 热键触发，前台窗口: {self._get_foreground_window_snapshot()}")
 
         # 检查是否已在写作中
         if self._writing_service.is_writing:
@@ -2082,7 +2089,6 @@ class MainController(QObject):
         try:
             import keyboard
             import pyperclip
-            import uuid
 
             # 等待用户松开触发热键时按住的 Ctrl/Shift，避免后续模拟 Ctrl+C 退化成普通 c。
             self._wait_for_modifier_release(keyboard)
@@ -2093,89 +2099,239 @@ class MainController(QObject):
                 saved_clipboard = pyperclip.paste()
             except Exception:
                 pass
+            log_info(f"[写作诊断] 触发前剪贴板: {self._format_text_snapshot(saved_clipboard)}")
 
-            # 设置唯一标记到剪贴板，用于检测 Ctrl+C 是否成功更新剪贴板
-            # 如果 Ctrl+C 后剪贴板仍为此标记，说明没有选中文本
-            # （比比较 saved_clipboard 更可靠，因为选中文本可能恰好与旧剪贴板相同）
-            marker = f"__QTRANSLATOR_SEL_{uuid.uuid4().hex}__"
-            try:
-                pyperclip.copy(marker)
-            except Exception:
-                pass
-            time.sleep(0.03)
+            current_selection = self._text_capture.get_selected_text_nextai_style()
+            selected_text = current_selection.text or ""
+            log_info(f"[写作诊断] nextai 风格选区查询: method={current_selection.method}, "
+                     f"error={current_selection.error}, "
+                     f"{self._format_text_snapshot(selected_text)}")
+            editor_selection_state = self._get_foreground_editor_selection_state()
+            log_info(f"[写作诊断] 前台编辑控件选区状态: {editor_selection_state}")
 
-            # 尝试 Ctrl+C 复制当前选中内容
-            self._send_hotkey_safely(keyboard, 'ctrl+c')
-            time.sleep(0.1)
+            has_current_selection = False
+            if editor_selection_state is False:
+                log_info("[写作诊断] 前台编辑控件确认无选区，按无选区处理")
+            elif editor_selection_state is True:
+                has_current_selection = bool(selected_text and selected_text.strip())
+            else:
+                # Scintilla/UIA 都是非剪贴板的真实选区查询，不会触发“复制当前行”。
+                has_current_selection = bool(selected_text and selected_text.strip())
 
-            keyboard.release('ctrl')
-            keyboard.release('shift')
-
-            # 读取剪贴板内容
-            clipboard_text = ""
-            try:
-                clipboard_text = pyperclip.paste()
-            except Exception:
-                pass
-
-            # 判断是否有选中文本：剪贴板不再是标记值，说明 Ctrl+C 成功复制了选中内容
-            has_real_selection = (clipboard_text
-                                  and clipboard_text.strip()
-                                  and clipboard_text != marker)
-
-            if has_real_selection:
-                log_info(f"通过 Ctrl+C 检测到选中文本: '{clipboard_text[:100]}...'")
-                # 恢复剪贴板
-                if saved_clipboard:
-                    try:
-                        pyperclip.copy(saved_clipboard)
-                    except Exception:
-                        pass
-                # 不取消选中！文本保持选中状态，交给 _prepare_for_input 处理：
-                #   keep_original=True: right 键移到选区末尾 → 插入换行 → 翻译在原文下方
-                #   keep_original=False: delete 键删除选中文本 → 替换为翻译
-                # 如果这里按 left 取消选中，光标会移到选区开头，
-                # 后续 right 只移1个字符，翻译会被插入原文中间
-                self._start_writing(clipboard_text.strip(), has_selection=True)
+            if has_current_selection:
+                log_info(f"检测到当前选中文本: {self._format_text_snapshot(selected_text)}")
+                self._start_writing(selected_text, has_selection=True)
                 return
 
-            recent_selection = self._get_recent_selection_text()
-            if recent_selection:
-                log_info(f"Ctrl+C 未复制选区，使用近期 selection-hook 选区: '{recent_selection[:100]}...'")
-                if saved_clipboard:
-                    try:
-                        pyperclip.copy(saved_clipboard)
-                    except Exception:
-                        pass
-                self._start_writing(recent_selection, has_selection=True)
-                return
+            if editor_selection_state is not False:
+                clipboard_selection = self._probe_selected_text_by_clipboard(
+                    keyboard,
+                    pyperclip,
+                    saved_clipboard,
+                )
+                if clipboard_selection and clipboard_selection.strip():
+                    log_info(f"通过剪贴板探测到选中文本: "
+                             f"{self._format_text_snapshot(clipboard_selection)}")
+                    self._start_writing(clipboard_selection, has_selection=True)
+                    return
 
             # 没有选中内容，恢复剪贴板并获取全文
-            log_info("未检测到选中文本，获取全文")
-            if saved_clipboard:
-                try:
-                    pyperclip.copy(saved_clipboard)
-                except Exception:
-                    pass
+            log_info("[写作诊断] 当前无选中文本，进入全文获取流程")
+            try:
+                pyperclip.copy(saved_clipboard)
+            except Exception:
+                pass
             self._get_all_text_for_writing_async()
 
         except Exception as e:
             log_error(f"写作热键处理失败: {e}")
 
-    def _get_recent_selection_text(self, max_age: float = 2.0) -> str:
-        """获取最近一次划词选区，避免 Ctrl+C 探测失败时误触发全文写作。"""
+    def _probe_selected_text_by_clipboard(self, keyboard_module, pyperclip_module,
+                                          saved_clipboard: str) -> str:
+        """仿照 nextai：用剪贴板探测当前选区，并立即恢复剪贴板。"""
+        try:
+            import uuid
+
+            marker = f"__QTRANSLATOR_NO_SELECTION_{uuid.uuid4().hex}__"
+            pyperclip_module.copy(marker)
+            time.sleep(0.03)
+
+            self._send_hotkey_safely(keyboard_module, 'ctrl+c')
+            time.sleep(0.12)
+
+            copied_text = pyperclip_module.paste()
+            log_info(f"[写作诊断] 剪贴板选区探测: "
+                     f"is_marker={copied_text == marker}, "
+                     f"{self._format_text_snapshot(copied_text)}")
+
+            if saved_clipboard is not None:
+                try:
+                    pyperclip_module.copy(saved_clipboard)
+                except Exception:
+                    pass
+
+            if copied_text and copied_text != marker:
+                return copied_text
+        except Exception as e:
+            log_debug(f"剪贴板选区探测失败: {e}")
+            try:
+                if saved_clipboard is not None:
+                    pyperclip_module.copy(saved_clipboard)
+            except Exception:
+                pass
+
+        return ""
+
+    def _get_recent_selection_snapshot(self, max_age: float = 10.0) -> dict:
+        """获取近期 selection-hook 选区摘要，用于验证 Ctrl+C 是否真的复制了选区。"""
+        snapshot = {
+            'text': '',
+            'program': '',
+            'age': float('inf'),
+            'is_recent': False,
+        }
+
         try:
             capture_time = self._text_capture.get_last_capture_time()
-            if capture_time <= 0 or time.time() - capture_time > max_age:
-                return ""
+            if capture_time <= 0:
+                return snapshot
 
+            age = time.time() - capture_time
             text = capture_text_direct()
-            if text and text.strip():
-                return text.strip()
+            try:
+                from .core.text_capture import get_last_program_name
+            except ImportError:
+                from src.core.text_capture import get_last_program_name
+
+            snapshot.update({
+                'text': text or '',
+                'program': get_last_program_name() or '',
+                'age': age,
+                'is_recent': age <= max_age,
+            })
         except Exception:
             pass
 
-        return ""
+        return snapshot
+
+    def _matches_recent_selection(self, clipboard_text: str, selection_snapshot: dict) -> bool:
+        """判断 Ctrl+C 内容是否与近期真实划词选区一致。"""
+        if not selection_snapshot.get('is_recent'):
+            return False
+
+        selection_text = selection_snapshot.get('text') or ''
+        if not clipboard_text or not selection_text:
+            return False
+
+        def normalize(value: str) -> str:
+            return value.replace('\r\n', '\n').replace('\r', '\n').strip()
+
+        return normalize(clipboard_text) == normalize(selection_text)
+
+    def _get_foreground_editor_selection_state(self):
+        """读取前台编辑控件是否有选区。
+
+        返回 True/False 表示已确认有/无选区；返回 None 表示当前控件不支持直接读取。
+        目前覆盖 Notepad++ 等基于 Scintilla 的编辑器，用来避开无选区 Ctrl+C 复制当前行。
+        """
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return None
+
+            thread_id = user32.GetWindowThreadProcessId(hwnd, None)
+
+            class GUITHREADINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", wintypes.DWORD),
+                    ("flags", wintypes.DWORD),
+                    ("hwndActive", wintypes.HWND),
+                    ("hwndFocus", wintypes.HWND),
+                    ("hwndCapture", wintypes.HWND),
+                    ("hwndMenuOwner", wintypes.HWND),
+                    ("hwndMoveSize", wintypes.HWND),
+                    ("hwndCaret", wintypes.HWND),
+                    ("rcCaret", wintypes.RECT),
+                ]
+
+            gui_info = GUITHREADINFO()
+            gui_info.cbSize = ctypes.sizeof(GUITHREADINFO)
+            if not user32.GetGUIThreadInfo(thread_id, ctypes.byref(gui_info)):
+                return None
+
+            focus_hwnd = gui_info.hwndFocus
+            if not focus_hwnd:
+                return None
+
+            class_name_buffer = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(focus_hwnd, class_name_buffer, 256)
+            class_name = class_name_buffer.value
+
+            if class_name == 'Scintilla':
+                SCI_GETSELECTIONSTART = 2143
+                SCI_GETSELECTIONEND = 2145
+                start = user32.SendMessageW(focus_hwnd, SCI_GETSELECTIONSTART, 0, 0)
+                end = user32.SendMessageW(focus_hwnd, SCI_GETSELECTIONEND, 0, 0)
+                return start != end
+
+            if (class_name == 'Edit'
+                    or class_name.startswith('RichEdit')
+                    or class_name.startswith('RICHEDIT')
+                    or 'EDIT' in class_name.upper()):
+                EM_GETSEL = 0x00B0
+                start = wintypes.DWORD()
+                end = wintypes.DWORD()
+                user32.SendMessageW(
+                    focus_hwnd,
+                    EM_GETSEL,
+                    ctypes.byref(start),
+                    ctypes.byref(end),
+                )
+                return start.value != end.value
+
+            return None
+        except Exception as e:
+            log_debug(f"读取前台编辑控件选区状态失败: {e}")
+            return None
+
+    def _format_text_snapshot(self, text: str, limit: int = 80) -> str:
+        """格式化文本诊断信息，避免日志里输出大段正文。"""
+        if text is None:
+            return "text=None"
+
+        normalized = text.replace('\r\n', '\n').replace('\r', '\n')
+        preview = normalized.replace('\n', '\\n')
+        head = preview[:limit]
+        tail = preview[-limit:] if len(preview) > limit else preview
+        return (f"len={len(text)}, stripped_len={len(text.strip())}, "
+                f"lines={normalized.count(chr(10)) + 1 if normalized else 0}, "
+                f"head='{head}', tail='{tail}'")
+
+    def _get_foreground_window_snapshot(self) -> str:
+        """获取前台窗口摘要，辅助分析不同编辑器的快捷键行为。"""
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return "hwnd=0"
+
+            title_buffer = ctypes.create_unicode_buffer(256)
+            class_buffer = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(hwnd, title_buffer, 256)
+            user32.GetClassNameW(hwnd, class_buffer, 256)
+
+            pid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            return (f"hwnd={hwnd}, pid={pid.value}, "
+                    f"class='{class_buffer.value}', title='{title_buffer.value[:120]}'")
+        except Exception as e:
+            return f"unknown ({e})"
 
     def _wait_for_modifier_release(self, keyboard_module, timeout: float = 0.8):
         """等待真实修饰键释放，避免物理松键事件打断模拟组合键。"""
@@ -2205,7 +2361,7 @@ class MainController(QObject):
     def _get_all_text_for_writing_async(self):
         """异步获取全文并开始写作
 
-        通过在 ctrl+a + ctrl+c 前设置唯一标记到剪贴板，
+        通过在 ctrl+a + ctrl+a + ctrl+c 前设置唯一标记到剪贴板，
         操作后检测剪贴板是否被更新，避免因目标应用不支持
         ctrl+a 而误用旧剪贴板内容作为全文。
         """
@@ -2231,11 +2387,33 @@ class MainController(QObject):
                 pass
             time.sleep(0.03)
 
-            # 全选并复制
+            # 全选并复制。部分网页编辑器第一次 Ctrl+A 只选中当前行/段落，
+            # 第二次才会扩展到整个编辑区域。每一步都复制并记录，便于确认编辑器行为。
             self._send_hotkey_safely(keyboard, 'ctrl+a')
-            time.sleep(0.05)
-
+            time.sleep(0.08)
             self._send_hotkey_safely(keyboard, 'ctrl+c')
+            time.sleep(0.12)
+            first_select_text = ""
+            try:
+                first_select_text = pyperclip.paste()
+            except Exception:
+                pass
+            log_info(f"[写作诊断] 第一次 Ctrl+A 后复制: "
+                     f"is_marker={first_select_text == clipboard_marker}, "
+                     f"{self._format_text_snapshot(first_select_text)}")
+
+            self._send_hotkey_safely(keyboard, 'ctrl+a')
+            time.sleep(0.08)
+            self._send_hotkey_safely(keyboard, 'ctrl+c')
+            time.sleep(0.12)
+            second_select_text = ""
+            try:
+                second_select_text = pyperclip.paste()
+            except Exception:
+                pass
+            log_info(f"[写作诊断] 第二次 Ctrl+A 后复制: "
+                     f"is_marker={second_select_text == clipboard_marker}, "
+                     f"{self._format_text_snapshot(second_select_text)}")
 
             # 等待剪贴板更新
             QTimer.singleShot(200, lambda: self._process_full_text_for_writing(
@@ -2257,8 +2435,10 @@ class MainController(QObject):
             import keyboard
 
             text = pyperclip.paste()
+            log_info(f"[写作诊断] 准备开始全文写作，剪贴板最终内容: "
+                     f"is_marker={text == clipboard_marker}, {self._format_text_snapshot(text)}")
 
-            # 检测 ctrl+a + ctrl+c 是否成功
+            # 检测 ctrl+a + ctrl+a + ctrl+c 是否成功
             # 如果剪贴板仍是标记值，说明目标应用不支持全选或复制失败
             if clipboard_marker and text == clipboard_marker:
                 # 取消可能存在的选中状态
@@ -2269,20 +2449,17 @@ class MainController(QObject):
                 self._restore_clipboard(saved_clipboard)
                 return
 
-            log_info(f"全文内容: '{text[:100] if text else '(空)'}'")
+            log_info(f"全文内容: {self._format_text_snapshot(text)}")
 
             if text and text.strip():
-                # 取消选中（按左箭头移动光标到开头）
                 keyboard.release('ctrl')
                 keyboard.release('shift')
-                time.sleep(0.05)
-                keyboard.press_and_release('left')
 
                 # 立即恢复剪贴板（不用定时器，避免与写作线程的剪贴板操作竞态）
                 self._restore_clipboard(saved_clipboard)
 
-                # 开始写作（全文模式）
-                self._start_writing(text.strip(), has_selection=False)
+                # 当前全文仍保持选中，直接按选区替换，避免写入阶段再次 Ctrl+A 只选中当前行。
+                self._start_writing(text, has_selection=True)
             else:
                 self._restore_clipboard(saved_clipboard)
                 log_debug("没有可用的文本进行写作")

@@ -8,6 +8,7 @@
  */
 
 const SelectionHook = require('selection-hook');
+const readline = require('readline');
 
 // 创建选择钩子实例
 const selectionHook = new SelectionHook();
@@ -170,6 +171,63 @@ selectionHook.on('text-selection', (data) => {
     };
     
     console.log(JSON.stringify(result));
+});
+
+function emitCurrentSelection(requestId) {
+    try {
+        const data = selectionHook.getCurrentSelection();
+        if (!data || !data.text) {
+            console.log(JSON.stringify({
+                type: 'current-selection',
+                requestId,
+                text: '',
+                x: 0,
+                y: 0,
+                program: '',
+                method: '',
+                posLevel: null,
+                timestamp: Date.now(),
+            }));
+            return;
+        }
+
+        const position = getSelectionPosition(data);
+        console.log(JSON.stringify({
+            type: 'current-selection',
+            requestId,
+            text: data.text || '',
+            x: position.x || 0,
+            y: position.y || 0,
+            program: data.programName || '',
+            method: data.method,
+            posLevel: data.posLevel,
+            timestamp: Date.now(),
+        }));
+    } catch (err) {
+        console.log(JSON.stringify({
+            type: 'current-selection',
+            requestId,
+            text: '',
+            error: err.message,
+            timestamp: Date.now(),
+        }));
+    }
+}
+
+const rl = readline.createInterface({
+    input: process.stdin,
+    terminal: false,
+});
+
+rl.on('line', (line) => {
+    try {
+        const message = JSON.parse(line);
+        if (message && message.cmd === 'get-current-selection') {
+            emitCurrentSelection(message.id || null);
+        }
+    } catch (err) {
+        console.error(JSON.stringify({ error: err.message }));
+    }
 });
 
 // 监听错误

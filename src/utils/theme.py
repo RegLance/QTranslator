@@ -54,6 +54,47 @@ def _luminance(hex_color: str) -> float:
     return 0.2126 * _linearize(r) + 0.7152 * _linearize(g) + 0.0722 * _linearize(b)
 
 
+def _mix_hex(base: str, overlay: str, t: float) -> str:
+    """在 base 与 overlay 之间线性混合（t=0 为 base，t=1 为 overlay）。"""
+    t = max(0.0, min(1.0, t))
+    r1, g1, b1 = _hex_to_rgb(base)
+    r2, g2, b2 = _hex_to_rgb(overlay)
+    r = r1 * (1.0 - t) + r2 * t
+    g = g1 * (1.0 - t) + g2 * t
+    b = b1 * (1.0 - t) + b2 * t
+    return _rgb_to_hex(r, g, b)
+
+
+def polish_diff_highlight_colors(theme: Dict[str, Any]) -> tuple[str, str]:
+    """润色差异高亮背景：删除区（error 色调）、新增区（success 色调），随主题背景与语义色混合。
+
+    Returns:
+        (bg_deleted, bg_added) 十六进制颜色
+    """
+    bg = theme.get("bg_secondary", theme.get("bg_color", "#252525"))
+    err = theme.get("error_color", "#d32f2f")
+    suc = theme.get("success_color", "#1a7f37")
+    lum = _luminance(bg)
+    if lum < 0.42:
+        ratio = 0.36
+    elif lum > 0.55:
+        ratio = 0.15
+    else:
+        ratio = 0.24
+    # 深色主题下语义色略提亮再叠，避免发灰、发暗
+    if lum < 0.45:
+        err_m = _lighten(err, 0.08)
+        suc_m = _lighten(suc, 0.16)
+    else:
+        err_m = _lighten(err, 0.02)
+        suc_m = _lighten(suc, 0.06)
+    add_ratio = min(0.48, ratio + 0.06)
+    return (
+        _mix_hex(bg, err_m, ratio),
+        _mix_hex(bg, suc_m, add_ratio),
+    )
+
+
 # ---------------------------------------------------------------------------
 # 主题派生函数
 # ---------------------------------------------------------------------------

@@ -637,7 +637,7 @@ class SettingsDialog(QDialog):
         polishing_layout.addWidget(self._polishing_show_diff_check)
 
         # 添加说明文字
-        self._polishing_show_diff_hint_label = QLabel("勾选后，润色结果将使用红色删除线标记被删除的文字，使用绿色高亮标记新增或修改的文字")
+        self._polishing_show_diff_hint_label = QLabel("勾选后，润色完成时将对原文与结果做词/短语级比对：浅红为删除片段，浅绿为新增片段")
         self._polishing_show_diff_hint_label.setProperty("class", "checkbox-hint")
         self._polishing_show_diff_hint_label.setWordWrap(True)
         polishing_layout.addWidget(self._polishing_show_diff_hint_label)

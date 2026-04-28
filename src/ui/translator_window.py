@@ -1,4 +1,4 @@
-"""独立翻译窗口模块 - QTranslator（无边框风格，支持主题切换、纯文本显示）"""
+"""独立翻译窗口模块 - QTranslator（无边框风格，支持主题切换；译文框默认纯文本，润色差异模式下渲染 Markdown）"""
 import sys
 import math
 import webbrowser
@@ -368,7 +368,7 @@ class UpdateCheckWorker(QThread):
 
 
 class TranslatorWindow(QWidget):
-    """独立翻译窗口（无边框，支持调整大小、主题切换、纯文本显示）
+    """独立翻译窗口（无边框，支持调整大小、主题切换；开启润色差异时译文框渲染 Markdown）
 
     同时支持：
     1. 手动输入翻译模式
@@ -434,6 +434,9 @@ class TranslatorWindow(QWidget):
         self._char_timer.setInterval(10)  # 每个字符间隔 10ms（快速打字效果）
         self._char_timer.timeout.connect(self._flush_char)
         self._pending_finish_callback = None  # 缓冲区清空后的完成回调
+
+        # 译文框是否为 Markdown 渲染（开启「显示润色差异」时的润色结果）
+        self._output_markdown_mode = False
 
         # 固定高度模式（从配置读取）
         self._fixed_height_mode = get_config().get('translator_window.fixed_height_mode', False)
@@ -1038,7 +1041,7 @@ class TranslatorWindow(QWidget):
         """)
         self._output_text.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._output_text.customContextMenuRequested.connect(self._show_output_context_menu)
-        self._output_text.setAcceptRichText(False)  # 禁用富文本
+        self._configure_output_text_mode(False)
 
         # 悬浮按钮容器（右下角）- 完全透明，无边框
         self._floating_buttons_frame = QFrame()
@@ -1762,10 +1765,27 @@ class TranslatorWindow(QWidget):
         # 应用默认功能按钮样式（确保主题切换后样式保持不变）
         self._apply_default_function_style()
 
+    def _configure_output_text_mode(self, markdown: bool):
+        """译文框切换纯文本 / Markdown 渲染（润色差异模式输出 ~~删除~~ **新增**）。"""
+        self._output_markdown_mode = markdown
+        self._output_text.setAcceptRichText(markdown)
+
+    def _get_output_clipboard_text(self) -> str:
+        """复制译文：Markdown 模式优先复制原始 Markdown 源码，便于粘贴回编辑器。"""
+        if getattr(self, '_output_markdown_mode', False):
+            src = getattr(self, '_streaming_text', '') or ''
+            if src.strip():
+                return src
+            try:
+                return self._output_text.toMarkdown()
+            except Exception:
+                return self._output_text.toPlainText()
+        return self._output_text.toPlainText()
+
     def _copy_all_text(self):
         """复制译文"""
         clipboard = QApplication.clipboard()
-        translated_text = self._output_text.toPlainText()
+        translated_text = self._get_output_clipboard_text()
         if translated_text:
             clipboard.setText(translated_text)
 
@@ -1808,6 +1828,7 @@ class TranslatorWindow(QWidget):
         # 4. 清空输入和输出文本框
         self._input_text.clear()
         self._output_text.clear()
+        self._configure_output_text_mode(False)
 
         # 5. 重置划词翻译相关状态
         self._auto_mode = False
@@ -1860,6 +1881,7 @@ class TranslatorWindow(QWidget):
         # 清空输出
         self._output_text.clear()
         self._streaming_text = ""
+        self._configure_output_text_mode(False)
 
         # 初始化流式状态
         self._is_streaming = True
@@ -1920,7 +1942,7 @@ class TranslatorWindow(QWidget):
             pass
 
     def _flush_char(self):
-        """逐字输出定时器回调：每次从缓冲区取出一个字符插入文本框"""
+        """逐字输出定时器回调：纯文本每次插入少量字符；Markdown 润色每次刷新整段渲染。"""
         try:
             if not self._char_queue:
                 # 缓冲区为空，停止定时器
@@ -1932,29 +1954,35 @@ class TranslatorWindow(QWidget):
                     callback()
                 return
 
-            # 每次输出 3 个字符，提高速度感（10ms * 3 = 每秒约300字）
-            batch_size = 3
-            chars_to_insert = []
-            for _ in range(batch_size):
-                if self._char_queue:
-                    chars_to_insert.append(self._char_queue.pop(0))
-                else:
-                    break
+            md_mode = getattr(self, '_output_markdown_mode', False)
+            # Markdown 润色差异：每次定时 tick 刷新整段源码渲染（~~删除~~ **新增**）；否则逐字插入纯文本
+            if md_mode:
+                chunk = ''.join(self._char_queue)
+                self._char_queue.clear()
+            else:
+                batch_size = 3
+                chars_to_insert = []
+                for _ in range(batch_size):
+                    if self._char_queue:
+                        chars_to_insert.append(self._char_queue.pop(0))
+                    else:
+                        break
+                chunk = ''.join(chars_to_insert)
 
-            if not chars_to_insert:
+            if not chunk:
                 return
 
-            chunk = ''.join(chars_to_insert)
             self._streaming_text += chunk
 
-            # 在插入文本之前记录滚动位置
             scrollbar = self._output_text.verticalScrollBar()
             was_at_bottom = scrollbar.value() >= scrollbar.maximum() - 10
 
-            # 使用 QTextCursor 追加文本，避免频繁 setPlainText 导致滚动条闪烁
-            cursor = self._output_text.textCursor()
-            cursor.movePosition(cursor.MoveOperation.End)
-            cursor.insertText(chunk)
+            if md_mode:
+                self._output_text.setMarkdown(self._streaming_text)
+            else:
+                cursor = self._output_text.textCursor()
+                cursor.movePosition(cursor.MoveOperation.End)
+                cursor.insertText(chunk)
 
             # 滚动策略：
             # - 窗口自动增长期间（滚动条隐藏）：不改变滚动位置
@@ -2049,6 +2077,7 @@ class TranslatorWindow(QWidget):
             self._pending_finish_callback = None
             # 恢复滚动条显示
             self._show_output_scrollbar()
+            self._configure_output_text_mode(False)
             self._output_text.setPlainText(f"翻译失败: {error}")
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
@@ -2079,6 +2108,7 @@ class TranslatorWindow(QWidget):
         # 清空输出
         self._output_text.clear()
         self._streaming_text = ""
+        self._configure_output_text_mode(get_config().get('polishing.show_diff', False))
 
         # 初始化流式状态
         self._is_streaming = True
@@ -2170,6 +2200,7 @@ class TranslatorWindow(QWidget):
             self._pending_finish_callback = None
             # 恢复滚动条显示
             self._show_output_scrollbar()
+            self._configure_output_text_mode(False)
             self._output_text.setPlainText(f"润色失败: {error}")
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
@@ -2198,6 +2229,7 @@ class TranslatorWindow(QWidget):
         # 清空输出
         self._output_text.clear()
         self._streaming_text = ""
+        self._configure_output_text_mode(False)
 
         # 初始化流式状态
         self._is_streaming = True
@@ -2297,6 +2329,7 @@ class TranslatorWindow(QWidget):
             self._pending_finish_callback = None
             # 恢复滚动条显示
             self._show_output_scrollbar()
+            self._configure_output_text_mode(False)
             self._output_text.setPlainText(f"总结失败: {error}")
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
@@ -2367,7 +2400,9 @@ class TranslatorWindow(QWidget):
         copy_action.triggered.connect(self._output_text.copy)
 
         copy_all_action = menu.addAction("复制全部译文")
-        copy_all_action.triggered.connect(lambda: QApplication.clipboard().setText(self._output_text.toPlainText()))
+        copy_all_action.triggered.connect(
+            lambda: QApplication.clipboard().setText(self._get_output_clipboard_text())
+        )
 
         menu.addSeparator()
 
@@ -2958,6 +2993,7 @@ class TranslatorWindow(QWidget):
         self._input_text.clear()
         self._output_text.clear()
         self._streaming_text = ""
+        self._configure_output_text_mode(False)
         # 强制立即刷新，确保清除在 show() 之前生效
         self._input_text.repaint()
         self._output_text.repaint()
@@ -3005,6 +3041,7 @@ class TranslatorWindow(QWidget):
         """
         if original_text:
             self._input_text.setPlainText(original_text)
+        self._configure_output_text_mode(False)
         self._output_text.setPlainText("正在翻译...")
 
     def show_streaming_start(self, original_text: str = None):
@@ -3029,6 +3066,7 @@ class TranslatorWindow(QWidget):
             self._input_text.setPlainText(original_text)
 
         self._output_text.clear()
+        self._configure_output_text_mode(False)
 
         # 流式输出开始时隐藏滚动条（固定高度模式下不隐藏）
         if not self._fixed_height_mode:
@@ -3059,15 +3097,17 @@ class TranslatorWindow(QWidget):
         """完成流式翻译 - 刷新缓冲区中剩余字符后执行完成操作"""
         # 如果缓冲区还有字符，加速排空
         if self._char_queue:
-            # 立即排空所有剩余字符
             remaining = ''.join(self._char_queue)
             self._char_queue.clear()
             self._char_timer.stop()
             self._streaming_text += remaining
 
-            cursor = self._output_text.textCursor()
-            cursor.movePosition(cursor.MoveOperation.End)
-            cursor.insertText(remaining)
+            if getattr(self, '_output_markdown_mode', False):
+                self._output_text.setMarkdown(self._streaming_text)
+            else:
+                cursor = self._output_text.textCursor()
+                cursor.movePosition(cursor.MoveOperation.End)
+                cursor.insertText(remaining)
 
         self._is_streaming = False
         # 清理定时器
@@ -3155,8 +3195,6 @@ class TranslatorWindow(QWidget):
             # 最大允许高度（屏幕高度的70%）
             max_height = int(screen_h * 0.7)
 
-            from PyQt6.QtGui import QFontMetrics, QTextDocument
-
             # 动态计算 splitter 以外的开销（标题栏、控制栏、边距、边框等）
             splitter_h = self._splitter.height()
             if splitter_h > 0 and self.height() > splitter_h:
@@ -3172,15 +3210,11 @@ class TranslatorWindow(QWidget):
                 output_width = self.width() - 2 - 24 - 2 - 16
                 output_width = max(200, output_width)
 
-            # 计算输出文本高度
-            output_font = self._output_text.font()
-            output_text = self._output_text.toPlainText()
-
-            if output_text:
-                doc = QTextDocument()
-                doc.setDefaultFont(output_font)
+            # 计算输出文本高度（使用译文 QTextDocument 当前排版，兼容 Markdown 渲染）
+            plain_out = self._output_text.toPlainText()
+            if plain_out.strip():
+                doc = self._output_text.document()
                 doc.setTextWidth(output_width)
-                doc.setPlainText(output_text)
                 text_content_height = int(doc.size().height())
             else:
                 text_content_height = 0
@@ -3559,6 +3593,7 @@ class TranslatorWindow(QWidget):
         Args:
             result: TranslationResult 对象
         """
+        self._configure_output_text_mode(False)
         if result.error:
             self._output_text.setPlainText(f"翻译失败: {result.error}")
         else:

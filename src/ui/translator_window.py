@@ -1,7 +1,9 @@
-"""独立翻译窗口模块 - QTranslator（无边框风格，支持主题切换；译文框默认纯文本，润色差异模式下渲染 Markdown）"""
+"""独立翻译窗口模块 - QTranslator（无边框风格，支持主题切换；译文框默认纯文本，润色差异模式下渲染富文本）"""
 import sys
 import math
 import webbrowser
+import html
+import re
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
@@ -368,7 +370,7 @@ class UpdateCheckWorker(QThread):
 
 
 class TranslatorWindow(QWidget):
-    """独立翻译窗口（无边框，支持调整大小、主题切换；开启润色差异时译文框渲染 Markdown）
+    """独立翻译窗口（无边框，支持调整大小、主题切换；开启润色差异时译文框渲染富文本）
 
     同时支持：
     1. 手动输入翻译模式
@@ -435,7 +437,7 @@ class TranslatorWindow(QWidget):
         self._char_timer.timeout.connect(self._flush_char)
         self._pending_finish_callback = None  # 缓冲区清空后的完成回调
 
-        # 译文框是否为 Markdown 渲染（开启「显示润色差异」时的润色结果）
+        # 译文框是否为富文本渲染（开启「显示润色差异」时的润色结果）
         self._output_markdown_mode = False
 
         # 固定高度模式（从配置读取）
@@ -1765,13 +1767,44 @@ class TranslatorWindow(QWidget):
         # 应用默认功能按钮样式（确保主题切换后样式保持不变）
         self._apply_default_function_style()
 
-    def _configure_output_text_mode(self, markdown: bool):
-        """译文框切换纯文本 / Markdown 渲染（润色差异模式输出 ~~删除~~ **新增**）。"""
-        self._output_markdown_mode = markdown
-        self._output_text.setAcceptRichText(markdown)
+    def _configure_output_text_mode(self, rich_text: bool):
+        """译文框切换纯文本 / 富文本渲染（润色差异模式输出 ~~删除~~ **新增**）。"""
+        self._output_markdown_mode = rich_text
+        self._output_text.setAcceptRichText(rich_text)
+
+    def _render_polishing_diff_html(self, text: str) -> str:
+        """将润色差异 Markdown 标记渲染为不依赖粗体的 HTML 高亮。"""
+        theme = get_theme(self._theme_style)
+        is_dark = _luminance(theme.get('bg_secondary', '#2d2d2d')) < 0.5
+        if is_dark:
+            added_color, added_bg = '#7ee787', '#15351f'
+            deleted_color, deleted_bg = '#ff7b72', '#3b1f23'
+        else:
+            added_color, added_bg = '#116329', '#dafbe1'
+            deleted_color, deleted_bg = '#b42318', '#ffebe9'
+
+        escaped = html.escape(text)
+        escaped = re.sub(
+            r'~~(.+?)~~',
+            rf'<span style="color:{deleted_color}; background-color:{deleted_bg}; text-decoration: line-through;">\1</span>',
+            escaped,
+            flags=re.DOTALL,
+        )
+        escaped = re.sub(
+            r'\*\*(.+?)\*\*',
+            rf'<span style="color:{added_color}; background-color:{added_bg};">\1</span>',
+            escaped,
+            flags=re.DOTALL,
+        )
+        return (
+            f'<div style="font-family:{self._FONT_FAMILY_CSS}; '
+            f'font-size:{self._font_size}px; color:{theme["text_primary"]};">'
+            f'{escaped.replace(chr(10), "<br>")}'
+            '</div>'
+        )
 
     def _get_output_clipboard_text(self) -> str:
-        """复制译文：Markdown 模式优先复制原始 Markdown 源码，便于粘贴回编辑器。"""
+        """复制译文：差异模式优先复制原始 Markdown 源码，便于粘贴回编辑器。"""
         if getattr(self, '_output_markdown_mode', False):
             src = getattr(self, '_streaming_text', '') or ''
             if src.strip():
@@ -1942,7 +1975,7 @@ class TranslatorWindow(QWidget):
             pass
 
     def _flush_char(self):
-        """逐字输出定时器回调：纯文本每次插入少量字符；Markdown 润色每次刷新整段渲染。"""
+        """逐字输出定时器回调：纯文本每次插入少量字符；润色差异每次刷新整段富文本渲染。"""
         try:
             if not self._char_queue:
                 # 缓冲区为空，停止定时器
@@ -1954,9 +1987,9 @@ class TranslatorWindow(QWidget):
                     callback()
                 return
 
-            md_mode = getattr(self, '_output_markdown_mode', False)
-            # Markdown 润色差异：每次定时 tick 刷新整段源码渲染（~~删除~~ **新增**）；否则逐字插入纯文本
-            if md_mode:
+            rich_text_mode = getattr(self, '_output_markdown_mode', False)
+            # 润色差异：每次定时 tick 刷新整段源码渲染（~~删除~~ **新增**）；否则逐字插入纯文本
+            if rich_text_mode:
                 chunk = ''.join(self._char_queue)
                 self._char_queue.clear()
             else:
@@ -1977,8 +2010,8 @@ class TranslatorWindow(QWidget):
             scrollbar = self._output_text.verticalScrollBar()
             was_at_bottom = scrollbar.value() >= scrollbar.maximum() - 10
 
-            if md_mode:
-                self._output_text.setMarkdown(self._streaming_text)
+            if rich_text_mode:
+                self._output_text.setHtml(self._render_polishing_diff_html(self._streaming_text))
             else:
                 cursor = self._output_text.textCursor()
                 cursor.movePosition(cursor.MoveOperation.End)
@@ -3103,7 +3136,7 @@ class TranslatorWindow(QWidget):
             self._streaming_text += remaining
 
             if getattr(self, '_output_markdown_mode', False):
-                self._output_text.setMarkdown(self._streaming_text)
+                self._output_text.setHtml(self._render_polishing_diff_html(self._streaming_text))
             else:
                 cursor = self._output_text.textCursor()
                 cursor.movePosition(cursor.MoveOperation.End)

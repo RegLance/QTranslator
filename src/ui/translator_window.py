@@ -543,7 +543,12 @@ class TranslatorWindow(QWidget):
 
     def _setup_window_properties(self):
         """设置窗口属性"""
-        flags = Qt.WindowType.FramelessWindowHint
+        flags = (
+            Qt.WindowType.Window |
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowMinimizeButtonHint |
+            Qt.WindowType.WindowMaximizeButtonHint
+        )
         if self._always_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
@@ -565,8 +570,8 @@ class TranslatorWindow(QWidget):
         # 设置窗口图标（任务栏图标）
         self._set_window_icon()
 
-        # 在 Windows 上启用任务栏点击最小化功能
-        self._enable_taskbar_minimize()
+        # 在 Windows 上启用任务栏最小化和 Win+方向键贴靠/最大化
+        self._enable_windows_window_management()
 
     def _set_window_icon(self):
         """设置窗口图标（任务栏图标）"""
@@ -574,23 +579,46 @@ class TranslatorWindow(QWidget):
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
-    def _enable_taskbar_minimize(self):
-        """在 Windows 上启用任务栏点击最小化功能"""
+    def _enable_windows_window_management(self):
+        """在 Windows 上启用系统窗口管理快捷键和任务栏最小化。"""
         try:
+            if not sys.platform.startswith("win"):
+                return
+
             import ctypes
             # 获取窗口句柄
             hwnd = int(self.winId())
 
             # 获取当前窗口样式
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, -16)  # GWL_STYLE = -16
+            GWL_STYLE = -16
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
 
-            # 添加 WS_MINIMIZEBOX 样式（允许最小化）
+            # WS_THICKFRAME/WS_MAXIMIZEBOX 让 Windows 识别该无边框窗口可贴靠/最大化，
+            # 因而支持 Win+方向键等系统窗口管理快捷键。
+            WS_THICKFRAME = 0x00040000
             WS_MINIMIZEBOX = 0x00020000
+            WS_MAXIMIZEBOX = 0x00010000
             WS_SYSMENU = 0x00080000
-            new_style = style | WS_MINIMIZEBOX | WS_SYSMENU
+            new_style = style | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU
 
             # 设置新样式
-            ctypes.windll.user32.SetWindowLongW(hwnd, -16, new_style)
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, new_style)
+
+            # 通知 Windows 重新计算非客户区样式，否则快捷键/贴靠状态可能不立即生效。
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            ctypes.windll.user32.SetWindowPos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+            )
         except Exception:
             pass
 
@@ -1312,7 +1340,12 @@ class TranslatorWindow(QWidget):
     def _update_always_on_top(self):
         """动态切换窗口置顶属性（运行时配置变更时调用）"""
         was_visible = self.isVisible()
-        flags = Qt.WindowType.FramelessWindowHint
+        flags = (
+            Qt.WindowType.Window |
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowMinimizeButtonHint |
+            Qt.WindowType.WindowMaximizeButtonHint
+        )
         if self._always_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
@@ -1321,8 +1354,8 @@ class TranslatorWindow(QWidget):
             self.show()
             self.raise_()
             self.activateWindow()
-        # 重新设置任务栏最小化支持（setWindowFlags 会重置 Win32 样式）
-        self._enable_taskbar_minimize()
+        # 重新设置 Windows 窗口管理支持（setWindowFlags 会重置 Win32 样式）
+        self._enable_windows_window_management()
 
     @property
     def is_foreground(self) -> bool:
@@ -2898,9 +2931,18 @@ class TranslatorWindow(QWidget):
             if self.windowState() & Qt.WindowState.WindowMinimized:
                 # 窗口被最小化
                 self._is_minimized = True
+            elif self.windowState() & Qt.WindowState.WindowMaximized:
+                # Win+上方向键等系统快捷键触发最大化
+                self._is_minimized = False
+                self._is_maximized = True
+                self._maximize_btn.setText("❐")
             elif self._is_minimized and not (self.windowState() & Qt.WindowState.WindowMinimized):
                 # 窗口从最小化恢复
                 self._is_minimized = False
+            elif self._is_maximized and self.windowState() == Qt.WindowState.WindowNoState:
+                # Win+下方向键等系统快捷键恢复普通窗口
+                self._is_maximized = False
+                self._maximize_btn.setText("□")
         super().changeEvent(event)
 
     def closeEvent(self, event):
@@ -3696,10 +3738,29 @@ class TranslatorWindow(QWidget):
             self._clear_polish_diff_snapshot()
             self._output_text.setPlainText(result.translated_text)
 
+    def _window_overlaps_any_screen(self) -> bool:
+        """当前窗口几何是否与任意一块屏幕有交集（用于过滤离屏预渲染等无效坐标）。"""
+        try:
+            g = self.frameGeometry()
+            # 取中心与四角任一点命中屏幕即可（覆盖跨屏与普通窗口）
+            candidates = (
+                QPoint(g.center().x(), g.center().y()),
+                QPoint(g.left(), g.top()),
+                QPoint(g.right(), g.top()),
+                QPoint(g.left(), g.bottom()),
+                QPoint(g.right(), g.bottom()),
+            )
+            for p in candidates:
+                if QApplication.screenAt(p) is not None:
+                    return True
+            return False
+        except Exception:
+            return True
+
     def hide(self):
         """隐藏窗口"""
-        # 记忆窗口位置：在隐藏前保存当前位置
-        if self._remember_window_position:
+        # 记忆窗口位置：在隐藏前保存当前位置（跳过完全离屏的假位置，例如启动时离屏预渲染）
+        if self._remember_window_position and self._window_overlaps_any_screen():
             self._saved_window_pos = self.pos()
         
         # 记忆窗口大小：只在用户手动调整过窗口大小时才保存

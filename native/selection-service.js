@@ -235,7 +235,7 @@ selectionHook.on('error', (err) => {
     console.error(JSON.stringify({ error: err.message }));
 });
 
-// 启动监控
+// 启动监控：启用剪贴板回退（无障碍取不到文本时的最后手段，会模拟复制）。
 try {
     configureSelectionHook();
     selectionHook.start({ enableClipboard: true });

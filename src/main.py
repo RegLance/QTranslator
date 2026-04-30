@@ -477,23 +477,6 @@ class SettingsDialog(QDialog):
 
         scroll_layout.addWidget(self._api_group)
 
-        # 翻译设置组
-        self._trans_group = QGroupBox("翻译设置")
-        trans_layout = QFormLayout(self._trans_group)
-        trans_layout.setSpacing(10)
-        trans_layout.setContentsMargins(12, 20, 12, 12)
-        trans_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
-        self._browser_delay_spin = StyledSpinBox()
-        self._browser_delay_spin.setRange(0, 2000)
-        self._browser_delay_spin.setValue(300)
-        self._browser_delay_spin.setMinimumHeight(32)
-        self._browser_delay_spin.setSuffix(" ms")
-        self._browser_delay_label = QLabel("浏览器划词延迟:")
-        trans_layout.addRow(self._browser_delay_label, self._browser_delay_spin)
-
-        scroll_layout.addWidget(self._trans_group)
-
         # 外观设置组
         self._theme_group = QGroupBox("外观设置")
         theme_layout = QFormLayout(self._theme_group)
@@ -1036,7 +1019,6 @@ class SettingsDialog(QDialog):
 
         # SpinBox 自定义箭头颜色
         self._font_size_spin.set_arrow_color(t['text_secondary'])
-        self._browser_delay_spin.set_arrow_color(t['text_secondary'])
 
         # 缓存复选框图标并应用
         self._cached_check_icon = self._create_check_icon()
@@ -1204,10 +1186,6 @@ class SettingsDialog(QDialog):
         self._model_edit.setText(self._config.get('translator.model', ''))
         self._no_proxy_edit.setText(self._config.get('translator.no_proxy', '109.105.120.122'))
 
-        # 浏览器划词延迟
-        browser_delay = self._config.get('selection.browser_delay_ms', 300)
-        self._browser_delay_spin.setValue(browser_delay)
-
         popup_style = self._config.get('theme.popup_style', 'dark')
         if popup_style in self._theme_keys:
             self._popup_style_combo.setCurrentIndex(self._theme_keys.index(popup_style))
@@ -1274,7 +1252,6 @@ class SettingsDialog(QDialog):
         # 禁用滚轮事件，避免误触
         self._disable_wheel_event(self._popup_style_combo)
         self._disable_wheel_event(self._font_size_spin)
-        self._disable_wheel_event(self._browser_delay_spin)
         self._disable_wheel_event(self._newline_hotkey_combo)
 
         # 预初始化 ComboBox 下拉视图，避免首次点击卡顿
@@ -1395,9 +1372,6 @@ class SettingsDialog(QDialog):
             self._config.set('translator.api_key', self._api_key_edit.text().strip())
             self._config.set('translator.model', self._model_edit.text().strip())
             self._config.set('translator.no_proxy', self._no_proxy_edit.text().strip())
-
-            # 浏览器划词延迟
-            self._config.set('selection.browser_delay_ms', self._browser_delay_spin.value())
 
             selected_key = self._theme_keys[self._popup_style_combo.currentIndex()]
             self._config.set('theme.popup_style', selected_key)
@@ -2571,14 +2545,18 @@ class MainController(QObject):
         self._last_text = ""
 
     def _on_enabled_changed(self, enabled: bool):
-        self._selection_detector.set_enabled(enabled)
-
+        # 关闭划词时完全停止 selection-hook 子进程，避免仍占用全局钩子并导致第三方应用卡顿；
+        # 启用时再启动子进程。
         if enabled:
+            self._text_capture.start_selection_hook()
+            self._selection_detector.set_enabled(True)
             self._tray_icon.show_message(APP_NAME, "已启用", "info")
         else:
-            self._tray_icon.show_message(APP_NAME, "已禁用", "info")
+            self._selection_detector.set_enabled(False)
             self._translate_button.hide()
             self._translator_window.hide()
+            self._text_capture.stop_selection_hook()
+            self._tray_icon.show_message(APP_NAME, "已禁用", "info")
 
     def _on_settings_requested(self):
         dialog = get_settings_dialog()

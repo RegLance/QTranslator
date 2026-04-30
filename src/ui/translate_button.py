@@ -1,9 +1,5 @@
 """翻译图标按钮组件 - QTranslator
 
-优化：解决与网站原生悬浮窗冲突的问题
-- 浏览器环境下延迟显示，等待网站悬浮窗消失
-- 非浏览器环境立即显示
-
 Windows 平台使用 WS_EX_LAYERED + UpdateLayeredWindow 创建分层窗口，
 由应用自己提供 premultiplied BGRA 位图作为最终合成结果 ——
 DWM 直接采用位图不加任何后处理（无阴影、无 peek、无 blur）。
@@ -18,23 +14,12 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSize
 from PyQt6.QtGui import QCursor, QImage
 from PyQt6.QtWidgets import QApplication
 
-try:
-    from ..config import get_config
-    from ..core.text_capture import is_browser_program
-except ImportError:
-    from src.config import get_config
-    from src.core.text_capture import is_browser_program
-
-
 # 按钮基础尺寸（逻辑像素，100% DPI 下的大小）
 # Windows 分支会按实际 DPI 缩放到物理像素再绘制。
 BUTTON_SIZE = 24
 
 # 鼠标离开按钮多少像素后自动隐藏（使用逻辑坐标）
 HIDE_DISTANCE_THRESHOLD = 50
-
-# 浏览器环境下延迟显示时间（毫秒）- 等待网站原生悬浮窗消失
-DEFAULT_BROWSER_DELAY_MS = 300
 
 # 点击动画参数（弹跳 + 渐隐）
 CLICK_ANIM_BOUNCE_MS = 200          # 弹跳阶段时长（毫秒）
@@ -279,9 +264,6 @@ class TranslateButton(QObject):
         self._pos_x: int = -1000       # 物理像素
         self._pos_y: int = -1000
 
-        self._show_delay_timer: Optional[QTimer] = None
-        self._pending_text: str = ""
-
         # DPI 与物理像素尺寸
         self._scale = _get_dpi_scale()
         # self._phys_size = int(round(BUTTON_SIZE * self._scale))
@@ -308,10 +290,6 @@ class TranslateButton(QObject):
         self._mouse_check_timer = QTimer()
         self._mouse_check_timer.setInterval(100)
         self._mouse_check_timer.timeout.connect(self._check_mouse_distance)
-
-        self._show_delay_timer = QTimer()
-        self._show_delay_timer.setSingleShot(True)
-        self._show_delay_timer.timeout.connect(self._do_delayed_show)
 
         # 点击动画
         self._click_anim_step: int = 0
@@ -419,15 +397,9 @@ class TranslateButton(QObject):
         return self._phys_size
 
     def show_at_position(self, pos, selected_text="", program_name=""):
-        """pos 参数保留兼容性但被忽略 —— Win32 分支一律从 GetCursorPos
-        读取物理像素，避免 Qt 逻辑坐标在高 DPI 下造成的偏移。
-        """
-        is_browser = is_browser_program(program_name)
-        if is_browser:
-            self._show_with_delay(selected_text)
-        else:
-            cx, cy = _get_cursor_physical()
-            self._do_immediate_show(cx, cy, selected_text)
+        """pos / program_name 保留签名兼容；定位一律从 GetCursorPos 读物理像素。"""
+        cx, cy = _get_cursor_physical()
+        self._do_immediate_show(cx, cy, selected_text)
 
     def show_at_position_immediate(self, pos, selected_text=""):
         cx, cy = _get_cursor_physical()
@@ -443,10 +415,8 @@ class TranslateButton(QObject):
     def hide(self):
         self._auto_hide_timer.stop()
         self._mouse_check_timer.stop()
-        self._show_delay_timer.stop()
         self._click_anim_timer.stop()
         self._selected_text = ""
-        self._pending_text = ""
         self._visible = False
         _user32.ShowWindow(self.hwnd, _SW_HIDE)
         self.hidden.emit()
@@ -521,20 +491,6 @@ class TranslateButton(QObject):
 
     def _do_immediate_show(self, cx, cy, selected_text):
         self._selected_text = selected_text
-        self._native_show(cx, cy)
-
-    def _show_with_delay(self, selected_text):
-        self._pending_text = selected_text
-        self._show_delay_timer.stop()
-        delay_ms = get_config().get(
-            'selection.browser_delay_ms', DEFAULT_BROWSER_DELAY_MS
-        )
-        self._show_delay_timer.start(delay_ms)
-
-    def _do_delayed_show(self):
-        self._selected_text = self._pending_text
-        self._pending_text = ""
-        cx, cy = _get_cursor_physical()
         self._native_show(cx, cy)
 
     def _check_mouse_distance(self):

@@ -103,10 +103,6 @@ translator_window:
   remember_window_position: false  # 记忆窗口位置
   default_function: "translate" # 默认功能：translate/polishing/summarize
 
-# 划词设置
-selection:
-  browser_delay_ms: 450         # 浏览器环境下划词延迟（毫秒）
-
 # 启动配置
 startup:
   auto_start: false             # 开机自启

@@ -68,8 +68,6 @@ class Config:
                 self._config = self._get_default_config()
                 self.save()
 
-        self._migrate_default_values()
-
     def _validate_config(self, config: Dict[str, Any]) -> bool:
         """验证配置是否有效"""
         if config is None:
@@ -139,10 +137,10 @@ class Config:
         return {
             'translator': {
                 'api_key': 'EMPTY',  # API Key
-                'base_url': 'http://109.105.120.122:9003/v1',  # API Base URL
+                'base_url': 'http://109.105.111.17：8000/qsprite/qwenchat',  # API Base URL
                 'model': 'qwenchat',  # 模型名称
                 'timeout': 60,  # 请求超时时间（秒）
-                'no_proxy': '109.105.120.122',  # 不使用代理的地址，多个用逗号分隔
+                'no_proxy': '109.105.111.17',  # 不使用代理的地址，多个用逗号分隔
             },
             'theme': {
                 'popup_style': 'dark',  # 主题名称：dark/light/ocean_blue/forest_green/royal_purple/warm_orange/rose_pink/mint_light/custom
@@ -178,21 +176,7 @@ class Config:
                 'always_on_top': False,  # 始终置顶（勾选后翻译窗口始终在最顶层）
                 'default_function': 'translate',  # 默认功能：translate/polishing/summarize
             },
-            'selection': {
-                'browser_delay_ms': 300,  # 浏览器环境下划词延迟（毫秒）
-            },
         }
-
-    def _migrate_default_values(self):
-        """迁移已写入配置文件的旧默认值。"""
-        changed = False
-
-        if self.get('selection.browser_delay_ms') == 450:
-            self.set('selection.browser_delay_ms', 300)
-            changed = True
-
-        if changed:
-            self.save()
 
     def _merge_with_defaults(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """合并用户配置与默认配置"""

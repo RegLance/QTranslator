@@ -503,9 +503,14 @@ class TextCapture:
         """检查服务是否就绪"""
         return self._ready
 
-    def cleanup(self):
-        """清理资源"""
+    def stop_selection_hook(self):
+        """终止 selection-hook 子进程（全局鼠标/文本钩子）。可与 start_selection_hook() 配对反复调用。"""
         self._running = False
+
+        with self._pending_lock:
+            for pending in self._pending_requests.values():
+                pending['event'].set()
+            self._pending_requests.clear()
 
         if self._process:
             try:
@@ -520,8 +525,22 @@ class TextCapture:
 
         if self._reader_thread and self._reader_thread.is_alive():
             self._reader_thread.join(timeout=1.0)
+        self._reader_thread = None
 
         self._ready = False
+        with self._lock:
+            self._last_selection = None
+            self._last_capture_time = 0.0
+
+        print("[TextCapture] selection-hook 已停止", file=sys.stderr)
+
+    def start_selection_hook(self):
+        """启动 selection-hook 子进程（托盘重新启用划词时调用）。"""
+        self._start_service()
+
+    def cleanup(self):
+        """应用退出时释放资源"""
+        self.stop_selection_hook()
         print("[TextCapture] 服务已停止", file=sys.stderr)
 
     def __del__(self):
@@ -559,70 +578,3 @@ def clear_text_capture():
 def get_last_program_name() -> str:
     """快捷函数：获取最后一次选择的程序名"""
     return get_text_capture().get_last_program()
-
-
-# 常见浏览器进程名（Windows）
-BROWSER_PROCESS_NAMES = {
-    # Chrome 系列
-    'chrome.exe',
-    'chrome',
-    # Firefox
-    'firefox.exe',
-    'firefox',
-    # Edge
-    'msedge.exe',
-    'msedge',
-    'microsoftedge.exe',
-    'microsoftedge',
-    # Brave
-    'brave.exe',
-    'brave',
-    # Opera
-    'opera.exe',
-    'opera',
-    # Safari (Windows)
-    'safari.exe',
-    'safari',
-    # Vivaldi
-    'vivaldi.exe',
-    'vivaldi',
-    # QQ浏览器
-    'qqbrowser.exe',
-    'qqbrowser',
-    # 360浏览器
-    '360se.exe',
-    '360se',
-    # 搜狗浏览器
-    'sogouexplorer.exe',
-    'sogouexplorer',
-    # UC浏览器
-    'ucbrowser.exe',
-    'ucbrowser',
-}
-
-
-def is_browser_program(program_name: str) -> bool:
-    """判断给定的程序名是否是浏览器
-
-    Args:
-        program_name: 程序名（如 'chrome.exe', 'notepad.exe'）
-
-    Returns:
-        True 如果是浏览器，False 否则
-    """
-    if not program_name:
-        return False
-
-    # 转换为小写进行匹配
-    program_lower = program_name.lower()
-
-    # 直接匹配
-    if program_lower in BROWSER_PROCESS_NAMES:
-        return True
-
-    # 部分匹配（处理可能的路径或其他变体）
-    for browser in BROWSER_PROCESS_NAMES:
-        if browser in program_lower or program_lower in browser:
-            return True
-
-    return False

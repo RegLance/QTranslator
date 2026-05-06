@@ -35,7 +35,6 @@
 #include <windows.h>
 
 #include <atomic>
-#include <deque>
 #include <string>
 #include <thread>
 
@@ -122,16 +121,6 @@ enum class FineTunedListType
 {
     ExcludeClipboardCursorDetect = 0,
     IncludeClipboardDelayRead = 1
-};
-
-/** Posted from the Node thread after mouse-driven selection gestures; drained on COM worker STA. */
-struct AsyncSelectionOp
-{
-    HWND hwnd;
-    SelectionDetectType detectionType;
-    POINT lastMouseDownPos{};
-    POINT lastMouseUpPos{};
-    POINT lastLastMouseUpPos{};
 };
 
 // Copy key type enum for SendCopyKey function
@@ -235,8 +224,8 @@ class SelectionHook : public Napi::ObjectWrap<SelectionHook>
     Napi::Value ReadFromClipboard(const Napi::CallbackInfo &info);
 
     // Core functionality methods
-    bool GetSelectedText(HWND hwnd, TextSelectionInfo &selectionInfo, IUIAutomation *pUiAutomationOverride = nullptr);
-    bool GetTextViaUIAutomation(HWND hwnd, TextSelectionInfo &selectionInfo, IUIAutomation *pAutomation);
+    bool GetSelectedText(HWND hwnd, TextSelectionInfo &selectionInfo);
+    bool GetTextViaUIAutomation(HWND hwnd, TextSelectionInfo &selectionInfo);
     bool GetTextViaAccessible(HWND hwnd, TextSelectionInfo &selectionInfo);
     bool GetTextViaClipboard(HWND hwnd, TextSelectionInfo &selectionInfo);
     bool ShouldProcessGetSelection();  // check if we should get text based on system state
@@ -252,8 +241,6 @@ class SelectionHook : public Napi::ObjectWrap<SelectionHook>
 
     // Mouse and keyboard event handling methods
     static DWORD WINAPI MouseKeyboardHookThreadProc(LPVOID lpParam);
-    static DWORD WINAPI SelectionWorkerThreadProc(LPVOID lpParam);
-    void ShutdownSelectionWorker();
     static LRESULT CALLBACK MouseHookCallback(int nCode, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK KeyboardHookCallback(int nCode, WPARAM wParam, LPARAM lParam);
     static void ProcessMouseEvent(Napi::Env env, Napi::Function function, MouseEventContext *mouseEvent);
@@ -287,19 +274,8 @@ class SelectionHook : public Napi::ObjectWrap<SelectionHook>
 
     // UI Automation objects
     IUIAutomation *pUIAutomation = nullptr;
-    /// Created and used only on SelectionWorkerThreadProc (STA) for async captures.
-    IUIAutomation *pWorkerUIAutomation = nullptr;
     // the control type of the UI Automation focused element
     CONTROLTYPEID uia_control_type = UIA_WindowControlTypeId;
-
-    HANDLE selection_worker_thread = NULL;
-    DWORD selection_worker_thread_id = 0;
-    HANDLE selection_work_event = NULL;
-    HANDLE selection_worker_ready_event = NULL;
-    std::atomic<bool> selection_worker_shutdown{false};
-    CRITICAL_SECTION selection_queue_cs{};
-    bool selection_queue_cs_init = false;
-    std::deque<AsyncSelectionOp> selection_op_queue;
 
     // passive mode: only trigger when user call GetSelectionText
     bool is_selection_passive_mode = false;
@@ -384,11 +360,6 @@ SelectionHook::SelectionHook(const Napi::CallbackInfo &info) : Napi::ObjectWrap<
         }
         return;
     }
-
-    InitializeCriticalSection(&selection_queue_cs);
-    selection_queue_cs_init = true;
-    selection_work_event = CreateEventW(NULL, FALSE, FALSE, NULL);
-    selection_worker_ready_event = CreateEventW(NULL, TRUE, FALSE, NULL);
 }
 
 /**
@@ -402,9 +373,14 @@ SelectionHook::~SelectionHook()
         currentInstance = nullptr;
     }
 
-    running.store(false);
+    // Stop worker thread
+    bool was_running = running.exchange(false);
+    if (was_running && tsfn)
+    {
+        tsfn.Release();
+    }
 
-    // Stop mouse/keyboard hooks before joining the COM worker — no new queued captures
+    // Stop mouse/keyboard hooks
     bool mouse_keyboard_was_running = mouse_keyboard_running.exchange(false);
     if (mouse_keyboard_was_running)
     {
@@ -431,35 +407,11 @@ SelectionHook::~SelectionHook()
         }
     }
 
-    ShutdownSelectionWorker();
-
-    if (tsfn)
-    {
-        tsfn.Release();
-    }
-
     // Release UI Automation
     if (pUIAutomation)
     {
         pUIAutomation->Release();
         pUIAutomation = nullptr;
-    }
-
-    if (selection_queue_cs_init)
-    {
-        DeleteCriticalSection(&selection_queue_cs);
-        selection_queue_cs_init = false;
-    }
-
-    if (selection_work_event)
-    {
-        CloseHandle(selection_work_event);
-        selection_work_event = NULL;
-    }
-    if (selection_worker_ready_event)
-    {
-        CloseHandle(selection_worker_ready_event);
-        selection_worker_ready_event = NULL;
     }
 
     // Clean up COM if we initialized it
@@ -560,75 +512,9 @@ void SelectionHook::Start(const Napi::CallbackInfo &info)
         return;
     }
 
-    // Start hook thread — mouse events may reach the JS thread immediately after Resume
+    // Start the thread and set running flag
     ResumeThread(mouse_keyboard_hook_thread);
-
-    const auto rollback_hooks = [&]()
-    {
-        mouse_keyboard_running.store(false);
-
-        if (mouse_keyboard_thread_id != 0)
-        {
-            PostThreadMessageW(mouse_keyboard_thread_id, WM_USER, NULL, NULL);
-        }
-
-        if (mouse_keyboard_hook_thread)
-        {
-            WaitForSingleObject(mouse_keyboard_hook_thread, 1000);
-            CloseHandle(mouse_keyboard_hook_thread);
-            mouse_keyboard_hook_thread = NULL;
-            mouse_keyboard_thread_id = 0;
-        }
-
-        if (mouse_tsfn)
-        {
-            mouse_tsfn.Release();
-        }
-        if (keyboard_tsfn)
-        {
-            keyboard_tsfn.Release();
-        }
-        if (tsfn)
-        {
-            tsfn.Release();
-        }
-    };
-
-    selection_worker_shutdown.store(false);
-    if (selection_worker_ready_event)
-    {
-        ResetEvent(selection_worker_ready_event);
-    }
-
-    selection_worker_thread =
-        CreateThread(NULL, 0, SelectionWorkerThreadProc, this, 0, &selection_worker_thread_id);
-
-    if (!selection_worker_thread)
-    {
-        rollback_hooks();
-        Napi::Error::New(env, "Failed to create selection worker thread").ThrowAsJavaScriptException();
-        return;
-    }
-
-    const DWORD waitReady =
-        selection_worker_ready_event ? WaitForSingleObject(selection_worker_ready_event, 10000) : WAIT_FAILED;
-    if (waitReady != WAIT_OBJECT_0 || !pWorkerUIAutomation)
-    {
-        selection_worker_shutdown.store(true);
-        if (selection_work_event)
-        {
-            SetEvent(selection_work_event);
-        }
-        WaitForSingleObject(selection_worker_thread, 5000);
-        CloseHandle(selection_worker_thread);
-        selection_worker_thread = NULL;
-        selection_worker_thread_id = 0;
-        rollback_hooks();
-        Napi::Error::New(env, "Failed to initialize selection worker (UI Automation)").ThrowAsJavaScriptException();
-        return;
-    }
-
-    running.store(true);
+    running = true;
 }
 
 /**
@@ -637,16 +523,23 @@ void SelectionHook::Start(const Napi::CallbackInfo &info)
 void SelectionHook::Stop(const Napi::CallbackInfo &info)
 {
     // Do nothing if not running
-    if (!running.load())
+    if (!running)
     {
         return;
     }
 
-    running.store(false);
-
-    // Stop mouse and keyboard hooks first so no further selection ops are queued
-    if (mouse_keyboard_running.exchange(false))
+    // Set running flag to false and release thread-safe function
+    running = false;
+    if (tsfn)
     {
+        tsfn.Release();
+    }
+
+    // Stop mouse and keyboard hooks
+    if (mouse_keyboard_running)
+    {
+        mouse_keyboard_running = false;
+
         if (mouse_keyboard_thread_id != 0)
         {
             PostThreadMessageW(mouse_keyboard_thread_id, WM_USER, NULL, NULL);
@@ -670,170 +563,6 @@ void SelectionHook::Stop(const Napi::CallbackInfo &info)
             keyboard_tsfn.Release();
         }
     }
-
-    ShutdownSelectionWorker();
-
-    if (tsfn)
-    {
-        tsfn.Release();
-    }
-}
-
-void SelectionHook::ShutdownSelectionWorker()
-{
-    if (!selection_worker_thread)
-    {
-        return;
-    }
-
-    selection_worker_shutdown.store(true);
-    if (selection_work_event)
-    {
-        SetEvent(selection_work_event);
-    }
-
-    WaitForSingleObject(selection_worker_thread, 15000);
-    CloseHandle(selection_worker_thread);
-    selection_worker_thread = NULL;
-    selection_worker_thread_id = 0;
-
-    selection_worker_shutdown.store(false);
-
-    if (selection_queue_cs_init)
-    {
-        EnterCriticalSection(&selection_queue_cs);
-        selection_op_queue.clear();
-        LeaveCriticalSection(&selection_queue_cs);
-    }
-}
-
-DWORD WINAPI SelectionHook::SelectionWorkerThreadProc(LPVOID lpParam)
-{
-    SelectionHook *hook = static_cast<SelectionHook *>(lpParam);
-    if (!hook)
-    {
-        return 1;
-    }
-
-    const HRESULT hrCo = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    const bool coinit_ok = SUCCEEDED(hrCo) || hrCo == RPC_E_CHANGED_MODE || hrCo == S_FALSE;
-
-    if (!coinit_ok)
-    {
-        if (hook->selection_worker_ready_event)
-        {
-            SetEvent(hook->selection_worker_ready_event);
-        }
-        return 2;
-    }
-
-    const HRESULT hr = CoCreateInstance(__uuidof(CUIAutomation), NULL, CLSCTX_INPROC_SERVER,
-                                        __uuidof(IUIAutomation), (void **)&hook->pWorkerUIAutomation);
-    if (FAILED(hr))
-    {
-        hook->pWorkerUIAutomation = nullptr;
-    }
-
-    if (hook->selection_worker_ready_event)
-    {
-        SetEvent(hook->selection_worker_ready_event);
-    }
-
-    for (;;)
-    {
-        if (!hook->selection_work_event)
-        {
-            break;
-        }
-
-        WaitForSingleObject(hook->selection_work_event, INFINITE);
-
-        std::deque<AsyncSelectionOp> batch;
-
-        if (hook->selection_queue_cs_init)
-        {
-            EnterCriticalSection(&hook->selection_queue_cs);
-            batch.swap(hook->selection_op_queue);
-            LeaveCriticalSection(&hook->selection_queue_cs);
-        }
-
-        for (const AsyncSelectionOp &op : batch)
-        {
-            if (!hook->pWorkerUIAutomation || !IsWindow(op.hwnd))
-            {
-                continue;
-            }
-
-            TextSelectionInfo selectionInfo;
-            if (!hook->GetSelectedText(op.hwnd, selectionInfo, hook->pWorkerUIAutomation))
-            {
-                continue;
-            }
-            if (IsTrimmedEmpty(selectionInfo.text))
-            {
-                continue;
-            }
-
-            switch (op.detectionType)
-            {
-                case SelectionDetectType::Drag:
-                    selectionInfo.mousePosStart = op.lastMouseDownPos;
-                    selectionInfo.mousePosEnd = op.lastMouseUpPos;
-                    if (selectionInfo.posLevel == SelectionPositionLevel::None)
-                    {
-                        selectionInfo.posLevel = SelectionPositionLevel::MouseDual;
-                    }
-                    break;
-                case SelectionDetectType::DoubleClick:
-                    selectionInfo.mousePosStart = op.lastMouseUpPos;
-                    selectionInfo.mousePosEnd = op.lastMouseUpPos;
-                    if (selectionInfo.posLevel == SelectionPositionLevel::None)
-                    {
-                        selectionInfo.posLevel = SelectionPositionLevel::MouseSingle;
-                    }
-                    break;
-                case SelectionDetectType::ShiftClick:
-                    selectionInfo.mousePosStart = op.lastLastMouseUpPos;
-                    selectionInfo.mousePosEnd = op.lastMouseUpPos;
-                    if (selectionInfo.posLevel == SelectionPositionLevel::None)
-                    {
-                        selectionInfo.posLevel = SelectionPositionLevel::MouseDual;
-                    }
-                    break;
-                default:
-                    break;
-            }
-
-            SelectionHook *self = hook;
-            const TextSelectionInfo selCopy = selectionInfo;
-
-            auto callback = [selCopy, self](Napi::Env env, Napi::Function jsCallback)
-            {
-                if (!self || !self->running.load())
-                {
-                    return;
-                }
-                Napi::Object resultObj = self->CreateSelectionResultObject(env, selCopy);
-                jsCallback.Call({resultObj});
-            };
-
-            hook->tsfn.NonBlockingCall(callback);
-        }
-
-        if (hook->selection_worker_shutdown.load())
-        {
-            break;
-        }
-    }
-
-    if (hook->pWorkerUIAutomation)
-    {
-        hook->pWorkerUIAutomation->Release();
-        hook->pWorkerUIAutomation = nullptr;
-    }
-
-    CoUninitialize();
-    return 0;
 }
 
 /**
@@ -1384,26 +1113,58 @@ void SelectionHook::ProcessMouseEvent(Napi::Env env, Napi::Function function, Mo
             break;
     }
 
-    // Check for text selection — heavy capture runs on a dedicated COM STA worker thread so the Node/event
-    // pump thread is not blocked for large UI Automation / clipboard operations.
+    // Check for text selection
     if (shouldDetectSelection)
     {
+        TextSelectionInfo selectionInfo;
         HWND hwnd = GetForegroundWindow();
 
-        if (hwnd && currentInstance->running.load() && currentInstance->selection_queue_cs_init &&
-            currentInstance->selection_work_event)
+        if (hwnd)
         {
-            AsyncSelectionOp op{};
-            op.hwnd = hwnd;
-            op.detectionType = detectionType;
-            op.lastMouseDownPos = lastMouseDownPos;
-            op.lastMouseUpPos = lastMouseUpPos;
-            op.lastLastMouseUpPos = lastLastMouseUpPos;
+            if (currentInstance->GetSelectedText(hwnd, selectionInfo) && !IsTrimmedEmpty(selectionInfo.text))
+            {
+                switch (detectionType)
+                {
+                    case SelectionDetectType::Drag:
+                    {
+                        selectionInfo.mousePosStart = lastMouseDownPos;
+                        selectionInfo.mousePosEnd = lastMouseUpPos;
 
-            EnterCriticalSection(&currentInstance->selection_queue_cs);
-            currentInstance->selection_op_queue.emplace_back(op);
-            LeaveCriticalSection(&currentInstance->selection_queue_cs);
-            SetEvent(currentInstance->selection_work_event);
+                        if (selectionInfo.posLevel == SelectionPositionLevel::None)
+                            selectionInfo.posLevel = SelectionPositionLevel::MouseDual;
+
+                        break;
+                    }
+                    case SelectionDetectType::DoubleClick:
+                    {
+                        selectionInfo.mousePosStart = lastMouseUpPos;
+                        selectionInfo.mousePosEnd = lastMouseUpPos;
+
+                        if (selectionInfo.posLevel == SelectionPositionLevel::None)
+                            selectionInfo.posLevel = SelectionPositionLevel::MouseSingle;
+
+                        break;
+                    }
+                    case SelectionDetectType::ShiftClick:
+                    {
+                        selectionInfo.mousePosStart = lastLastMouseUpPos;
+                        selectionInfo.mousePosEnd = lastMouseUpPos;
+
+                        if (selectionInfo.posLevel == SelectionPositionLevel::None)
+                            selectionInfo.posLevel = SelectionPositionLevel::MouseDual;
+
+                        break;
+                    }
+                }
+
+                auto callback = [selectionInfo](Napi::Env env, Napi::Function jsCallback)
+                {
+                    Napi::Object resultObj = currentInstance->CreateSelectionResultObject(env, selectionInfo);
+                    jsCallback.Call({resultObj});
+                };
+
+                currentInstance->tsfn.NonBlockingCall(callback);
+            }
         }
     }
 
@@ -1480,7 +1241,7 @@ void SelectionHook::ProcessKeyboardEvent(Napi::Env env, Napi::Function function,
 /**
  * Get selected text from the active window using multiple methods
  */
-bool SelectionHook::GetSelectedText(HWND hwnd, TextSelectionInfo &selectionInfo, IUIAutomation *pUiAutomationOverride)
+bool SelectionHook::GetSelectedText(HWND hwnd, TextSelectionInfo &selectionInfo)
 {
     if (!hwnd)
         return false;
@@ -1492,8 +1253,6 @@ bool SelectionHook::GetSelectedText(HWND hwnd, TextSelectionInfo &selectionInfo,
 
     // Initialize structure
     selectionInfo.clear();
-
-    IUIAutomation *effectiveUia = pUiAutomationOverride ? pUiAutomationOverride : pUIAutomation;
 
     // Get program name and store it in selectionInfo
     if (!GetProgramNameFromHwnd(hwnd, selectionInfo.programName))
@@ -1521,7 +1280,7 @@ bool SelectionHook::GetSelectedText(HWND hwnd, TextSelectionInfo &selectionInfo,
     }
 
     // First try UI Automation (supported by modern applications)
-    if (effectiveUia && GetTextViaUIAutomation(hwnd, selectionInfo, effectiveUia))
+    if (pUIAutomation && GetTextViaUIAutomation(hwnd, selectionInfo))
     {
         selectionInfo.method = SelectionMethod::UIA;
         is_processing.store(false);
@@ -1658,9 +1417,9 @@ bool SelectionHook::ShouldProcessViaClipboard(HWND hwnd, std::wstring &programNa
 /**
  * Get text selection via UI Automation interfaces
  */
-bool SelectionHook::GetTextViaUIAutomation(HWND hwnd, TextSelectionInfo &selectionInfo, IUIAutomation *pAutomation)
+bool SelectionHook::GetTextViaUIAutomation(HWND hwnd, TextSelectionInfo &selectionInfo)
 {
-    if (!pAutomation || !hwnd)
+    if (!pUIAutomation || !hwnd)
         return false;
 
     bool result = false;
@@ -1670,7 +1429,7 @@ bool SelectionHook::GetTextViaUIAutomation(HWND hwnd, TextSelectionInfo &selecti
 
     // Get the window element
     IUIAutomationElement *pElement = nullptr;
-    HRESULT hr = pAutomation->ElementFromHandle(hwnd, &pElement);
+    HRESULT hr = pUIAutomation->ElementFromHandle(hwnd, &pElement);
 
     if (FAILED(hr) || !pElement)
         return false;
@@ -1678,7 +1437,7 @@ bool SelectionHook::GetTextViaUIAutomation(HWND hwnd, TextSelectionInfo &selecti
     // Get the focused element - using local scope to ensure proper cleanup
     {
         IUIAutomationElement *pFocusedElement = nullptr;
-        hr = pAutomation->GetFocusedElement(&pFocusedElement);
+        hr = pUIAutomation->GetFocusedElement(&pFocusedElement);
 
         // Release window element as we don't need it anymore
         pElement->Release();

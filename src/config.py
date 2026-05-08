@@ -137,7 +137,7 @@ class Config:
         return {
             'translator': {
                 'api_key': 'EMPTY',  # API Key
-                'base_url': 'http://109.105.111.17：8000/qsprite/qwenchat',  # API Base URL
+                'base_url': 'http://109.105.111.17:8000/qsprite/qwenchat',  # API Base URL
                 'model': 'qwenchat',  # 模型名称
                 'timeout': 60,  # 请求超时时间（秒）
                 'no_proxy': '109.105.111.17',  # 不使用代理的地址，多个用逗号分隔

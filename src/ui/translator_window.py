@@ -2523,11 +2523,15 @@ class TranslatorWindow(QWidget):
 
         menu.exec(self._output_text.mapToGlobal(pos))
 
+    def _title_bar_rect_in_window(self) -> QRect:
+        """标题栏在窗口坐标系下的矩形（含 content_layout 上边距，勿用 pos.y()<=28）。"""
+        top_left = self._title_bar.mapTo(self, QPoint(0, 0))
+        return QRect(top_left, self._title_bar.size())
+
     def _is_over_title_bar_buttons(self, pos: QPoint) -> bool:
         """判断鼠标是否在标题栏按钮区域内（包括按钮之间的间距）"""
-        title_bar_height = 28
-        # 首先检查是否在标题栏区域
-        if pos.y() > title_bar_height:
+        # 必须落在真实标题栏控件范围内（与 QSS :hover 可视区域一致）
+        if not self._title_bar_rect_in_window().contains(pos):
             return False
 
         # 计算按钮区域（按钮都在标题栏右侧）
@@ -2601,10 +2605,9 @@ class TranslatorWindow(QWidget):
         """鼠标双击事件 - 双击标题栏切换最大化状态"""
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
-            title_bar_height = 28
 
             # 检查是否在标题栏区域且不在按钮区域
-            if pos.y() <= title_bar_height and not self._is_over_title_bar_buttons(pos):
+            if self._title_bar_rect_in_window().contains(pos) and not self._is_over_title_bar_buttons(pos):
                 # 双击标题栏任意位置切换最大化
                 self._on_maximize()
                 return
@@ -2625,8 +2628,7 @@ class TranslatorWindow(QWidget):
                 self._resize_start_geometry = self.geometry()
             else:
                 # 不是边缘区域，检测标题栏拖动
-                title_bar_height = 28
-                if pos.y() <= title_bar_height and not self._is_over_title_bar_buttons(pos):
+                if self._title_bar_rect_in_window().contains(pos) and not self._is_over_title_bar_buttons(pos):
                     self._is_dragging = True
                     self._drag_start_pos = event.globalPosition().toPoint()
                     self._drag_window_start_pos = self.pos()

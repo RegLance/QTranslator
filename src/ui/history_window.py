@@ -1169,14 +1169,17 @@ class HistoryWindow(QWidget):
             self._load_history()
             self._current_item = None
             self._original_detail.clear()
-            self._translated_detail.clear()
-            self._meta_label.clear()
+        self._translated_detail.clear()
+        self._meta_label.clear()
+
+    def _title_bar_rect_in_window(self) -> QRect:
+        """标题栏在窗口坐标系下的矩形（含 content_layout 上边距，勿用 pos.y()<=28）。"""
+        top_left = self._title_bar.mapTo(self, QPoint(0, 0))
+        return QRect(top_left, self._title_bar.size())
 
     def _is_over_title_bar_buttons(self, pos: QPoint) -> bool:
         """判断鼠标是否在标题栏按钮区域内（包括按钮之间的间距）"""
-        title_bar_height = 28
-        # 首先检查是否在标题栏区域
-        if pos.y() > title_bar_height:
+        if not self._title_bar_rect_in_window().contains(pos):
             return False
 
         # history_window 的按钮区域包括：导出按钮、清空按钮、最小化、最大化、关闭按钮
@@ -1297,7 +1300,7 @@ class HistoryWindow(QWidget):
         """鼠标双击事件 - 双击标题栏切换最大化状态"""
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
-            if self._title_bar.geometry().contains(pos) and not self._is_over_title_bar_buttons(pos):
+            if self._title_bar_rect_in_window().contains(pos) and not self._is_over_title_bar_buttons(pos):
                 self._on_maximize()
                 return
         super().mouseDoubleClickEvent(event)
@@ -1316,8 +1319,7 @@ class HistoryWindow(QWidget):
                 self._resize_start_geometry = self.geometry()
             else:
                 # 不是边缘区域，检测标题栏拖动
-                title_bar_height = 28
-                if pos.y() <= title_bar_height and not self._is_over_title_bar_buttons(pos):
+                if self._title_bar_rect_in_window().contains(pos) and not self._is_over_title_bar_buttons(pos):
                     self._is_dragging = True
                     self._drag_start_pos = event.globalPosition().toPoint()
                     self._drag_window_start_pos = self.pos()
@@ -1360,7 +1362,6 @@ class HistoryWindow(QWidget):
             self.setGeometry(new_x, new_y, new_w, new_h)
         else:
             # 智能光标控制
-            title_bar_height = 28
             # 1. 首先检查边框调整区域
             edge = self._get_resize_edge(pos)
             if edge:

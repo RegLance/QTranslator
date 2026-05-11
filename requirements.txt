@@ -24,8 +24,9 @@ langdetect>=1.0.9
 # 全局热键
 keyboard>=0.13.5
 
-# 文字转语音 (TTS)
+# 文字转语音 (TTS)：系统离线 + Edge 在线（神经网络）
 pyttsx3>=2.90
+edge-tts>=7.2.8
 
 # Windows API (用于 TTS SAPI)
 pywin32>=300

@@ -39,6 +39,9 @@ def get_spec_content() -> str:
         "keyboard",
         # TTS 相关依赖
         "pyttsx3",
+        "edge_tts",
+        "aiohttp",
+        "PyQt6.QtMultimedia",
         "win32com.client",
         "pythoncom",
         "pywin32",
@@ -160,6 +163,9 @@ a = Analysis(
         "keyboard",
         # TTS 相关依赖
         "pyttsx3",
+        "edge_tts",
+        "aiohttp",
+        "PyQt6.QtMultimedia",
         "win32com.client",
         "pythoncom",
         "pywin32",
@@ -188,6 +194,8 @@ a = Analysis(
         "src.utils.hotkey_manager",
         "src.utils.theme",
         "src.utils.tts",  # 新增：TTS 模块
+        "src.utils.tts_media",
+        "src.utils.tts_speak_indicator",
         "src.utils.__init__",
     ],
     hookspath=[],

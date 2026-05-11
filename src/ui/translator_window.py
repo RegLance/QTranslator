@@ -26,6 +26,7 @@ try:
     )
     from ..config import get_config, APP_VERSION, VERSION_AUTHOR
     from ..utils.tts import get_tts
+    from ..utils.tts_speak_indicator import TtsSpeakPrepareIndicator
 except ImportError:
     from src.utils.theme import (
         get_theme,
@@ -39,6 +40,7 @@ except ImportError:
     )
     from src.config import get_config, APP_VERSION, VERSION_AUTHOR
     from src.utils.tts import get_tts
+    from src.utils.tts_speak_indicator import TtsSpeakPrepareIndicator
 
 
 class AnimatedSplitterHandle(QSplitterHandle):
@@ -1158,6 +1160,13 @@ class TranslatorWindow(QWidget):
         self._speak_output_btn.clicked.connect(self._speak_output)
         self._floating_buttons_layout.addWidget(self._speak_output_btn)
 
+        self._tts_speak_output_prep = TtsSpeakPrepareIndicator(
+            self,
+            self._speak_output_btn,
+            lambda: get_theme(self._theme_style),
+            self._create_speak_icon,
+        )
+
         # 复制按钮 - 使用绘制的复制图标
         self._copy_output_btn = QPushButton()
         self._copy_output_btn.setObjectName("copyOutputBtn")
@@ -1804,7 +1813,7 @@ class TranslatorWindow(QWidget):
         """)
 
         # 更新朗读按钮样式和图标
-        self._speak_output_btn.setIcon(self._create_speak_icon(theme))
+        self._tts_speak_output_prep.sync_theme_icons()
         self._speak_output_btn.setStyleSheet(f"""
             QPushButton#speakOutputBtn {{
                 background-color: transparent;
@@ -1876,6 +1885,15 @@ class TranslatorWindow(QWidget):
             return
         self._output_text.copy()
 
+    def _stop_tts_playback(self) -> None:
+        """停止朗读并恢复朗读按钮（切换翻译内容、清空或关闭窗口）。"""
+        try:
+            get_tts().stop()
+            if hasattr(self, "_tts_speak_output_prep"):
+                self._tts_speak_output_prep.end_prepare()
+        except Exception:
+            pass
+
     def _speak_output(self):
         """朗读译文"""
         if self._polish_diff_snapshot:
@@ -1884,13 +1902,24 @@ class TranslatorWindow(QWidget):
             text = self._output_text.toPlainText()
         if text:
             tts = get_tts()
-            if tts.is_speaking():
+            if tts.is_speaking() or self._tts_speak_output_prep.is_preparing():
                 tts.stop()
+                self._tts_speak_output_prep.end_prepare()
+                return
+
+            hint = self._lang_combo.currentText()
+            if hint == "自动检测":
+                hint = None
+            self._tts_speak_output_prep.attach_to_tts_engine(tts)
+            ok = tts.speak(text, lang_hint=hint)
+            if ok:
+                self._tts_speak_output_prep.start_prepare()
             else:
-                tts.speak(text)
+                self._tts_speak_output_prep.end_prepare()
 
     def _clear_all(self):
         """清空所有内容并取消正在进行的流式输出任务"""
+        self._stop_tts_playback()
         # 1. 如果当前有翻译/总结/润色任务正在执行，取消它
         if self._current_worker and self._current_worker.isRunning():
             # 调用取消机制，设置取消标志
@@ -1960,6 +1989,8 @@ class TranslatorWindow(QWidget):
         text = self._input_text.toPlainText().strip()
         if not text:
             return
+
+        self._stop_tts_playback()
 
         # 取消之前的翻译
         if self._current_worker and self._current_worker.isRunning():
@@ -2184,6 +2215,8 @@ class TranslatorWindow(QWidget):
         if not text:
             return
 
+        self._stop_tts_playback()
+
         self._polishing_diff_mode = get_config().get("polishing.show_diff", False)
         self._polishing_source_for_diff = text if self._polishing_diff_mode else ""
 
@@ -2328,6 +2361,8 @@ class TranslatorWindow(QWidget):
         text = self._input_text.toPlainText().strip()
         if not text:
             return
+
+        self._stop_tts_playback()
 
         # 取消之前的任务
         if self._current_worker and self._current_worker.isRunning():
@@ -2949,6 +2984,7 @@ class TranslatorWindow(QWidget):
 
     def closeEvent(self, event):
         """窗口关闭事件"""
+        self._stop_tts_playback()
         if self._current_worker and self._current_worker.isRunning():
             self._current_worker.cancel()
             self._current_worker.wait(1000)
@@ -3106,6 +3142,8 @@ class TranslatorWindow(QWidget):
         """
         if mouse_pos is None:
             mouse_pos = (QCursor.pos().x(), QCursor.pos().y())
+
+        self._stop_tts_playback()
 
         # 每次显示时重新加载主题和字体配置
         self.update_theme()
@@ -3761,6 +3799,8 @@ class TranslatorWindow(QWidget):
 
     def hide(self):
         """隐藏窗口"""
+        self._stop_tts_playback()
+
         # 记忆窗口位置：在隐藏前保存当前位置（跳过完全离屏的假位置，例如启动时离屏预渲染）
         if self._remember_window_position and self._window_overlaps_any_screen():
             self._saved_window_pos = self.pos()

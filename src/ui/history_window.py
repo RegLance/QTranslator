@@ -8,18 +8,20 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QSplitter, QScrollArea, QFileDialog
 )
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QRect, QTimer
-from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QIcon, QPainter, QPixmap, QPen
+from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QIcon, QPainter, QPixmap, QPen, QHideEvent
 
 try:
     from ..utils.history import get_history, HistoryItem
     from ..utils.theme import get_theme, get_scrollbar_style, get_splitter_style
     from ..config import APP_NAME, get_config
     from ..utils.tts import get_tts
+    from ..utils.tts_speak_indicator import TtsSpeakPrepareIndicator
 except ImportError:
     from src.utils.history import get_history, HistoryItem
     from src.utils.theme import get_theme, get_scrollbar_style, get_splitter_style
     from src.config import APP_NAME, get_config
     from src.utils.tts import get_tts
+    from src.utils.tts_speak_indicator import TtsSpeakPrepareIndicator
 
 
 class HistoryWindow(QWidget):
@@ -550,6 +552,19 @@ class HistoryWindow(QWidget):
         self._speak_btn.clicked.connect(self._speak_translated)
         btn_layout.addWidget(self._speak_btn)
 
+        self._tts_speak_orig_prep = TtsSpeakPrepareIndicator(
+            self,
+            self._speak_original_btn,
+            lambda: get_theme(self._theme_style),
+            self._create_speak_icon,
+        )
+        self._tts_speak_trans_prep = TtsSpeakPrepareIndicator(
+            self,
+            self._speak_btn,
+            lambda: get_theme(self._theme_style),
+            self._create_speak_icon,
+        )
+
         btn_layout.addStretch()
         detail_layout.addLayout(btn_layout)
 
@@ -829,7 +844,7 @@ class HistoryWindow(QWidget):
         """)
 
         # 更新朗读原文按钮样式和图标
-        self._speak_original_btn.setIcon(self._create_speak_icon(theme))
+        self._tts_speak_orig_prep.sync_theme_icons()
         self._speak_original_btn.setStyleSheet(f"""
             QPushButton#speakOriginalBtn {{
                 background-color: transparent;
@@ -845,7 +860,7 @@ class HistoryWindow(QWidget):
         """)
 
         # 更新朗读译文按钮样式和图标
-        self._speak_btn.setIcon(self._create_speak_icon(theme))
+        self._tts_speak_trans_prep.sync_theme_icons()
         self._speak_btn.setStyleSheet(f"""
             QPushButton#speakTranslatedBtn {{
                 background-color: transparent;
@@ -977,25 +992,54 @@ class HistoryWindow(QWidget):
             clipboard.setText(self._current_item.translated_text)
             self._status_label.setText("译文已复制到剪贴板")
 
+    def hideEvent(self, event: QHideEvent):
+        """关闭/隐藏窗口时停止朗读（与翻译窗口共用 TTS）。"""
+        self._stop_tts_playback()
+        super().hideEvent(event)
+
+    def _stop_tts_playback(self) -> None:
+        try:
+            get_tts().stop()
+            self._tts_speak_orig_prep.end_prepare()
+            self._tts_speak_trans_prep.end_prepare()
+        except Exception:
+            pass
+
     def _speak_original(self):
         """朗读原文"""
         if self._current_item:
             tts = get_tts()
-            if tts.is_speaking():
+            if tts.is_speaking() or self._tts_speak_orig_prep.is_preparing():
                 tts.stop()
-            else:
-                tts.speak(self._current_item.original_text)
+                self._tts_speak_orig_prep.end_prepare()
+                self._tts_speak_trans_prep.end_prepare()
+                return
+
+            self._tts_speak_orig_prep.attach_to_tts_engine(tts)
+            ok = tts.speak(self._current_item.original_text)
+            if ok:
+                self._tts_speak_orig_prep.start_prepare()
                 self._status_label.setText("正在朗读原文...")
+            else:
+                self._tts_speak_orig_prep.end_prepare()
 
     def _speak_translated(self):
         """朗读译文"""
         if self._current_item:
             tts = get_tts()
-            if tts.is_speaking():
+            if tts.is_speaking() or self._tts_speak_trans_prep.is_preparing():
                 tts.stop()
-            else:
-                tts.speak(self._current_item.translated_text)
+                self._tts_speak_orig_prep.end_prepare()
+                self._tts_speak_trans_prep.end_prepare()
+                return
+
+            self._tts_speak_trans_prep.attach_to_tts_engine(tts)
+            ok = tts.speak(self._current_item.translated_text)
+            if ok:
+                self._tts_speak_trans_prep.start_prepare()
                 self._status_label.setText("正在朗读译文...")
+            else:
+                self._tts_speak_trans_prep.end_prepare()
 
     def _export_history(self):
         """导出历史记录为 JSON 文件"""

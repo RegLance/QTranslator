@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QFormLayout, QComboBox,
     QCheckBox, QGroupBox, QMessageBox, QSizePolicy, QFrame,
     QGraphicsDropShadowEffect, QScrollArea, QMenu, QWidget,
-    QSpinBox, QKeySequenceEdit, QColorDialog
+    QSpinBox, QKeySequenceEdit, QColorDialog, QSlider,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect, QByteArray
 from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence, QPalette, QPolygonF, QBrush
@@ -273,6 +273,15 @@ try:
     from .utils.history import add_translation_history
     from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
     from .utils.hotkey_manager import get_hotkey_manager
+    from .utils.tts import (
+        EDGE_TTS_VOICE_PRESETS,
+        EDGE_TTS_RATE_SLIDER_MIN,
+        EDGE_TTS_RATE_SLIDER_MAX,
+        EDGE_TTS_VOLUME_SLIDER_MIN,
+        EDGE_TTS_VOLUME_SLIDER_MAX,
+        edge_percent_from_slider,
+        parse_edge_percent_for_slider,
+    )
 except ImportError:
     # 打包后的导入路径
     from src.config import get_config, APP_NAME
@@ -290,6 +299,15 @@ except ImportError:
     from src.utils.history import add_translation_history
     from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
     from src.utils.hotkey_manager import get_hotkey_manager
+    from src.utils.tts import (
+        EDGE_TTS_VOICE_PRESETS,
+        EDGE_TTS_RATE_SLIDER_MIN,
+        EDGE_TTS_RATE_SLIDER_MAX,
+        EDGE_TTS_VOLUME_SLIDER_MIN,
+        EDGE_TTS_VOLUME_SLIDER_MAX,
+        edge_percent_from_slider,
+        parse_edge_percent_for_slider,
+    )
 
 
 def setup_auto_start(enable: bool):
@@ -475,6 +493,26 @@ class SettingsDialog(QDialog):
         self._no_proxy_label = QLabel("No Proxy:")
         api_layout.addRow(self._no_proxy_label, self._no_proxy_edit)
 
+        self._lang_detect_combo = QComboBox()
+        self._lang_detect_combo.setMinimumHeight(32)
+        _lang_items = (
+            ("百度 (联网，失败则用本地)", "baidu"),
+            ("Google (联网，失败则用本地)", "google"),
+            ("Bing (联网，失败则用本地)", "bing"),
+            ("本地 (langdetect，不联网)", "local"),
+        )
+        for lab, val in _lang_items:
+            self._lang_detect_combo.addItem(lab, val)
+        self._lang_detect_label = QLabel("语种检测:")
+        api_layout.addRow(self._lang_detect_label, self._lang_detect_combo)
+
+        self._lang_detect_hint_label = QLabel(
+            "联网方式与 NextAI 类似；任一网关请求失败或解析不到语言时，会自动使用本地检测（中文比例 + langdetect）。"
+        )
+        self._lang_detect_hint_label.setProperty("class", "hint")
+        self._lang_detect_hint_label.setWordWrap(True)
+        api_layout.addRow("", self._lang_detect_hint_label)
+
         scroll_layout.addWidget(self._api_group)
 
         # 外观设置组
@@ -558,6 +596,14 @@ class SettingsDialog(QDialog):
         self._writing_hotkey_label = QLabel("划词写作:")
         hotkey_layout.addRow(self._writing_hotkey_label, self._writing_hotkey_btn)
 
+        self._selection_translate_hotkey_btn = QPushButton("Ctrl+Shift+T")
+        self._selection_translate_hotkey_btn.setObjectName("hotkeyBtn3")
+        self._selection_translate_hotkey_btn.setMinimumHeight(32)
+        self._selection_translate_hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._selection_translate_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._selection_translate_hotkey_label = QLabel("选中翻译:")
+        hotkey_layout.addRow(self._selection_translate_hotkey_label, self._selection_translate_hotkey_btn)
+
         # 快捷键提示文字
         self._hotkey_hint_label = QLabel("点击按钮后按下新的快捷键组合")
         self._hotkey_hint_label.setProperty("class", "hint")
@@ -567,10 +613,14 @@ class SettingsDialog(QDialog):
         # 存储当前快捷键值
         self._hotkey_value = "Ctrl+O"
         self._writing_hotkey_value = "Ctrl+I"
+        self._selection_translate_hotkey_value = "Ctrl+Shift+T"
 
         # 监听按钮点击
         self._hotkey_btn.clicked.connect(lambda: self._start_hotkey_capture("translator"))
         self._writing_hotkey_btn.clicked.connect(lambda: self._start_hotkey_capture("writing"))
+        self._selection_translate_hotkey_btn.clicked.connect(
+            lambda: self._start_hotkey_capture("selection_translate")
+        )
 
         scroll_layout.addWidget(self._hotkey_group)
 
@@ -677,6 +727,74 @@ class SettingsDialog(QDialog):
         translator_window_layout.addWidget(self._always_on_top_hint_label)
 
         scroll_layout.addWidget(self._translator_window_group)
+
+        # 朗读 TTS 设置
+        self._tts_group = QGroupBox("朗读 (TTS)")
+        tts_layout = QFormLayout(self._tts_group)
+        tts_layout.setSpacing(10)
+        tts_layout.setContentsMargins(12, 20, 12, 12)
+        tts_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self._tts_provider_combo = QComboBox()
+        self._tts_provider_combo.addItems(["系统语音 (离线)", "Microsoft Edge 在线"])
+        self._tts_provider_combo.setMinimumHeight(32)
+        self._tts_provider_combo.currentIndexChanged.connect(
+            lambda _i: self._update_tts_edge_controls_enabled()
+        )
+
+        self._tts_edge_voice_combo = QComboBox()
+        self._tts_edge_voice_combo.setMinimumHeight(32)
+
+        self._tts_rate_slider = QSlider(Qt.Orientation.Horizontal)
+        self._tts_rate_slider.setRange(EDGE_TTS_RATE_SLIDER_MIN, EDGE_TTS_RATE_SLIDER_MAX)
+        self._tts_rate_slider.setSingleStep(5)
+        self._tts_rate_slider.setPageStep(10)
+        self._tts_rate_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._tts_rate_slider.setTickInterval(25)
+        self._tts_rate_value_label = QLabel("+0%")
+        self._tts_rate_value_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._tts_rate_value_label.setFixedWidth(46)
+        self._tts_rate_slider.valueChanged.connect(self._on_tts_rate_slider_changed)
+        _rate_row = QWidget()
+        _rate_layout = QHBoxLayout(_rate_row)
+        _rate_layout.setContentsMargins(0, 2, 0, 2)
+        _rate_layout.setSpacing(8)
+        _rate_layout.addWidget(self._tts_rate_slider, 1)
+        _rate_layout.addWidget(self._tts_rate_value_label)
+
+        self._tts_volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self._tts_volume_slider.setRange(EDGE_TTS_VOLUME_SLIDER_MIN, EDGE_TTS_VOLUME_SLIDER_MAX)
+        self._tts_volume_slider.setSingleStep(5)
+        self._tts_volume_slider.setPageStep(10)
+        self._tts_volume_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._tts_volume_slider.setTickInterval(25)
+        self._tts_volume_value_label = QLabel("+0%")
+        self._tts_volume_value_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._tts_volume_value_label.setFixedWidth(46)
+        self._tts_volume_slider.valueChanged.connect(self._on_tts_volume_slider_changed)
+        _vol_row = QWidget()
+        _vol_layout = QHBoxLayout(_vol_row)
+        _vol_layout.setContentsMargins(0, 2, 0, 2)
+        _vol_layout.setSpacing(8)
+        _vol_layout.addWidget(self._tts_volume_slider, 1)
+        _vol_layout.addWidget(self._tts_volume_value_label)
+
+        tts_layout.addRow(QLabel("引擎:"), self._tts_provider_combo)
+        tts_layout.addRow(QLabel("Edge 音色:"), self._tts_edge_voice_combo)
+        tts_layout.addRow(QLabel("语速:"), _rate_row)
+        tts_layout.addRow(QLabel("音量:"), _vol_row)
+        self._tts_hint_label = QLabel(
+            "Edge 需联网，更接近 NextAI 使用的神经网络朗读；合成或播放失败时会自动改用系统语音。"
+            "无网络或未装系统语音包时可能没有声音。"
+        )
+        self._tts_hint_label.setProperty("class", "checkbox-hint")
+        self._tts_hint_label.setWordWrap(True)
+        tts_layout.addRow("", self._tts_hint_label)
+        self._update_tts_edge_controls_enabled()
+        scroll_layout.addWidget(self._tts_group)
 
         # 系统设置组
         self._sys_group = QGroupBox("系统设置")
@@ -944,7 +1062,7 @@ class SettingsDialog(QDialog):
             }}
 
             /* 快捷键按钮 */
-            QPushButton#hotkeyBtn, QPushButton#hotkeyBtn2 {{
+            QPushButton#hotkeyBtn, QPushButton#hotkeyBtn2, QPushButton#hotkeyBtn3 {{
                 background-color: {t['input_bg']};
                 border: 1px solid {t['input_border']};
                 border-radius: 6px;
@@ -953,10 +1071,10 @@ class SettingsDialog(QDialog):
                 font-size: 13px;
                 text-align: left;
             }}
-            QPushButton#hotkeyBtn:hover, QPushButton#hotkeyBtn2:hover {{
+            QPushButton#hotkeyBtn:hover, QPushButton#hotkeyBtn2:hover, QPushButton#hotkeyBtn3:hover {{
                 border-color: {t['accent_color']};
             }}
-            QPushButton#hotkeyBtn:focus, QPushButton#hotkeyBtn2:focus {{
+            QPushButton#hotkeyBtn:focus, QPushButton#hotkeyBtn2:focus, QPushButton#hotkeyBtn3:focus {{
                 border-color: {t['accent_color']};
                 background-color: {t['accent_color']};
                 color: #ffffff;
@@ -1044,10 +1162,14 @@ class SettingsDialog(QDialog):
             self._hotkey_btn.setText("请按下快捷键...")
             self._hotkey_btn.setFocus()
             self._capturing_hotkey_target = "translator"
-        else:
+        elif target == "writing":
             self._writing_hotkey_btn.setText("请按下快捷键...")
             self._writing_hotkey_btn.setFocus()
             self._capturing_hotkey_target = "writing"
+        else:
+            self._selection_translate_hotkey_btn.setText("请按下快捷键...")
+            self._selection_translate_hotkey_btn.setFocus()
+            self._capturing_hotkey_target = "selection_translate"
 
     def keyPressEvent(self, event):
         """键盘事件处理 - 用于捕获快捷键"""
@@ -1080,9 +1202,12 @@ class SettingsDialog(QDialog):
             if self._capturing_hotkey_target == "translator":
                 self._hotkey_value = hotkey
                 self._hotkey_btn.setText(hotkey)
-            else:
+            elif self._capturing_hotkey_target == "writing":
                 self._writing_hotkey_value = hotkey
                 self._writing_hotkey_btn.setText(hotkey)
+            else:
+                self._selection_translate_hotkey_value = hotkey
+                self._selection_translate_hotkey_btn.setText(hotkey)
 
             self._capturing_hotkey_target = None
             return
@@ -1186,6 +1311,10 @@ class SettingsDialog(QDialog):
         self._model_edit.setText(self._config.get('translator.model', ''))
         self._no_proxy_edit.setText(self._config.get('translator.no_proxy', '109.105.120.122'))
 
+        ld_eng = self._config.get('language_detection.engine', 'baidu') or 'baidu'
+        _ldi = self._lang_detect_combo.findData(ld_eng)
+        self._lang_detect_combo.setCurrentIndex(_ldi if _ldi >= 0 else 0)
+
         popup_style = self._config.get('theme.popup_style', 'dark')
         if popup_style in self._theme_keys:
             self._popup_style_combo.setCurrentIndex(self._theme_keys.index(popup_style))
@@ -1213,6 +1342,10 @@ class SettingsDialog(QDialog):
         self._writing_hotkey_value = writing_hotkey
         self._writing_hotkey_btn.setText(writing_hotkey)
 
+        sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+Shift+T')
+        self._selection_translate_hotkey_value = sel_tr_hotkey
+        self._selection_translate_hotkey_btn.setText(sel_tr_hotkey)
+
         # 保留原文选项
         keep_original = self._config.get('writing.keep_original', False)
         self._keep_original_check.setChecked(keep_original)
@@ -1222,6 +1355,30 @@ class SettingsDialog(QDialog):
         index = self._newline_hotkey_combo.findText(newline_hotkey)
         if index >= 0:
             self._newline_hotkey_combo.setCurrentIndex(index)
+
+        tts_prov = self._config.get('tts.provider', 'edge')
+        self._tts_provider_combo.setCurrentIndex(0 if tts_prov != 'edge' else 1)
+        self._reload_tts_edge_voice_combo(self._config.get('tts.edge_voice', '') or '')
+        rate_val = parse_edge_percent_for_slider(
+            self._config.get('tts.edge_rate', '+0%'),
+            default=0,
+            min_v=EDGE_TTS_RATE_SLIDER_MIN,
+            max_v=EDGE_TTS_RATE_SLIDER_MAX,
+        )
+        self._tts_rate_slider.blockSignals(True)
+        self._tts_rate_slider.setValue(rate_val)
+        self._tts_rate_slider.blockSignals(False)
+        self._on_tts_rate_slider_changed(rate_val)
+        vol_val = parse_edge_percent_for_slider(
+            self._config.get('tts.edge_volume', '+0%'),
+            default=0,
+            min_v=EDGE_TTS_VOLUME_SLIDER_MIN,
+            max_v=EDGE_TTS_VOLUME_SLIDER_MAX,
+        )
+        self._tts_volume_slider.blockSignals(True)
+        self._tts_volume_slider.setValue(vol_val)
+        self._tts_volume_slider.blockSignals(False)
+        self._on_tts_volume_slider_changed(vol_val)
 
         # 动画输入选项
         animation = self._config.get('writing.animation', True)
@@ -1251,12 +1408,22 @@ class SettingsDialog(QDialog):
 
         # 禁用滚轮事件，避免误触
         self._disable_wheel_event(self._popup_style_combo)
+        self._disable_wheel_event(self._lang_detect_combo)
         self._disable_wheel_event(self._font_size_spin)
         self._disable_wheel_event(self._newline_hotkey_combo)
+        self._disable_wheel_event(self._tts_provider_combo)
+        self._disable_wheel_event(self._tts_edge_voice_combo)
+        self._disable_wheel_event(self._tts_rate_slider)
+        self._disable_wheel_event(self._tts_volume_slider)
 
         # 预初始化 ComboBox 下拉视图，避免首次点击卡顿
         self._popup_style_combo.view()
         self._newline_hotkey_combo.view()
+        self._lang_detect_combo.view()
+        self._tts_provider_combo.view()
+        self._tts_edge_voice_combo.view()
+
+        self._update_tts_edge_controls_enabled()
 
     def _disable_wheel_event(self, widget):
         """禁用控件的鼠标滚轮事件，防止误触"""
@@ -1270,6 +1437,47 @@ class SettingsDialog(QDialog):
                 QApplication.sendEvent(self._scroll_area.verticalScrollBar(), event)
             return True
         return super().eventFilter(obj, event)
+
+    def _tts_combo_voice_id_at(self, row: int) -> str:
+        d = self._tts_edge_voice_combo.itemData(row)
+        if d is None:
+            return ""
+        return str(d).strip()
+
+    def _reload_tts_edge_voice_combo(self, configured_voice_id: str):
+        combo = self._tts_edge_voice_combo
+        cfg = (configured_voice_id or "").strip()
+        combo.blockSignals(True)
+        combo.clear()
+        for label, vid in EDGE_TTS_VOICE_PRESETS:
+            combo.addItem(label, vid)
+        match_i = -1
+        for i in range(combo.count()):
+            if self._tts_combo_voice_id_at(i) == cfg:
+                match_i = i
+                break
+        if match_i < 0:
+            if cfg:
+                combo.insertItem(1, f"自定义 ({cfg})", cfg)
+                match_i = 1
+            else:
+                match_i = 0
+        combo.setCurrentIndex(match_i)
+        combo.blockSignals(False)
+
+    def _on_tts_rate_slider_changed(self, value: int):
+        self._tts_rate_value_label.setText(f"{int(value):+d}%")
+
+    def _on_tts_volume_slider_changed(self, value: int):
+        self._tts_volume_value_label.setText(f"{int(value):+d}%")
+
+    def _update_tts_edge_controls_enabled(self):
+        edge = self._tts_provider_combo.currentIndex() == 1
+        self._tts_edge_voice_combo.setEnabled(edge)
+        self._tts_rate_slider.setEnabled(edge)
+        self._tts_volume_slider.setEnabled(edge)
+        self._tts_rate_value_label.setEnabled(edge)
+        self._tts_volume_value_label.setEnabled(edge)
 
     def _on_theme_combo_changed(self, index):
         """主题下拉框选项变更时，控制自定义颜色选择器的可见性"""
@@ -1367,11 +1575,16 @@ class SettingsDialog(QDialog):
             old_writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+I')
             new_writing_hotkey = self._writing_hotkey_value
 
+            old_sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+Shift+T')
+            new_sel_tr_hotkey = self._selection_translate_hotkey_value
+
             # API 配置
             self._config.set('translator.base_url', self._api_url_edit.text().strip())
             self._config.set('translator.api_key', self._api_key_edit.text().strip())
             self._config.set('translator.model', self._model_edit.text().strip())
             self._config.set('translator.no_proxy', self._no_proxy_edit.text().strip())
+            _lde = self._lang_detect_combo.currentData()
+            self._config.set('language_detection.engine', str(_lde or 'baidu'))
 
             selected_key = self._theme_keys[self._popup_style_combo.currentIndex()]
             self._config.set('theme.popup_style', selected_key)
@@ -1385,12 +1598,20 @@ class SettingsDialog(QDialog):
             # 快捷键
             self._config.set('hotkey.translator_window', new_hotkey)
             self._config.set('hotkey.writing', new_writing_hotkey)
+            self._config.set('hotkey.selection_translate', new_sel_tr_hotkey)
 
             # 写作设置
             keep_original = self._keep_original_check.isChecked()
             self._config.set('writing.keep_original', keep_original)
             self._config.set('writing.newline_hotkey', self._newline_hotkey_combo.currentText())
             self._config.set('writing.animation', self._animation_check.isChecked())
+
+            self._config.set('tts.provider', 'edge' if self._tts_provider_combo.currentIndex() == 1 else 'system')
+            _vd = self._tts_edge_voice_combo.currentData()
+            _voice = "" if _vd is None else str(_vd).strip()
+            self._config.set('tts.edge_voice', _voice)
+            self._config.set('tts.edge_rate', edge_percent_from_slider(self._tts_rate_slider.value()))
+            self._config.set('tts.edge_volume', edge_percent_from_slider(self._tts_volume_slider.value()))
 
             # 润色设置
             polishing_show_diff = self._polishing_show_diff_check.isChecked()
@@ -1444,6 +1665,13 @@ class SettingsDialog(QDialog):
                     log_info(f"写作热键已更新: {old_writing_hotkey} -> {new_writing_hotkey}")
                 except Exception as e:
                     log_error(f"更新写作热键失败: {e}")
+
+            if old_sel_tr_hotkey != new_sel_tr_hotkey:
+                try:
+                    hotkey_manager.update_hotkey(new_sel_tr_hotkey, "selection_translate")
+                    log_info(f"选中翻译热键已更新: {old_sel_tr_hotkey} -> {new_sel_tr_hotkey}")
+                except Exception as e:
+                    log_error(f"更新选中翻译热键失败: {e}")
 
             # 更新所有窗口主题
             self._update_all_themes()
@@ -1760,6 +1988,14 @@ class MainController(QObject):
         self._connect_signals()
         self._check_config()
         self._setup_hotkey()
+        try:
+            try:
+                from .utils.tts_media import ensure_tts_media_bridge
+            except ImportError:
+                from src.utils.tts_media import ensure_tts_media_bridge
+            ensure_tts_media_bridge()
+        except Exception:
+            pass
 
     def _connect_signals(self):
         self._selection_detector.selection_finished.connect(self._on_selection_finished)
@@ -1775,6 +2011,9 @@ class MainController(QObject):
         self._translator_window.settings_requested.connect(self._on_settings_requested)
         self._hotkey_manager.hotkey_triggered.connect(self._on_hotkey_triggered)
         self._hotkey_manager.writing_hotkey_triggered.connect(self._on_writing_hotkey_triggered)
+        self._hotkey_manager.selection_translate_hotkey_triggered.connect(
+            self._on_selection_translate_hotkey_triggered
+        )
         self.writing_completed.connect(self._on_writing_completed)
 
     def _check_config(self):
@@ -1803,7 +2042,11 @@ class MainController(QObject):
         success2 = self._hotkey_manager.register_hotkey(writing_hotkey, name="writing")
         log_debug(f"注册写作热键: {writing_hotkey}, 结果: {success2}")
 
-        if not success1 or not success2:
+        sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+Shift+T')
+        success3 = self._hotkey_manager.register_hotkey(sel_tr_hotkey, name="selection_translate")
+        log_debug(f"注册选中翻译热键: {sel_tr_hotkey}, 结果: {success3}")
+
+        if not success1 or not success2 or not success3:
             self._hotkey_retry_count += 1
             if self._hotkey_retry_count <= 3:
                 delay = self._hotkey_retry_count * 5000  # 5s, 10s, 15s
@@ -2036,6 +2279,76 @@ class MainController(QObject):
             # 显示翻译窗口
             log_debug("显示翻译窗口")
             self._translator_window.show_window()
+
+    def _on_selection_translate_hotkey_triggered(self):
+        """选中内容翻译热键：主动取当前选区并打开翻译（适合 Excel / PowerPoint 等）。"""
+        log_debug("选中翻译热键触发")
+        if not self._tray_icon._is_enabled:
+            log_debug("翻译功能已禁用，跳过选中翻译")
+            return
+
+        cursor_pos = QCursor.pos()
+        mouse_pos = (cursor_pos.x(), cursor_pos.y())
+
+        try:
+            import keyboard
+            import pyperclip
+
+            self._wait_for_modifier_release(keyboard)
+
+            saved_clipboard = ""
+            try:
+                saved_clipboard = pyperclip.paste()
+            except Exception:
+                pass
+
+            current_selection = self._text_capture.get_selected_text_nextai_style()
+            text = (current_selection.text or "").strip()
+            log_debug(
+                f"选中翻译: nextai 风格 method={current_selection.method}, "
+                f"len={len(text)}"
+            )
+
+            if not text:
+                hook_sel = self._text_capture.get_current_selection(timeout=0.65)
+                text = (hook_sel.text or "").strip()
+                if text:
+                    log_debug(
+                        f"选中翻译: selection-hook 查询 method={hook_sel.method}, "
+                        f"error={hook_sel.error}"
+                    )
+
+            editor_selection_state = self._get_foreground_editor_selection_state()
+            if not text and editor_selection_state is not False:
+                text = (
+                    self._probe_selected_text_by_clipboard(
+                        keyboard, pyperclip, saved_clipboard
+                    )
+                    or ""
+                ).strip()
+
+            self._translate_button.hide()
+
+            if not text:
+                self._tray_icon.show_message(
+                    APP_NAME,
+                    "未能获取选中内容，可先复制后再试或检查焦点是否在编辑区域",
+                    "warning",
+                )
+                return
+
+            if (
+                text == self._last_text
+                and self._translator_window.isVisible()
+                and self._translator_window.is_auto_mode()
+            ):
+                self._translator_window.bring_to_front()
+                return
+
+            self._last_text = text
+            self._translator_window.show_at_mouse(mouse_pos, self._last_text)
+        except Exception as e:
+            log_error(f"选中翻译热键处理失败: {e}")
 
     def _on_writing_hotkey_triggered(self):
         """写作热键触发时执行写作功能

@@ -142,6 +142,10 @@ class Config:
                 'timeout': 60,  # 请求超时时间（秒）
                 'no_proxy': '109.105.111.17',  # 不使用代理的地址，多个用逗号分隔
             },
+            'language_detection': {
+                'engine': 'baidu',  # baidu | google | bing | local（联网失败自动回退本地 langdetect）
+                'timeout': 3,  # 联网检测超时（秒），限制在 3～60
+            },
             'theme': {
                 'popup_style': 'dark',  # 主题名称：dark/light/ocean_blue/forest_green/royal_purple/warm_orange/rose_pink/mint_light/custom
                 'custom_accent': '#007AFF',  # 自定义主题强调色
@@ -154,6 +158,7 @@ class Config:
             'hotkey': {
                 'translator_window': 'Ctrl+O',  # 唤醒翻译窗口的快捷键
                 'writing': 'Ctrl+I',  # 写作快捷键
+                'selection_translate': 'Ctrl+Shift+T',  # 当前窗口选中内容翻译（适合 Excel/PPT 等）
             },
             'startup': {
                 'auto_start': False,  # 开机自启
@@ -175,6 +180,12 @@ class Config:
                 'remember_window_position': False,  # 记忆窗口位置（勾选后记住窗口关闭时的位置）
                 'always_on_top': False,  # 始终置顶（勾选后翻译窗口始终在最顶层）
                 'default_function': 'translate',  # 默认功能：translate/polishing/summarize
+            },
+            'tts': {
+                'provider': 'edge',  # edge=在线（失败时自动回退系统） / system=Windows 离线
+                'edge_voice': '',  # 留空则按语言自动；可填如 zh-CN-XiaoxiaoNeural
+                'edge_rate': '+0%',  # Edge 语速，如 +20% / -10%
+                'edge_volume': '+0%',
             },
         }
 

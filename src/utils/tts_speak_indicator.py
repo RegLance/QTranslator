@@ -8,6 +8,10 @@ from PyQt6.QtCore import QObject, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QPushButton, QWidget
 
+# 转圈动画：约 60fps，角速度与原先 80ms×32° 接近（~400°/s）
+_SPINNER_INTERVAL_MS = 16
+_SPINNER_ANGLE_STEP = 6
+
 
 class _MainThreadEndPrepare(QObject):
     """TTS 完成/停止回调常在后台线程；用信号投递到 GUI 线程再恢复按钮图标。"""
@@ -40,8 +44,9 @@ class TtsSpeakPrepareIndicator:
         self._active = False
         self._angle = 0
         self._timer = QTimer(parent_widget)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._on_tick)
-        self._timer.setInterval(80)
+        self._timer.setInterval(_SPINNER_INTERVAL_MS)
         self._main_thread_end = _MainThreadEndPrepare(self, parent_widget)
 
     def is_preparing(self) -> bool:
@@ -83,7 +88,7 @@ class TtsSpeakPrepareIndicator:
         if not self._active:
             self._timer.stop()
             return
-        self._angle = (self._angle + 32) % 360
+        self._angle = (self._angle + _SPINNER_ANGLE_STEP) % 360
         self._btn.setIcon(self._spinner_icon())
 
     def _spinner_icon(self) -> QIcon:

@@ -483,6 +483,10 @@ class TranslatorWindow(QWidget):
 
         # 默认功能选择（从配置读取）
         self._default_function = get_config().get('translator_window.default_function', 'translate')
+        # 标题「默认功能」提示：连续快速切换时重置 2s 倒计时（单次定时器 stop + start）
+        self._default_function_title_restore_timer = QTimer(self)
+        self._default_function_title_restore_timer.setSingleShot(True)
+        self._default_function_title_restore_timer.timeout.connect(self._restore_title_after_default_hint)
 
         # 版本更新检查相关
         self._update_check_worker: Optional[UpdateCheckWorker] = None
@@ -2839,31 +2843,40 @@ class TranslatorWindow(QWidget):
         except RuntimeError:
             pass
 
+    def _restore_title_after_default_hint(self) -> None:
+        try:
+            self._title_label.setText("QTranslator")
+        except RuntimeError:
+            pass
+
     def _set_default_function(self, function_name: str):
         """设置默认功能
         
         Args:
             function_name: 功能名称 ('translate', 'polishing', 'summarize')
         """
+        previous = self._default_function
         # 保存设置到配置文件
         self._default_function = function_name
         get_config().set('translator_window.default_function', function_name)
         get_config().save()
-        
+
         # 应用按钮样式
         self._apply_default_function_style()
-        
-        # 显示提示信息
+
+        # 仅在切换到另一种默认功能时提示标题（已是当前默认时再点不刷屏）
+        if previous == function_name:
+            return
+
         function_labels = {
             'translate': '翻译',
             'polishing': '润色',
             'summarize': '总结'
         }
         label = function_labels.get(function_name, '翻译')
+        self._default_function_title_restore_timer.stop()
         self._title_label.setText(f"QTranslator - 默认功能: {label}")
-        
-        # 2秒后恢复标题
-        QTimer.singleShot(2000, lambda: self._title_label.setText("QTranslator"))
+        self._default_function_title_restore_timer.start(2000)
 
     def _run_function_button(self, function_name: str):
         """按钮左键点击：执行按钮本身功能（默认功能已在 pressed 阶段切换）。"""

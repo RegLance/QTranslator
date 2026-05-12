@@ -496,10 +496,10 @@ class SettingsDialog(QDialog):
         self._lang_detect_combo = QComboBox()
         self._lang_detect_combo.setMinimumHeight(32)
         _lang_items = (
-            ("百度 (联网，失败则用本地)", "baidu"),
-            ("Google (联网，失败则用本地)", "google"),
-            ("Bing (联网，失败则用本地)", "bing"),
-            ("本地 (langdetect，不联网)", "local"),
+            ("百度", "baidu"),
+            ("Google", "google"),
+            ("Bing", "bing"),
+            ("本地", "local"),
         )
         for lab, val in _lang_items:
             self._lang_detect_combo.addItem(lab, val)
@@ -507,7 +507,7 @@ class SettingsDialog(QDialog):
         api_layout.addRow(self._lang_detect_label, self._lang_detect_combo)
 
         self._lang_detect_hint_label = QLabel(
-            "联网方式与 NextAI 类似；任一网关请求失败或解析不到语言时，会自动使用本地检测（中文比例 + langdetect）。"
+            "任一网关请求失败或解析不到语言时，会自动回退使用本地检测。"
         )
         self._lang_detect_hint_label.setProperty("class", "hint")
         self._lang_detect_hint_label.setWordWrap(True)
@@ -787,8 +787,7 @@ class SettingsDialog(QDialog):
         tts_layout.addRow(QLabel("语速:"), _rate_row)
         tts_layout.addRow(QLabel("音量:"), _vol_row)
         self._tts_hint_label = QLabel(
-            "Edge 需联网，更接近 NextAI 使用的神经网络朗读；合成或播放失败时会自动改用系统语音。"
-            "无网络或未装系统语音包时可能没有声音。"
+            "Edge tts需联网，使用神经网络朗读；合成或播放失败时会自动改用系统语音。"
         )
         self._tts_hint_label.setProperty("class", "checkbox-hint")
         self._tts_hint_label.setWordWrap(True)
@@ -2306,7 +2305,7 @@ class MainController(QObject):
             current_selection = self._text_capture.get_selected_text_nextai_style()
             text = (current_selection.text or "").strip()
             log_debug(
-                f"选中翻译: nextai 风格 method={current_selection.method}, "
+                f"选中翻译: method={current_selection.method}, "
                 f"len={len(text)}"
             )
 
@@ -2391,7 +2390,7 @@ class MainController(QObject):
 
             current_selection = self._text_capture.get_selected_text_nextai_style()
             selected_text = current_selection.text or ""
-            log_info(f"[写作诊断] nextai 风格选区查询: method={current_selection.method}, "
+            log_info(f"[写作诊断] 选区查询: method={current_selection.method}, "
                      f"error={current_selection.error}, "
                      f"{self._format_text_snapshot(selected_text)}")
             editor_selection_state = self._get_foreground_editor_selection_state()
@@ -2436,7 +2435,7 @@ class MainController(QObject):
 
     def _probe_selected_text_by_clipboard(self, keyboard_module, pyperclip_module,
                                           saved_clipboard: str) -> str:
-        """仿照 nextai：用剪贴板探测当前选区，并立即恢复剪贴板。"""
+        """用剪贴板探测当前选区，并立即恢复剪贴板。"""
         try:
             import uuid
 

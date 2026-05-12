@@ -278,7 +278,7 @@ class TextCapture:
                 self._pending_requests.pop(request_id, None)
 
     def get_selected_text_nextai_style(self) -> SelectionInfo:
-        """按 nextai-translator 的思路获取当前真实选区。
+        """获取当前真实选区。
 
         优先使用非剪贴板方法：
         1. Scintilla 直接读取选区（Notepad++、SciTE、部分编辑器）

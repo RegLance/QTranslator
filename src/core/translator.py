@@ -218,7 +218,7 @@ class Translator:
         return system_prompt, user_prompt, cache_key, source_lang, target_lang
 
     def _build_translation_prompt(self, text: str, source_lang: str, target_lang: str) -> tuple:
-        """构建翻译提示词（参考 nextai-translator）
+        """构建翻译提示词
         
         Returns:
             tuple: (system_prompt, user_prompt)
@@ -292,7 +292,7 @@ Examples:
         return (system_prompt, user_prompt, source_lang, target_lang)
 
     def _build_polishing_prompt(self, text: str) -> tuple:
-        """构建润色提示词（参考 nextai-translator）
+        """构建润色提示词
 
         Returns:
             tuple: (system_prompt, user_prompt)
@@ -320,7 +320,7 @@ Examples:
         return (system_prompt, user_prompt)
 
     def _build_summarize_prompt(self, text: str, target_lang: str = "中文") -> tuple:
-        """构建总结提示词（参考 nextai-translator）
+        """构建总结提示词
 
         Args:
             text: 待总结的文本

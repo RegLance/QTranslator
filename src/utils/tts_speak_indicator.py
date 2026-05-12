@@ -1,4 +1,4 @@
-"""朗读按钮准备阶段：圆形进度动画；on_start 后与正常播放图标一致。"""
+"""朗读按钮：从开始朗读到结束（含合成/缓冲）显示转圈，读完或停止后恢复图标。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QPushButton, QWidget
 
 
 class _MainThreadEndPrepare(QObject):
-    """系统 TTS 在后台线程触发回调；必须通过信号投递到 GUI 线程才能停止转圈。"""
+    """TTS 完成/停止回调常在后台线程；用信号投递到 GUI 线程再恢复按钮图标。"""
 
     _request = pyqtSignal()
 
@@ -24,7 +24,7 @@ class _MainThreadEndPrepare(QObject):
 
 
 class TtsSpeakPrepareIndicator:
-    """绑定单个朗读 QPushButton：在等待 TTS 出声时显示转圈图标。"""
+    """绑定朗读按钮：朗读进行中转圈，on_finish / on_stop 后恢复。"""
 
     def __init__(
         self,
@@ -56,11 +56,8 @@ class TtsSpeakPrepareIndicator:
         def _end_on_main() -> None:
             self._main_thread_end.request_end_prepare()
 
-        def _on_start() -> None:
-            _end_on_main()
-
         tts.set_callbacks(
-            on_start=_on_start,
+            on_start=None,
             on_finish=_end_on_main,
             on_stop=_end_on_main,
         )

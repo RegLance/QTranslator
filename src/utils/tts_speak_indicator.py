@@ -4,9 +4,23 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PyQt6.QtCore import QRectF, Qt, QTimer
+from PyQt6.QtCore import QObject, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QPushButton, QWidget
+
+
+class _MainThreadEndPrepare(QObject):
+    """系统 TTS 在后台线程触发回调；必须通过信号投递到 GUI 线程才能停止转圈。"""
+
+    _request = pyqtSignal()
+
+    def __init__(self, indicator: "TtsSpeakPrepareIndicator", parent: QWidget) -> None:
+        super().__init__(parent)
+        self._indicator = indicator
+        self._request.connect(self._indicator.end_prepare)
+
+    def request_end_prepare(self) -> None:
+        self._request.emit()
 
 
 class TtsSpeakPrepareIndicator:
@@ -28,6 +42,7 @@ class TtsSpeakPrepareIndicator:
         self._timer = QTimer(parent_widget)
         self._timer.timeout.connect(self._on_tick)
         self._timer.setInterval(80)
+        self._main_thread_end = _MainThreadEndPrepare(self, parent_widget)
 
     def is_preparing(self) -> bool:
         return self._active
@@ -39,7 +54,7 @@ class TtsSpeakPrepareIndicator:
 
     def attach_to_tts_engine(self, tts: Any) -> None:
         def _end_on_main() -> None:
-            QTimer.singleShot(0, self.end_prepare)
+            self._main_thread_end.request_end_prepare()
 
         def _on_start() -> None:
             _end_on_main()

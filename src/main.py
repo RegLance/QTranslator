@@ -1311,9 +1311,10 @@ class SettingsDialog(QDialog):
         self._model_edit.setText(self._config.get('translator.model', ''))
         self._no_proxy_edit.setText(self._config.get('translator.no_proxy', '109.105.120.122'))
 
-        ld_eng = self._config.get('language_detection.engine', 'baidu') or 'baidu'
+        ld_eng = self._config.get('language_detection.engine', 'local') or 'local'
         _ldi = self._lang_detect_combo.findData(ld_eng)
-        self._lang_detect_combo.setCurrentIndex(_ldi if _ldi >= 0 else 0)
+        _lfallback = self._lang_detect_combo.findData('local')
+        self._lang_detect_combo.setCurrentIndex(_ldi if _ldi >= 0 else max(0, _lfallback))
 
         popup_style = self._config.get('theme.popup_style', 'dark')
         if popup_style in self._theme_keys:
@@ -1356,7 +1357,7 @@ class SettingsDialog(QDialog):
         if index >= 0:
             self._newline_hotkey_combo.setCurrentIndex(index)
 
-        tts_prov = self._config.get('tts.provider', 'edge')
+        tts_prov = self._config.get('tts.provider', 'system')
         self._tts_provider_combo.setCurrentIndex(0 if tts_prov != 'edge' else 1)
         self._reload_tts_edge_voice_combo(self._config.get('tts.edge_voice', '') or '')
         rate_val = parse_edge_percent_for_slider(
@@ -1584,7 +1585,7 @@ class SettingsDialog(QDialog):
             self._config.set('translator.model', self._model_edit.text().strip())
             self._config.set('translator.no_proxy', self._no_proxy_edit.text().strip())
             _lde = self._lang_detect_combo.currentData()
-            self._config.set('language_detection.engine', str(_lde or 'baidu'))
+            self._config.set('language_detection.engine', str(_lde or 'local'))
 
             selected_key = self._theme_keys[self._popup_style_combo.currentIndex()]
             self._config.set('theme.popup_style', selected_key)

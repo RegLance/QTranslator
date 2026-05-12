@@ -261,7 +261,7 @@ def _pick_edge_voice(lang_hint: Optional[str], text: str) -> str:
 def _tts_provider() -> str:
     try:
         from ..config import get_config
-        p = (get_config().get("tts.provider") or "edge").strip().lower()
+        p = (get_config().get("tts.provider") or "system").strip().lower()
         return p if p in ("system", "edge") else "system"
     except Exception:
         return "system"

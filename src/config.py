@@ -143,7 +143,7 @@ class Config:
                 'no_proxy': '109.105.111.17',  # 不使用代理的地址，多个用逗号分隔
             },
             'language_detection': {
-                'engine': 'baidu',  # baidu | google | bing | local（联网失败自动回退本地 langdetect）
+                'engine': 'local',  # local=本地 langdetect；baidu | google | bing（联网失败自动回退本地）
                 'timeout': 3,  # 联网检测超时（秒），限制在 3～60
             },
             'theme': {
@@ -182,7 +182,7 @@ class Config:
                 'default_function': 'translate',  # 默认功能：translate/polishing/summarize
             },
             'tts': {
-                'provider': 'edge',  # edge=在线（失败时自动回退系统） / system=Windows 离线
+                'provider': 'system',  # system=Windows 离线 / edge=在线（失败时自动回退系统）
                 'edge_voice': '',  # 留空则按语言自动；可填如 zh-CN-XiaoxiaoNeural
                 'edge_rate': '+0%',  # Edge 语速，如 +20% / -10%
                 'edge_volume': '+0%',

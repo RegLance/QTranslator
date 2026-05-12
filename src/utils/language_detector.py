@@ -201,9 +201,9 @@ def _get_detection_config() -> Tuple[str, float]:
     except ImportError:
         from src.config import get_config
     cfg = get_config()
-    engine = str(cfg.get('language_detection.engine', 'baidu') or 'baidu').strip().lower()
+    engine = str(cfg.get('language_detection.engine', 'local') or 'local').strip().lower()
     if engine not in _VALID_ENGINES:
-        engine = 'baidu'
+        engine = 'local'
     timeout_raw = cfg.get('language_detection.timeout', 3)
     try:
         timeout = float(timeout_raw)

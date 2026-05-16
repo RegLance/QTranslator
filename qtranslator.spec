@@ -4,21 +4,39 @@
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
+
 block_cipher = None
 
 # 项目根目录
 project_root = Path(SPECPATH)
 
+try:
+    import rapidocr_onnxruntime as _rapidocr_pkg
+
+    _rapidocr_root = Path(_rapidocr_pkg.__file__).resolve().parent
+    _ocr_datas = [(str(_rapidocr_root / "config.yaml"), "rapidocr_onnxruntime")]
+except Exception:
+    _ocr_datas = []
+
+_ocr_hidden = collect_submodules("rapidocr_onnxruntime")
+
+_binaries = []
+for _hook in ("onnxruntime", "cv2"):
+    try:
+        _binaries += collect_dynamic_libs(_hook)
+    except Exception:
+        pass
+
 a = Analysis(
     ["run.py"],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=_binaries,
     datas=[
-        # 添加 native 目录 - 包含 selection-hook Node.js 服务和嵌入式 Node.js 运行时
-        ("E:/qoder/QTranslator/native", "native"),
-        # 添加 assets 目录 - 包含应用图标
-        ("E:/qoder/QTranslator/assets", "assets"),
-    ],
+        (str(project_root / "native"), "native"),
+        (str(project_root / "assets"), "assets"),
+    ]
+    + _ocr_datas,
     hiddenimports=[
         "PyQt6.QtCore",
         "PyQt6.QtGui",
@@ -30,11 +48,9 @@ a = Analysis(
         "comtypes.client",
         "yaml",
         "yaml.safe_load",
-        # 新增依赖包
         "langdetect",
         "langdetect.lang_detect_exception",
         "keyboard",
-        # TTS 相关依赖
         "pyttsx3",
         "edge_tts",
         "aiohttp",
@@ -42,35 +58,42 @@ a = Analysis(
         "win32com.client",
         "pythoncom",
         "pywin32",
-        # 核心模块
+        "onnxruntime",
+        "cv2",
+        "numpy",
+        "PIL",
+        "rapidocr_onnxruntime",
         "src.config",
         "src.main",
         "src.__init__",
         "src.core.selection_detector",
         "src.core.text_capture",
         "src.core.translator",
-        "src.core.writing",  # 新增：写作服务模块
-        "src.core.api_config",  # 新增：API 配置模块
+        "src.core.writing",
+        "src.core.api_config",
         "src.core.__init__",
-        # UI 模块
         "src.ui.history_window",
         "src.ui.popup_window",
         "src.ui.translate_button",
         "src.ui.translator_window",
         "src.ui.tray_icon",
         "src.ui.help_window",
+        "src.ui.screenshot_ocr_overlay",
         "src.ui.__init__",
-        # 工具模块
         "src.utils.history",
         "src.utils.logger",
         "src.utils.language_detector",
         "src.utils.hotkey_manager",
         "src.utils.theme",
-        "src.utils.tts",  # 新增：TTS 模块
+        "src.utils.tts",
         "src.utils.tts_media",
         "src.utils.tts_speak_indicator",
+        "src.utils.rapidocr_engine",
+        "src.ui.vocabulary_window",
+        "src.utils.vocabulary",
         "src.utils.__init__",
-    ],
+    ]
+    + _ocr_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -97,11 +120,11 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # 不显示控制台窗口
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="E:/qoder/QTranslator/assets/icon.ico",  # 应用图标
+    icon=str(project_root / "assets" / "icon.ico"),
 )

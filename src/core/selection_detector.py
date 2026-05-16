@@ -145,7 +145,7 @@ class SelectionDetector(QObject):
             for widget in app.topLevelWidgets():
                 if widget.isVisible() and widget.isActiveWindow():
                     widget_name = widget.objectName() or widget.__class__.__name__
-                    if widget_name in ['TranslatorWindow', 'HistoryWindow', 'SettingsDialog',
+                    if widget_name in ['TranslatorWindow', 'HistoryWindow', 'VocabularyWindow', 'SettingsDialog',
                                        'PopupWindow']:
                         return True
 

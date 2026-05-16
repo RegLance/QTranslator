@@ -159,6 +159,7 @@ class Config:
                 'translator_window': 'Ctrl+O',  # 唤醒翻译窗口的快捷键
                 'writing': 'Ctrl+I',  # 写作快捷键
                 'selection_translate': 'Ctrl+Shift+T',  # 当前窗口选中内容翻译（适合 Excel/PPT 等）
+                'ocr_screenshot': 'Ctrl+Shift+O',  # 框选屏幕 OCR 后填入翻译窗口
             },
             'startup': {
                 'auto_start': False,  # 开机自启
@@ -186,6 +187,10 @@ class Config:
                 'edge_voice': '',  # 留空则按语言自动；可填如 zh-CN-XiaoxiaoNeural
                 'edge_rate': '+0%',  # Edge 语速，如 +20% / -10%
                 'edge_volume': '+0%',
+            },
+            'ocr': {
+                # 截图识字识别模型：ch_en | japanese | korean | cyrillic
+                'language': 'ch_en',
             },
         }
 

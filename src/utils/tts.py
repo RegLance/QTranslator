@@ -301,6 +301,8 @@ class TTSEngine:
         # Edge 朗读失败时回退系统 TTS：保留本次待读内容与语言提示
         self._edge_fallback_text: Optional[str] = None
         self._edge_fallback_lang_hint: Optional[str] = None
+        # Edge 多段合成与 abort/stop 竞态：每次 speak/stop 递增，仅当前代号的入队有效
+        self._edge_enqueue_generation: int = 0
 
         self._system_backend = None
         try:
@@ -354,6 +356,11 @@ class TTSEngine:
                 return False
             self._stop_requested = False
             self._state = TTSState.SPEAKING
+            provider = "system" if _force_system else _tts_provider()
+            edge_job_id = 0
+            if provider == "edge":
+                self._edge_enqueue_generation += 1
+                edge_job_id = self._edge_enqueue_generation
 
         try:
             from ..config import get_config
@@ -361,17 +368,16 @@ class TTSEngine:
         except Exception:
             raw_prov = "(unread)"
         dep_ok, dep_msg = _edge_dependency_status()
-        provider = "system" if _force_system else _tts_provider()
         _log_tts(
             f"speak: config.tts.provider={raw_prov} resolved={provider} "
             f"force_system={_force_system} edge_deps_ok={dep_ok} [{dep_msg}] "
-            f"system_backend={self._system_backend!r} text_len={len(stripped)}"
+            f"system_backend={self._system_backend!r} text_len={len(stripped)} edge_job={edge_job_id}"
         )
 
         if provider == "edge":
             self._edge_fallback_text = stripped
             self._edge_fallback_lang_hint = lang_hint
-            self._run_edge_speak(stripped, lang_hint)
+            self._run_edge_speak(stripped, lang_hint, edge_job_id)
             return True
 
         self._clear_edge_fallback()
@@ -379,7 +385,11 @@ class TTSEngine:
         self._run_system_speak(stripped)
         return True
 
-    def _run_edge_speak(self, text: str, lang_hint: Optional[str]):
+    def _run_edge_speak(self, text: str, lang_hint: Optional[str], edge_job_id: int):
+        def _edge_job_alive() -> bool:
+            with self._lock:
+                return self._edge_enqueue_generation == edge_job_id
+
         enqueued_playback = [False]
         aborted_before_enqueue = [False]
 
@@ -430,8 +440,9 @@ class TTSEngine:
 
                 start_cb_fired = False
                 for seg_idx, seg_text in enumerate(segments):
-                    if self._stop_requested:
-                        aborted_before_enqueue[0] = True
+                    if self._stop_requested or not _edge_job_alive():
+                        if not _edge_job_alive():
+                            aborted_before_enqueue[0] = True
                         break
                     fd, tmp_path = tempfile.mkstemp(suffix=".mp3", prefix="qtr_tts_")
                     os.close(fd)
@@ -465,7 +476,7 @@ class TTSEngine:
                         f"Edge thread: seg{seg_idx + 1} mp3 size={mp3_sz} path={tmp_path!r}"
                     )
 
-                    if self._stop_requested:
+                    if self._stop_requested or not _edge_job_alive():
                         aborted_before_enqueue[0] = True
                         cleanup_mp3()
                         break
@@ -477,6 +488,11 @@ class TTSEngine:
                             except Exception:
                                 pass
                         start_cb_fired = True
+
+                    if self._stop_requested or not _edge_job_alive():
+                        aborted_before_enqueue[0] = True
+                        cleanup_mp3()
+                        break
 
                     enqueued_playback[0] = True
                     _log_tts(
@@ -664,6 +680,7 @@ class TTSEngine:
         should_notify_stop = False
         py_eng = None
         with self._lock:
+            self._edge_enqueue_generation += 1
             if self._state == TTSState.SPEAKING:
                 self._stop_requested = True
                 should_notify_stop = True

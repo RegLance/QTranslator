@@ -267,12 +267,15 @@ try:
     from .ui.tray_icon import get_tray_icon
     from .ui.translator_window import get_translator_window
     from .ui.history_window import get_history_window
+    from .ui.vocabulary_window import get_vocabulary_window
     from .ui.help_window import get_help_window
     from .ui.splash_screen import show_splash_screen
-    from .utils.logger import get_logger, log_info, log_error, log_debug
+    from .ui.screenshot_ocr_overlay import SnipOverlay, RapidOcrWorkerThread, screen_at_cursor
+    from .utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
     from .utils.history import add_translation_history
     from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
     from .utils.hotkey_manager import get_hotkey_manager
+    from .utils.rapidocr_engine import OCR_LANGUAGE_OPTIONS, invalidate_ocr_engine
     from .utils.tts import (
         EDGE_TTS_VOICE_PRESETS,
         EDGE_TTS_RATE_SLIDER_MIN,
@@ -293,12 +296,15 @@ except ImportError:
     from src.ui.tray_icon import get_tray_icon
     from src.ui.translator_window import get_translator_window
     from src.ui.history_window import get_history_window
+    from src.ui.vocabulary_window import get_vocabulary_window
     from src.ui.help_window import get_help_window
     from src.ui.splash_screen import show_splash_screen
-    from src.utils.logger import get_logger, log_info, log_error, log_debug
+    from src.ui.screenshot_ocr_overlay import SnipOverlay, RapidOcrWorkerThread, screen_at_cursor
+    from src.utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
     from src.utils.history import add_translation_history
     from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
     from src.utils.hotkey_manager import get_hotkey_manager
+    from src.utils.rapidocr_engine import OCR_LANGUAGE_OPTIONS, invalidate_ocr_engine
     from src.utils.tts import (
         EDGE_TTS_VOICE_PRESETS,
         EDGE_TTS_RATE_SLIDER_MIN,
@@ -604,6 +610,14 @@ class SettingsDialog(QDialog):
         self._selection_translate_hotkey_label = QLabel("选中翻译:")
         hotkey_layout.addRow(self._selection_translate_hotkey_label, self._selection_translate_hotkey_btn)
 
+        self._ocr_screenshot_hotkey_btn = QPushButton("Ctrl+Shift+O")
+        self._ocr_screenshot_hotkey_btn.setObjectName("hotkeyBtn4")
+        self._ocr_screenshot_hotkey_btn.setMinimumHeight(32)
+        self._ocr_screenshot_hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._ocr_screenshot_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._ocr_screenshot_hotkey_label = QLabel("截图识字:")
+        hotkey_layout.addRow(self._ocr_screenshot_hotkey_label, self._ocr_screenshot_hotkey_btn)
+
         # 快捷键提示文字
         self._hotkey_hint_label = QLabel("点击按钮后按下新的快捷键组合")
         self._hotkey_hint_label.setProperty("class", "hint")
@@ -614,6 +628,7 @@ class SettingsDialog(QDialog):
         self._hotkey_value = "Ctrl+O"
         self._writing_hotkey_value = "Ctrl+I"
         self._selection_translate_hotkey_value = "Ctrl+Shift+T"
+        self._ocr_screenshot_hotkey_value = "Ctrl+Shift+O"
 
         # 监听按钮点击
         self._hotkey_btn.clicked.connect(lambda: self._start_hotkey_capture("translator"))
@@ -621,8 +636,27 @@ class SettingsDialog(QDialog):
         self._selection_translate_hotkey_btn.clicked.connect(
             lambda: self._start_hotkey_capture("selection_translate")
         )
+        self._ocr_screenshot_hotkey_btn.clicked.connect(
+            lambda: self._start_hotkey_capture("ocr_screenshot")
+        )
 
         scroll_layout.addWidget(self._hotkey_group)
+
+        # 截图识字（OCR）语种
+        self._ocr_group = QGroupBox("截图识字 (OCR)")
+        ocr_layout = QVBoxLayout(self._ocr_group)
+        ocr_layout.setSpacing(8)
+        ocr_layout.setContentsMargins(12, 20, 12, 12)
+        ocr_row = QHBoxLayout()
+        self._ocr_lang_label = QLabel("识别语种:")
+        self._ocr_lang_combo = QComboBox()
+        self._ocr_lang_combo.setMinimumHeight(32)
+        for _key, _label in OCR_LANGUAGE_OPTIONS:
+            self._ocr_lang_combo.addItem(_label, _key)
+        ocr_row.addWidget(self._ocr_lang_label)
+        ocr_row.addWidget(self._ocr_lang_combo, 1)
+        ocr_layout.addLayout(ocr_row)
+        scroll_layout.addWidget(self._ocr_group)
 
         # 写作设置组
         self._writing_group = QGroupBox("写作设置")
@@ -1061,7 +1095,7 @@ class SettingsDialog(QDialog):
             }}
 
             /* 快捷键按钮 */
-            QPushButton#hotkeyBtn, QPushButton#hotkeyBtn2, QPushButton#hotkeyBtn3 {{
+            QPushButton#hotkeyBtn, QPushButton#hotkeyBtn2, QPushButton#hotkeyBtn3, QPushButton#hotkeyBtn4 {{
                 background-color: {t['input_bg']};
                 border: 1px solid {t['input_border']};
                 border-radius: 6px;
@@ -1070,10 +1104,10 @@ class SettingsDialog(QDialog):
                 font-size: 13px;
                 text-align: left;
             }}
-            QPushButton#hotkeyBtn:hover, QPushButton#hotkeyBtn2:hover, QPushButton#hotkeyBtn3:hover {{
+            QPushButton#hotkeyBtn:hover, QPushButton#hotkeyBtn2:hover, QPushButton#hotkeyBtn3:hover, QPushButton#hotkeyBtn4:hover {{
                 border-color: {t['accent_color']};
             }}
-            QPushButton#hotkeyBtn:focus, QPushButton#hotkeyBtn2:focus, QPushButton#hotkeyBtn3:focus {{
+            QPushButton#hotkeyBtn:focus, QPushButton#hotkeyBtn2:focus, QPushButton#hotkeyBtn3:focus, QPushButton#hotkeyBtn4:focus {{
                 border-color: {t['accent_color']};
                 background-color: {t['accent_color']};
                 color: #ffffff;
@@ -1165,10 +1199,14 @@ class SettingsDialog(QDialog):
             self._writing_hotkey_btn.setText("请按下快捷键...")
             self._writing_hotkey_btn.setFocus()
             self._capturing_hotkey_target = "writing"
-        else:
+        elif target == "selection_translate":
             self._selection_translate_hotkey_btn.setText("请按下快捷键...")
             self._selection_translate_hotkey_btn.setFocus()
             self._capturing_hotkey_target = "selection_translate"
+        else:
+            self._ocr_screenshot_hotkey_btn.setText("请按下快捷键...")
+            self._ocr_screenshot_hotkey_btn.setFocus()
+            self._capturing_hotkey_target = "ocr_screenshot"
 
     def keyPressEvent(self, event):
         """键盘事件处理 - 用于捕获快捷键"""
@@ -1204,9 +1242,12 @@ class SettingsDialog(QDialog):
             elif self._capturing_hotkey_target == "writing":
                 self._writing_hotkey_value = hotkey
                 self._writing_hotkey_btn.setText(hotkey)
-            else:
+            elif self._capturing_hotkey_target == "selection_translate":
                 self._selection_translate_hotkey_value = hotkey
                 self._selection_translate_hotkey_btn.setText(hotkey)
+            else:
+                self._ocr_screenshot_hotkey_value = hotkey
+                self._ocr_screenshot_hotkey_btn.setText(hotkey)
 
             self._capturing_hotkey_target = None
             return
@@ -1346,6 +1387,14 @@ class SettingsDialog(QDialog):
         self._selection_translate_hotkey_value = sel_tr_hotkey
         self._selection_translate_hotkey_btn.setText(sel_tr_hotkey)
 
+        ocr_hotkey = self._config.get('hotkey.ocr_screenshot', 'Ctrl+Shift+O')
+        self._ocr_screenshot_hotkey_value = ocr_hotkey
+        self._ocr_screenshot_hotkey_btn.setText(ocr_hotkey)
+
+        ocr_lang = self._config.get('ocr.language', 'ch_en')
+        _ocr_idx = self._ocr_lang_combo.findData(ocr_lang)
+        self._ocr_lang_combo.setCurrentIndex(0 if _ocr_idx < 0 else _ocr_idx)
+
         # 保留原文选项
         keep_original = self._config.get('writing.keep_original', False)
         self._keep_original_check.setChecked(keep_original)
@@ -1411,6 +1460,7 @@ class SettingsDialog(QDialog):
         self._disable_wheel_event(self._lang_detect_combo)
         self._disable_wheel_event(self._font_size_spin)
         self._disable_wheel_event(self._newline_hotkey_combo)
+        self._disable_wheel_event(self._ocr_lang_combo)
         self._disable_wheel_event(self._tts_provider_combo)
         self._disable_wheel_event(self._tts_edge_voice_combo)
         self._disable_wheel_event(self._tts_rate_slider)
@@ -1578,6 +1628,14 @@ class SettingsDialog(QDialog):
             old_sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+Shift+T')
             new_sel_tr_hotkey = self._selection_translate_hotkey_value
 
+            old_ocr_hotkey = self._config.get('hotkey.ocr_screenshot', 'Ctrl+Shift+O')
+            new_ocr_hotkey = self._ocr_screenshot_hotkey_value
+
+            old_ocr_lang = self._config.get('ocr.language', 'ch_en')
+            new_ocr_lang = self._ocr_lang_combo.currentData()
+            if new_ocr_lang is None:
+                new_ocr_lang = 'ch_en'
+
             # API 配置
             self._config.set('translator.base_url', self._api_url_edit.text().strip())
             self._config.set('translator.api_key', self._api_key_edit.text().strip())
@@ -1599,6 +1657,8 @@ class SettingsDialog(QDialog):
             self._config.set('hotkey.translator_window', new_hotkey)
             self._config.set('hotkey.writing', new_writing_hotkey)
             self._config.set('hotkey.selection_translate', new_sel_tr_hotkey)
+            self._config.set('hotkey.ocr_screenshot', new_ocr_hotkey)
+            self._config.set('ocr.language', str(new_ocr_lang))
 
             # 写作设置
             keep_original = self._keep_original_check.isChecked()
@@ -1639,6 +1699,13 @@ class SettingsDialog(QDialog):
 
             self._config.save()
 
+            if old_ocr_lang != new_ocr_lang:
+                try:
+                    invalidate_ocr_engine()
+                    log_info(f"OCR 识别语种已更新: {old_ocr_lang} -> {new_ocr_lang}")
+                except Exception as e:
+                    log_error(f"刷新 OCR 引擎缓存失败: {e}")
+
             # 重新初始化翻译器和写作服务（API 配置可能已变更）
             try:
                 reinitialize_translator()
@@ -1672,6 +1739,13 @@ class SettingsDialog(QDialog):
                     log_info(f"选中翻译热键已更新: {old_sel_tr_hotkey} -> {new_sel_tr_hotkey}")
                 except Exception as e:
                     log_error(f"更新选中翻译热键失败: {e}")
+
+            if old_ocr_hotkey != new_ocr_hotkey:
+                try:
+                    hotkey_manager.update_hotkey(new_ocr_hotkey, "ocr_screenshot")
+                    log_info(f"截图识字热键已更新: {old_ocr_hotkey} -> {new_ocr_hotkey}")
+                except Exception as e:
+                    log_error(f"更新截图识字热键失败: {e}")
 
             # 更新所有窗口主题
             self._update_all_themes()
@@ -1977,6 +2051,8 @@ class MainController(QObject):
         self._translator_window = get_translator_window()
         self._current_worker = None
         self._last_text: str = ""
+        self._snip_overlay: Optional[SnipOverlay] = None
+        self._ocr_worker: Optional[RapidOcrWorkerThread] = None
 
         # 系统恢复检测 - 用于在休眠/锁屏恢复后重新注册热键
         self._last_health_check_time = time.time()
@@ -2005,7 +2081,9 @@ class MainController(QObject):
         self._tray_icon.exit_requested.connect(self._on_exit_requested)
         self._tray_icon.translator_window_requested.connect(self._on_translator_window_requested)
         self._tray_icon.history_requested.connect(self._on_history_requested)
+        self._tray_icon.vocabulary_requested.connect(self._on_vocabulary_requested)
         self._tray_icon.help_requested.connect(self._on_help_requested)
+        self._tray_icon.ocr_screenshot_requested.connect(self._begin_screenshot_ocr)
         # 翻译窗口关闭信号
         self._translator_window.closed.connect(self._on_translator_window_closed)
         self._translator_window.settings_requested.connect(self._on_settings_requested)
@@ -2014,7 +2092,11 @@ class MainController(QObject):
         self._hotkey_manager.selection_translate_hotkey_triggered.connect(
             self._on_selection_translate_hotkey_triggered
         )
+        self._hotkey_manager.ocr_screenshot_hotkey_triggered.connect(
+            self._begin_screenshot_ocr
+        )
         self.writing_completed.connect(self._on_writing_completed)
+        get_vocabulary_window().open_in_translator.connect(self._on_vocabulary_open_in_translator)
 
     def _check_config(self):
         """检查配置（API 配置已硬编码，无需检查）"""
@@ -2046,7 +2128,11 @@ class MainController(QObject):
         success3 = self._hotkey_manager.register_hotkey(sel_tr_hotkey, name="selection_translate")
         log_debug(f"注册选中翻译热键: {sel_tr_hotkey}, 结果: {success3}")
 
-        if not success1 or not success2 or not success3:
+        ocr_hotkey = self._config.get('hotkey.ocr_screenshot', 'Ctrl+Shift+O')
+        success4 = self._hotkey_manager.register_hotkey(ocr_hotkey, name="ocr_screenshot")
+        log_debug(f"注册截图识字热键: {ocr_hotkey}, 结果: {success4}")
+
+        if not success1 or not success2 or not success3 or not success4:
             self._hotkey_retry_count += 1
             if self._hotkey_retry_count <= 3:
                 delay = self._hotkey_retry_count * 5000  # 5s, 10s, 15s
@@ -2144,6 +2230,11 @@ class MainController(QObject):
         except Exception as e:
             log_error(f"预创建设置对话框失败: {e}")
 
+        try:
+            windows_to_prerender.append(get_vocabulary_window())
+        except Exception as e:
+            log_error(f"预创建单词收藏窗口失败: {e}")
+
         # 离屏预渲染：移至屏幕外 → show → 处理渲染事件 → hide
         offscreen_pos = QPoint(-9999, -9999)
         for widget in windows_to_prerender:
@@ -2216,6 +2307,19 @@ class MainController(QObject):
         # 停止系统健康检查
         self._system_health_timer.stop()
 
+        if self._snip_overlay is not None:
+            try:
+                self._snip_overlay.close()
+            except Exception:
+                pass
+            self._snip_overlay = None
+        if self._ocr_worker is not None:
+            try:
+                self._ocr_worker.wait(3000)
+            except Exception:
+                pass
+            self._ocr_worker = None
+
         self._selection_detector.stop()
         self._selection_detector.cleanup()
 
@@ -2245,6 +2349,14 @@ class MainController(QObject):
             from src.utils.history import get_history
         try:
             get_history().flush()
+        except Exception:
+            pass
+        try:
+            from .utils.vocabulary import get_vocabulary
+        except ImportError:
+            from src.utils.vocabulary import get_vocabulary
+        try:
+            get_vocabulary().flush()
         except Exception:
             pass
 
@@ -2302,7 +2414,7 @@ class MainController(QObject):
             except Exception:
                 pass
 
-            current_selection = self._text_capture.get_selected_text_nextai_style()
+            current_selection = self._text_capture.get_selected_text_compat()
             text = (current_selection.text or "").strip()
             log_debug(
                 f"选中翻译: method={current_selection.method}, "
@@ -2350,6 +2462,133 @@ class MainController(QObject):
         except Exception as e:
             log_error(f"选中翻译热键处理失败: {e}")
 
+    def _begin_screenshot_ocr(self):
+        """框选屏幕区域，本地 OCR 后填入翻译窗口并自动翻译。"""
+        log_info("[OCR] 热键/托盘：开始截图识字（将打开选区）")
+        if self._ocr_worker is not None and self._ocr_worker.isRunning():
+            log_info("[OCR] 跳过：上一轮 OCR 工作线程仍在运行")
+            self._tray_icon.show_message(APP_NAME, "上一次截图识字尚未完成，请稍候再试", "warning")
+            return
+        if self._snip_overlay is not None:
+            log_debug("[OCR] 关闭已存在的选区遮罩后重新打开")
+            self._discard_snip_overlay()
+        try:
+            self._translate_button.hide()
+        except Exception:
+            pass
+        self._snip_overlay = SnipOverlay(screen_at_cursor())
+        self._snip_overlay.destroyed.connect(self._on_snip_overlay_destroyed)
+        self._snip_overlay.region_captured.connect(self._on_ocr_snip_captured)
+        self._snip_overlay.cancelled.connect(self._on_ocr_snip_cancelled)
+        self._snip_overlay.show()
+
+    def _discard_snip_overlay(self):
+        """关闭当前选区遮罩，避免「引用未清空」导致热键再次按下无任何反应。"""
+        o = self._snip_overlay
+        self._snip_overlay = None
+        if o is None:
+            return
+        try:
+            o.close()
+            o.deleteLater()
+        except Exception as e:
+            log_debug(f"关闭截图识字遮罩: {e}")
+
+    def _on_snip_overlay_destroyed(self):
+        w = self.sender()
+        if w is self._snip_overlay:
+            self._snip_overlay = None
+
+    def _on_ocr_snip_cancelled(self):
+        self._snip_overlay = None
+        log_info("[OCR] 用户取消选区")
+
+    def _on_ocr_snip_captured(self, pixmap):
+        self._snip_overlay = None
+        try:
+            dpr = float(pixmap.devicePixelRatio())
+        except Exception:
+            dpr = 1.0
+        log_info(
+            f"[OCR] 已框选: pixmap={pixmap.width()}×{pixmap.height()}px, "
+            f"devicePixelRatio={dpr}, isNull={pixmap.isNull()}"
+        )
+        if self._ocr_worker is not None and self._ocr_worker.isRunning():
+            log_warning("[OCR] 框选完成但工作线程仍忙，丢弃本次截图")
+            self._tray_icon.show_message(APP_NAME, "上一次截图识字尚未完成，请稍候再试", "warning")
+            return
+        try:
+            try:
+                from .utils.rapidocr_engine import qpixmap_to_rgb_numpy
+            except ImportError:
+                from src.utils.rapidocr_engine import qpixmap_to_rgb_numpy
+            rgb = qpixmap_to_rgb_numpy(pixmap)
+            sh = getattr(rgb, "shape", None)
+            log_info(f"[OCR] 已转 RGB ndarray, shape={sh}, dtype={getattr(rgb, 'dtype', '?')}")
+        except Exception as e:
+            log_error(f"截图转图像失败: {e}")
+            mouse_pos = (QCursor.pos().x(), QCursor.pos().y())
+            try:
+                self._translator_window.show_at_mouse_ocr_placeholder(mouse_pos, failed=True)
+            except Exception as ex:
+                log_exception(f"截图识字窗口提示失败: {ex}")
+                self._tray_icon.show_message(APP_NAME, f"截图处理失败: {e}", "error")
+            return
+        mouse_pos = (QCursor.pos().x(), QCursor.pos().y())
+        try:
+            self._translator_window.show_at_mouse_ocr_placeholder(mouse_pos, failed=False)
+        except Exception as ex:
+            log_exception(f"打开截图识字等待窗口失败: {ex}")
+            self._tray_icon.show_message(APP_NAME, f"无法打开翻译窗口: {ex}", "error")
+            return
+        self._ocr_worker = RapidOcrWorkerThread(rgb)
+        self._ocr_worker.finished.connect(self._on_ocr_worker_thread_finished)
+        self._ocr_worker.finished_ok.connect(
+            self._on_ocr_finished_ok, Qt.ConnectionType.QueuedConnection
+        )
+        self._ocr_worker.failed.connect(
+            self._on_ocr_failed, Qt.ConnectionType.QueuedConnection
+        )
+        log_info(f"[OCR] 启动 RapidOCR 工作线程 instance={id(self._ocr_worker)}")
+        self._ocr_worker.start()
+
+    def _on_ocr_worker_thread_finished(self):
+        t = self.sender()
+        if t is self._ocr_worker:
+            log_debug(f"[OCR] QThread.finished，已清空 _ocr_worker（thread id={id(t)})")
+            self._ocr_worker = None
+
+    def _on_ocr_finished_ok(self, text: str):
+        raw = text or ""
+        preview = (raw.strip()[:80] + "…") if len(raw.strip()) > 80 else raw.strip()
+        log_info(
+            f"[OCR] finished_ok: 原始长度={len(raw)}, 去空白后长度={len(raw.strip())}, "
+            f"预览={preview!r}"
+        )
+        self._ocr_worker = None
+        try:
+            if not raw.strip():
+                log_info("[OCR] 识别结果为空，原文框提示重试")
+                self._translator_window.apply_ocr_failed()
+                return
+            self._last_text = raw.strip()
+            log_info(
+                f"[OCR] 填入识别结果并翻译，翻译窗口可见={self._translator_window.isVisible()}"
+            )
+            self._translator_window.apply_ocr_result_and_translate(raw)
+        except Exception as e:
+            log_exception(f"截图识字结果展示失败: {e}")
+            self._tray_icon.show_message(APP_NAME, f"无法打开翻译窗口: {e}", "error")
+
+    def _on_ocr_failed(self, message: str):
+        log_error(f"[OCR] failed 回调: {message}")
+        self._ocr_worker = None
+        try:
+            self._translator_window.apply_ocr_failed()
+        except Exception as e:
+            log_error(f"截图识字错误提示失败: {e}")
+            self._tray_icon.show_message(APP_NAME, f"截图识字失败: {message}", "error")
+
     def _on_writing_hotkey_triggered(self):
         """写作热键触发时执行写作功能
 
@@ -2388,7 +2627,7 @@ class MainController(QObject):
                 pass
             log_info(f"[写作诊断] 触发前剪贴板: {self._format_text_snapshot(saved_clipboard)}")
 
-            current_selection = self._text_capture.get_selected_text_nextai_style()
+            current_selection = self._text_capture.get_selected_text_compat()
             selected_text = current_selection.text or ""
             log_info(f"[写作诊断] 选区查询: method={current_selection.method}, "
                      f"error={current_selection.error}, "
@@ -2896,6 +3135,15 @@ class MainController(QObject):
         # 显示历史窗口
         history_window = get_history_window()
         history_window.show_window()
+
+    def _on_vocabulary_requested(self):
+        self._translate_button.hide()
+        get_vocabulary_window().show_window()
+
+    def _on_vocabulary_open_in_translator(self, word: str, translation: str):
+        self._translate_button.hide()
+        self._translator_window.load_translation_pair(word, translation)
+        self._translator_window.show_window()
 
     def _on_help_requested(self):
         """显示帮助窗口"""

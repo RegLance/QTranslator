@@ -277,7 +277,7 @@ class TextCapture:
             with self._pending_lock:
                 self._pending_requests.pop(request_id, None)
 
-    def get_selected_text_nextai_style(self) -> SelectionInfo:
+    def get_selected_text_compat(self) -> SelectionInfo:
         """获取当前真实选区。
 
         优先使用非剪贴板方法：
@@ -295,7 +295,7 @@ class TextCapture:
         if text:
             return SelectionInfo(text=text, method="uia")
 
-        return SelectionInfo(text="", method="nextai-style")
+        return SelectionInfo(text="", method="compat-empty")
 
     def _get_selected_text_by_scintilla(self) -> str:
         """通过 Scintilla 消息读取当前选区。"""

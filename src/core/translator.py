@@ -156,7 +156,8 @@ class Translator:
 
     def _stream_request(self, system_prompt: str, user_prompt: str,
                         on_chunk: Callable[[str], None] = None,
-                        error_prefix: str = "操作失败") -> Generator[str, None, str]:
+                        error_prefix: str = "操作失败",
+                        temperature: float = 0) -> Generator[str, None, str]:
         """通用流式请求（客户端检查、流式迭代、错误分类）
         
         Yields:
@@ -176,7 +177,7 @@ class Translator:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0,
+                temperature=temperature,
                 stream=True,
             )
 
@@ -375,6 +376,36 @@ Examples:
         text = text.strip()
         system_prompt, user_prompt = self._build_summarize_prompt(text, target_language)
         yield from self._stream_request(system_prompt, user_prompt, on_chunk, "总结失败")
+
+    def _build_big_bang_prompt(self, article_prompt: str, words_blob: str) -> tuple:
+        """词汇短文：用给定收藏词写短文（与内置 big-bang 提示一致）。"""
+        system_prompt = (
+            f"You are a professional writer and you will write {article_prompt} based on the given words"
+        )
+        command_prompt = (
+            f"Write {article_prompt} of no more than 160 words. "
+            "The article must contain the words in the following text. "
+            "The more words you use, the better"
+        )
+        user_prompt = (
+            f"Only reply the result and nothing else. {command_prompt}:\n\n{words_blob.strip()}"
+        )
+        return system_prompt, user_prompt
+
+    def big_bang_stream(
+        self,
+        article_prompt: str,
+        words_csv: str,
+        on_chunk: Callable[[str], None] = None,
+    ) -> Generator[str, None, None]:
+        """流式生成短文；words_csv 为逗号连接的词条（原文）。"""
+        if not words_csv or not str(words_csv).strip():
+            yield ""
+            return
+        system_prompt, user_prompt = self._build_big_bang_prompt(article_prompt, words_csv)
+        yield from self._stream_request(
+            system_prompt, user_prompt, on_chunk, "词汇短文生成失败", temperature=0.85
+        )
 
     def translate_stream(self, text: str, target_language: str = None,
                          on_chunk: Callable[[str], None] = None,

@@ -8,6 +8,7 @@
 - 翻译窗口热键
 - 写作热键
 - 选中内容翻译热键（Excel/PPT 等场景）
+- 截图识字热键（框选屏幕区域 OCR）
 """
 import sys
 import threading
@@ -94,6 +95,7 @@ class HotkeyManager(QObject):
     hotkey_triggered = pyqtSignal()  # 翻译窗口热键触发信号
     writing_hotkey_triggered = pyqtSignal()  # 写作热键触发信号
     selection_translate_hotkey_triggered = pyqtSignal()  # 选中内容翻译热键（主动取词）
+    ocr_screenshot_hotkey_triggered = pyqtSignal()  # 截图 OCR
 
     def __init__(self):
         super().__init__()
@@ -181,6 +183,8 @@ class HotkeyManager(QObject):
                     pynput_hotkeys[pynput_format] = self._on_writing_hotkey_pressed
                 elif name == "selection_translate":
                     pynput_hotkeys[pynput_format] = self._on_selection_translate_pressed
+                elif name == "ocr_screenshot":
+                    pynput_hotkeys[pynput_format] = self._on_ocr_screenshot_pressed
                 else:
                     pynput_hotkeys[pynput_format] = self._on_hotkey_pressed
 
@@ -239,6 +243,16 @@ class HotkeyManager(QObject):
         except Exception:
             pass
 
+    def _on_ocr_screenshot_pressed(self):
+        log_debug("截图识字热键触发")
+        try:
+            QMetaObject.invokeMethod(
+                self, "_emit_ocr_screenshot_hotkey_triggered",
+                Qt.ConnectionType.QueuedConnection
+            )
+        except Exception:
+            pass
+
     @pyqtSlot()
     def _emit_hotkey_triggered(self):
         """主线程执行：发射翻译窗口热键信号"""
@@ -252,6 +266,10 @@ class HotkeyManager(QObject):
     @pyqtSlot()
     def _emit_selection_translate_hotkey_triggered(self):
         self.selection_translate_hotkey_triggered.emit()
+
+    @pyqtSlot()
+    def _emit_ocr_screenshot_hotkey_triggered(self):
+        self.ocr_screenshot_hotkey_triggered.emit()
 
     def update_hotkey(self, new_hotkey: str, name: str = "translator_window") -> bool:
         """更新热键

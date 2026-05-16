@@ -29,7 +29,9 @@ class TrayIcon(QObject):
     exit_requested = pyqtSignal()
     translator_window_requested = pyqtSignal()  # 双击显示翻译窗口
     history_requested = pyqtSignal()  # 显示历史窗口
+    vocabulary_requested = pyqtSignal()  # 单词收藏窗口
     help_requested = pyqtSignal()  # 显示帮助窗口
+    ocr_screenshot_requested = pyqtSignal()  # 截图识字
 
     def __init__(self):
         super().__init__()
@@ -159,10 +161,18 @@ class TrayIcon(QObject):
         self._translator_action.triggered.connect(self._on_translator_window)
         self._menu.addAction(self._translator_action)
 
+        self._ocr_action = QAction("截图识字", self._menu)
+        self._ocr_action.triggered.connect(self._on_ocr_screenshot)
+        self._menu.addAction(self._ocr_action)
+
         # 历史记录选项
         self._history_action = QAction("翻译历史", self._menu)
         self._history_action.triggered.connect(self._on_history)
         self._menu.addAction(self._history_action)
+
+        self._vocabulary_action = QAction("单词收藏", self._menu)
+        self._vocabulary_action.triggered.connect(self._on_vocabulary)
+        self._menu.addAction(self._vocabulary_action)
 
         # 设置选项
         self._settings_action = QAction("设置...", self._menu)
@@ -342,12 +352,24 @@ class TrayIcon(QObject):
         except Exception as e:
             self._log_error("_on_translator_window", e)
 
+    def _on_ocr_screenshot(self):
+        try:
+            self.ocr_screenshot_requested.emit()
+        except Exception as e:
+            self._log_error("_on_ocr_screenshot", e)
+
     def _on_history(self):
         """打开历史窗口"""
         try:
             self.history_requested.emit()
         except Exception as e:
             self._log_error("_on_history", e)
+
+    def _on_vocabulary(self):
+        try:
+            self.vocabulary_requested.emit()
+        except Exception as e:
+            self._log_error("_on_vocabulary", e)
 
     def _on_help(self):
         """打开帮助窗口"""

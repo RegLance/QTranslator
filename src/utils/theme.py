@@ -448,19 +448,34 @@ def get_scrollbar_style(theme: Dict[str, Any]) -> str:
 
 
 def get_splitter_style(theme: Dict[str, Any]) -> str:
-    """获取分隔器样式"""
+    """分隔条样式：与翻译窗口一致的主题色；纵向手柄（左右分栏）与横向手柄（上下分栏）分别指定宽高。"""
+    c = theme["splitter_color"]
+    h = theme["splitter_hover"]
+    a = theme["button_active"]
     return f"""
-        QSplitter::handle {{
-            background-color: {theme['splitter_color']};
+        QSplitter::handle:horizontal {{
+            background-color: {c};
+            width: 6px;
+            margin: 0px 2px;
+            border-radius: 3px;
+        }}
+        QSplitter::handle:horizontal:hover {{
+            background-color: {h};
+        }}
+        QSplitter::handle:horizontal:pressed {{
+            background-color: {a};
+        }}
+        QSplitter::handle:vertical {{
+            background-color: {c};
             height: 6px;
             margin: 2px 0px;
             border-radius: 3px;
         }}
-        QSplitter::handle:hover {{
-            background-color: {theme['splitter_hover']};
+        QSplitter::handle:vertical:hover {{
+            background-color: {h};
         }}
-        QSplitter::handle:pressed {{
-            background-color: {theme['button_active']};
+        QSplitter::handle:vertical:pressed {{
+            background-color: {a};
         }}
     """
 

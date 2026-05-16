@@ -26,7 +26,7 @@
 Designed for researchers, multilingual teams, and power users who want **IDE‑grade ergonomics** without leaving the active window.
 
 <div align="center">
-  <video src="assets/demo.mp4" controls muted autoplay loop playsinline width="800"></video>
+  <img src="assets/Animation.gif" alt="QTranslator demo" width="800" />
 </div>
 
 ## Table of contents

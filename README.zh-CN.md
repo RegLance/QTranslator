@@ -26,7 +26,7 @@
 面向需要 **「不打断心流」** 的多语言读者、研发与内容工作者 —— 少一次 Alt+Tab，多一分专注。
 
 <div align="center">
-  <video src="assets/demo.mp4" controls muted autoplay loop playsinline width="800"></video>
+  <img src="assets/Animation.gif" alt="演示" width="800" />
 </div>
 
 ## 目录

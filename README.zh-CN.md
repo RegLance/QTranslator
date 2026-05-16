@@ -26,8 +26,10 @@
 面向需要 **「不打断心流」** 的多语言读者、研发与内容工作者 —— 少一次 Alt+Tab，多一分专注。
 
 <p align="center">
-  <img src="Animation.gif" alt="QTranslator 演示" width="800" />
+  <img src="assets/Animation.gif" alt="QTranslator 演示" width="800" />
 </p>
+
+## 目录
 
 - [产品亮点](#产品亮点)
 - [功能特性](#功能特性)

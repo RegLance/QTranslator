@@ -26,8 +26,10 @@
 Designed for researchers, multilingual teams, and power users who want **IDE‑grade ergonomics** without leaving the active window.
 
 <p align="center">
-  <img src="Animation.gif" alt="QTranslator demo" width="800" />
+  <img src="assets/Animation.gif" alt="QTranslator demo" width="800" />
 </p>
+
+## Table of contents
 
 - [Highlights](#highlights)
 - [Features](#features)

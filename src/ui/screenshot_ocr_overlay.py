@@ -1,8 +1,8 @@
 """全屏框选截图 + OCR（RapidOCR）。"""
 from __future__ import annotations
 
-from PyQt6.QtCore import QRect, Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QImage, QPainter, QPen, QPixmap, QScreen
+from PyQt6.QtCore import QPoint, QRect, Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QPainter, QPen, QPixmap, QScreen
 from PyQt6.QtWidgets import QWidget
 
 try:
@@ -23,35 +23,123 @@ def virtual_desktop_rect() -> QRect:
 
 
 def _composite_desktop_pixmap(union: QRect) -> QPixmap:
-    """拼接所有屏幕的 grab，与 union 对齐（多显示器 OCR 选区）。
-
-    使用虚拟桌面「逻辑像素」尺寸的底图，将每块 grab 缩放绘制到对应 screen.geometry()
-    矩形内。避免旧实现用整桌 max(devicePixelRatio) 画布 + 左上角对齐粘贴各屏 pixmap 时，
-    与各屏实际 DPR/像素尺寸不一致而出现大段未覆盖黑区（常见于左右/上下排列且缩放比例不同）。
-    """
+    """拼接所有屏幕的 grab，与 union 对齐（多显示器 OCR 选区）。"""
     screens = QGuiApplication.screens()
     if not screens or union.isNull():
+        log_info("[OCR][截图拼接] 中止: 无屏幕或 union 为空")
         return QPixmap()
-    w, h = union.width(), union.height()
-    if w <= 0 or h <= 0:
+
+    max_dpr = max(float(s.devicePixelRatio() or 1.0) for s in screens)
+    w_px = int(union.width() * max_dpr)
+    h_px = int(union.height() * max_dpr)
+
+    log_info(
+        "[OCR][截图拼接] 虚拟桌面 union=(%d,%d) 逻辑=%d×%d | max_dpr=%.4f | "
+        "画布像素=%d×%d | 屏幕数=%d"
+        % (
+            union.x(),
+            union.y(),
+            union.width(),
+            union.height(),
+            max_dpr,
+            w_px,
+            h_px,
+            len(screens),
+        )
+    )
+
+    for i, s in enumerate(screens):
+        sg = s.geometry()
+        ag = s.availableGeometry()
+        ps = (s.physicalDotsPerInchX(), s.physicalDotsPerInchY())
+        log_info(
+            "[OCR][截图拼接] 屏[%d] name=%r primary=%s | geometry=(%d,%d) %d×%d | "
+            "available=(%d,%d) %d×%d | dpr=%s | dpi=(%.1f,%.1f)"
+            % (
+                i,
+                s.name(),
+                s == QGuiApplication.primaryScreen(),
+                sg.x(),
+                sg.y(),
+                sg.width(),
+                sg.height(),
+                ag.x(),
+                ag.y(),
+                ag.width(),
+                ag.height(),
+                s.devicePixelRatio(),
+                ps[0],
+                ps[1],
+            )
+        )
+
+    if w_px <= 0 or h_px <= 0:
+        log_info("[OCR][截图拼接] 中止: 画布尺寸无效")
         return QPixmap()
-    image = QImage(w, h, QImage.Format.Format_RGB32)
-    image.fill(QColor(0, 0, 0))
-    painter = QPainter(image)
-    for screen in screens:
+
+    result = QPixmap(w_px, h_px)
+    result.setDevicePixelRatio(max_dpr)
+    result.fill(QColor(0, 0, 0))
+    painter = QPainter(result)
+    for i, screen in enumerate(screens):
         sg = screen.geometry()
         ox = sg.x() - union.x()
         oy = sg.y() - union.y()
         chunk = screen.grabWindow(0)
+        cw = chunk.width()
+        ch = chunk.height()
+        cdpr = float(chunk.devicePixelRatio() or 1.0)
+        # 说明：用户肉眼「整屏往左移、右侧一条黑」常见对应关系是——在 union 坐标里，
+        # 该屏区块「应该」占满 [ox, ox+geo.w)，但若 grab 在 QPainter 里绘出的逻辑宽度
+        # < geo.w，则右侧会露合成底色的黑（不是遮罩画上去的）。
+        exp_right = ox + sg.width()
+        content_right = ox + cw  # PyQt6：一般为设备无关像素宽，与 drawPixmap 铺宽一致
+        h_gap_px = sg.width() - cw
+        log_info(
+            "[OCR][截图拼接] 粘贴[%d] offset_union=(%d,%d) | grab null=%s | "
+            "chunk=%d×%d chunk_dpr=%.4f | geo 逻辑=%d×%d | "
+            "差(chunk−geo)=(%d,%d) | 水平: 内容右沿=%d geo右沿=%d 未铺满宽(+=右侧黑)=%d"
+            % (
+                i,
+                ox,
+                oy,
+                chunk.isNull(),
+                cw,
+                ch,
+                cdpr,
+                sg.width(),
+                sg.height(),
+                cw - sg.width(),
+                ch - sg.height(),
+                content_right,
+                exp_right,
+                h_gap_px,
+            )
+        )
         if chunk.isNull():
-            log_debug(f"截图识字: grabWindow 为空, screen={screen.name()!r}")
             continue
-        dst = QRect(ox, oy, sg.width(), sg.height())
-        src = QRect(0, 0, chunk.width(), chunk.height())
-        # PyQt6：三参数重载要求目标矩形与源矩形同为 QRect 或同为 QRectF，不可混用。
-        painter.drawPixmap(dst, chunk, src)
+        painter.drawPixmap(QPoint(ox, oy), chunk)
     painter.end()
-    return QPixmap.fromImage(image)
+
+    rdpr = float(result.devicePixelRatio() or 1.0)
+    log_w = result.width()
+    log_h = result.height()
+    approx_logical_w = log_w / rdpr if rdpr else float(log_w)
+    approx_logical_h = log_h / rdpr if rdpr else float(log_h)
+    log_info(
+        "[OCR][截图拼接] 合成完成 result 报告 size=%d×%d dpr=%.4f | "
+        "约逻辑尺寸 %.1f×%.1f (size/dpr) | 期望逻辑 %d×%d"
+        % (
+            log_w,
+            log_h,
+            rdpr,
+            approx_logical_w,
+            approx_logical_h,
+            union.width(),
+            union.height(),
+        )
+    )
+    return result
 
 
 class SnipOverlay(QWidget):
@@ -74,13 +162,43 @@ class SnipOverlay(QWidget):
 
         geo = virtual_desktop_rect()
         self.setGeometry(geo)
+        log_info(
+            "[OCR][截图叠加] SnipOverlay geometry=(%d,%d) %d×%d | widget_dpr=%.4f"
+            % (geo.x(), geo.y(), geo.width(), geo.height(), self.devicePixelRatio())
+        )
         self._pixmap = _composite_desktop_pixmap(geo)
+        pm = self._pixmap
+        log_info(
+            "[OCR][截图叠加] 底图 QPixmap 报告 size=%d×%d dpr=%.4f | "
+            "控件逻辑=%d×%d | 若二者逻辑尺寸不一致 paint 会错位/露黑"
+            % (
+                pm.width(),
+                pm.height(),
+                float(pm.devicePixelRatio() or 1.0),
+                self.width(),
+                self.height(),
+            )
+        )
         self._start = None
         self._current = None
         self._selecting = False
+        self._paint_logged = False
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        if not self._paint_logged:
+            self._paint_logged = True
+            pm = self._pixmap
+            pm_dpr = float(pm.devicePixelRatio() or 1.0)
+            wg_dpr = float(self.devicePixelRatio() or 1.0)
+            dr = self.rect()
+            sr = pm.rect()
+            log_info(
+                "[OCR][截图叠加] paintEvent(仅记一次): dest(self.rect)=%dx%d 逻辑 | "
+                "src(pm.rect)=%dx%d | pm.dpr=%.4f widget.dpr=%.4f | "
+                "drawPixmap 会把 src 缩放到 dest；若两边逻辑尺寸不一致会像「平移/漏边」"
+                % (dr.width(), dr.height(), sr.width(), sr.height(), pm_dpr, wg_dpr)
+            )
         painter.drawPixmap(self.rect(), self._pixmap, self._pixmap.rect())
         shade = QColor(0, 0, 0, 110)
         if self._selecting and self._start and self._current:
@@ -98,6 +216,16 @@ class SnipOverlay(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        wh = self.windowHandle()
+        if wh is not None:
+            scr = wh.screen()
+            log_info(
+                "[OCR][截图叠加] show 后 window dpr=%.4f | window.screen=%r"
+                % (
+                    wh.devicePixelRatio(),
+                    scr.name() if scr is not None else None,
+                )
+            )
         self.activateWindow()
         self.raise_()
         self.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
@@ -132,11 +260,11 @@ class SnipOverlay(QWidget):
         super().keyPressEvent(event)
 
     def _emit_crop(self, rect: QRect):
-        dpr = float(self._pixmap.devicePixelRatio() or 1.0)
-        dx = int(round(rect.x() * dpr))
-        dy = int(round(rect.y() * dpr))
-        dw = max(1, int(round(rect.width() * dpr)))
-        dh = max(1, int(round(rect.height() * dpr)))
+        dpr = self._pixmap.devicePixelRatio()
+        dx = int(rect.x() * dpr)
+        dy = int(rect.y() * dpr)
+        dw = max(1, int(rect.width() * dpr))
+        dh = max(1, int(rect.height() * dpr))
         cropped = self._pixmap.copy(dx, dy, dw, dh)
         if cropped.isNull():
             log_debug("截图识字: 裁剪结果为空")

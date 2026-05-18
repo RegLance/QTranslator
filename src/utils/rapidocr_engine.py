@@ -44,29 +44,41 @@ _DICT_BY_LANG = {
 _ocr_engine: Optional[Any] = None
 _ocr_engine_lang: Optional[str] = None
 _ocr_lock = threading.Lock()
-_update_rec_params_patched = False
+_rapidocr_update_parameters_patched = False
 
 
 def _apply_rapidocr_rec_keys_patch() -> None:
-    """rapidocr_onnxruntime 仅将 rec_model_path→model_path，不会处理 rec_keys_path→keys_path，此处补齐。"""
-    global _update_rec_params_patched
-    if _update_rec_params_patched:
+    """把 RapidOCR 识别配置里的 rec_keys_path 转为 Rec.keys_path。
+
+    rapidocr_onnxruntime 1.2.x 在 ``UpdateParameters.update_rec_params`` 里处理参数；
+    1.3+ 改为通用的 ``update_params``，不再有 ``update_rec_params``，
+    在另一台电脑安装较新版本时会触发 ``has no attribute update_rec_params``。
+
+    此处统一 monkey-patch ``UpdateParameters.__call__``，对返回的 config['Rec'] 做一次归一化，
+    同时兼容 1.2 与 1.3+。
+    """
+    global _rapidocr_update_parameters_patched
+    if _rapidocr_update_parameters_patched:
         return
     from rapidocr_onnxruntime.utils import UpdateParameters
 
-    _orig = UpdateParameters.update_rec_params
+    if not callable(getattr(UpdateParameters, "__call__", None)):
+        log_debug("[OCR] UpdateParameters 无可包装 __call__，跳过 rec_keys_path 补丁")
+        _rapidocr_update_parameters_patched = True
+        return
 
-    def _wrapped(self, config, rec_dict):
-        rd = rec_dict
-        if rd:
-            rd = dict(rd)
-            keys_file = rd.pop("rec_keys_path", None)
-            if keys_file:
-                rd["keys_path"] = keys_file
-        return _orig(self, config, rd)
+    _orig_call = UpdateParameters.__call__
 
-    UpdateParameters.update_rec_params = _wrapped  # type: ignore[method-assign]
-    _update_rec_params_patched = True
+    def _call_wrapped(self, config, **kwargs):
+        new_cfg = _orig_call(self, config, **kwargs)
+        rec = new_cfg.get("Rec")
+        if isinstance(rec, dict) and "rec_keys_path" in rec:
+            rk = rec.pop("rec_keys_path")
+            rec.setdefault("keys_path", rk)
+        return new_cfg
+
+    UpdateParameters.__call__ = _call_wrapped  # type: ignore[method-assign]
+    _rapidocr_update_parameters_patched = True
 
 
 def _bundle_root() -> Path:

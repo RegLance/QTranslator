@@ -1,6 +1,7 @@
 """全局热键管理模块 - 用于注册和管理全局快捷键
 
-使用 pynput.keyboard.GlobalHotKeys 实现全局热键监听。
+使用 pynput.keyboard.Listener 与精确组合匹配（ExactGlobalHotKeys）实现全局热键监听。
+相比 pynput 自带的 GlobalHotKeys，可避免「Ctrl+Shift+O」误触发「Ctrl+O」这类子集误触。
 相比 keyboard 库，pynput 提供干净的 stop/start 生命周期，
 锁屏恢复时只需重建 listener，无需 hack 内部状态。
 
@@ -10,7 +11,6 @@
 - 选中内容翻译热键（Excel/PPT 等场景）
 - 截图识字热键（框选屏幕区域 OCR）
 """
-import sys
 import threading
 from typing import Optional, Callable, Dict
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, Qt, QMetaObject
@@ -86,6 +86,64 @@ def _convert_hotkey_format(hotkey: str) -> Optional[str]:
     except Exception as e:
         log_error(f"热键格式转换失败: '{hotkey}' -> {e}")
         return None
+
+
+class ExactGlobalHotKeys:
+    """与 pynput.GlobalHotKeys 相同接口，但组合键必须完全一致才触发。
+
+    标准 GlobalHotKeys 在判断 Ctrl+O 时只检查 Ctrl 与 O 是否按下，会忽略仍按着的 Shift，
+    因此按 Ctrl+Shift+O 时会同时满足 Ctrl+O 与 Ctrl+Shift+O。本类用「当前按下键集合」与
+    注册组合做全集合相等比较，避免多修饰键误触。
+    """
+
+    def __init__(self, hotkeys: Dict[str, Callable], *args, **kwargs):
+        from pynput.keyboard import HotKey, Listener
+
+        self._pressed = set()
+        self._combos = []
+        self._listener = Listener(
+            on_press=self._on_press,
+            on_release=self._on_release,
+            *args,
+            **kwargs,
+        )
+        for key_str, callback in hotkeys.items():
+            parsed = HotKey.parse(key_str)
+            self._combos.append(
+                (
+                    frozenset(self._listener.canonical(k) for k in parsed),
+                    callback,
+                )
+            )
+
+    def start(self):
+        self._listener.start()
+
+    def stop(self):
+        try:
+            self._listener.stop()
+        except Exception:
+            pass
+        self._pressed.clear()
+
+    def _on_press(self, key, injected):
+        if injected:
+            return
+        ck = self._listener.canonical(key)
+        if ck in self._pressed:
+            return
+        self._pressed.add(ck)
+        current = frozenset(self._pressed)
+        for combo_keys, callback in self._combos:
+            if current == combo_keys:
+                callback()
+                return
+
+    def _on_release(self, key, injected):
+        if injected:
+            return
+        ck = self._listener.canonical(key)
+        self._pressed.discard(ck)
 
 
 class HotkeyManager(QObject):
@@ -193,9 +251,8 @@ class HotkeyManager(QObject):
                 log_error("所有热键格式转换失败，无法注册")
                 return False
 
-            # 创建并启动新的 listener
-            from pynput.keyboard import GlobalHotKeys
-            self._listener = GlobalHotKeys(pynput_hotkeys)
+            # 创建并启动新的 listener（本模块 ExactGlobalHotKeys，精确组合匹配）
+            self._listener = ExactGlobalHotKeys(pynput_hotkeys)
             self._listener.start()
             self._is_listening = True
 

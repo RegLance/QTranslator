@@ -270,7 +270,7 @@ try:
     from .ui.vocabulary_window import get_vocabulary_window
     from .ui.help_window import get_help_window
     from .ui.splash_screen import show_splash_screen
-    from .ui.screenshot_ocr_overlay import SnipOverlay, RapidOcrWorkerThread, screen_at_cursor
+    from .ui.screenshot_ocr_overlay import SnipOverlay, RapidOcrWorkerThread
     from .utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
     from .utils.history import add_translation_history
     from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
@@ -299,7 +299,7 @@ except ImportError:
     from src.ui.vocabulary_window import get_vocabulary_window
     from src.ui.help_window import get_help_window
     from src.ui.splash_screen import show_splash_screen
-    from src.ui.screenshot_ocr_overlay import SnipOverlay, RapidOcrWorkerThread, screen_at_cursor
+    from src.ui.screenshot_ocr_overlay import SnipOverlay, RapidOcrWorkerThread
     from src.utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
     from src.utils.history import add_translation_history
     from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
@@ -2476,7 +2476,7 @@ class MainController(QObject):
             self._translate_button.hide()
         except Exception:
             pass
-        self._snip_overlay = SnipOverlay(screen_at_cursor())
+        self._snip_overlay = SnipOverlay()
         self._snip_overlay.destroyed.connect(self._on_snip_overlay_destroyed)
         self._snip_overlay.region_captured.connect(self._on_ocr_snip_captured)
         self._snip_overlay.cancelled.connect(self._on_ocr_snip_cancelled)

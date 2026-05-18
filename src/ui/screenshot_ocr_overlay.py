@@ -1,8 +1,8 @@
 """全屏框选截图 + OCR（RapidOCR）。"""
 from __future__ import annotations
 
-from PyQt6.QtCore import QPoint, QRect, Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QPainter, QPen, QPixmap, QScreen
+from PyQt6.QtCore import QRect, Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QImage, QPainter, QPen, QPixmap, QScreen
 from PyQt6.QtWidgets import QWidget
 
 try:
@@ -23,27 +23,35 @@ def virtual_desktop_rect() -> QRect:
 
 
 def _composite_desktop_pixmap(union: QRect) -> QPixmap:
-    """拼接所有屏幕的 grab，与 union 对齐（多显示器 OCR 选区）。"""
+    """拼接所有屏幕的 grab，与 union 对齐（多显示器 OCR 选区）。
+
+    使用虚拟桌面「逻辑像素」尺寸的底图，将每块 grab 缩放绘制到对应 screen.geometry()
+    矩形内。避免旧实现用整桌 max(devicePixelRatio) 画布 + 左上角对齐粘贴各屏 pixmap 时，
+    与各屏实际 DPR/像素尺寸不一致而出现大段未覆盖黑区（常见于左右/上下排列且缩放比例不同）。
+    """
     screens = QGuiApplication.screens()
     if not screens or union.isNull():
         return QPixmap()
-    max_dpr = max(s.devicePixelRatio() for s in screens)
-    w_px = int(union.width() * max_dpr)
-    h_px = int(union.height() * max_dpr)
-    if w_px <= 0 or h_px <= 0:
+    w, h = union.width(), union.height()
+    if w <= 0 or h <= 0:
         return QPixmap()
-    result = QPixmap(w_px, h_px)
-    result.setDevicePixelRatio(max_dpr)
-    result.fill(QColor(0, 0, 0))
-    painter = QPainter(result)
+    image = QImage(w, h, QImage.Format.Format_RGB32)
+    image.fill(QColor(0, 0, 0))
+    painter = QPainter(image)
     for screen in screens:
         sg = screen.geometry()
         ox = sg.x() - union.x()
         oy = sg.y() - union.y()
         chunk = screen.grabWindow(0)
-        painter.drawPixmap(QPoint(ox, oy), chunk)
+        if chunk.isNull():
+            log_debug(f"截图识字: grabWindow 为空, screen={screen.name()!r}")
+            continue
+        dst = QRect(ox, oy, sg.width(), sg.height())
+        src = QRect(0, 0, chunk.width(), chunk.height())
+        # PyQt6：三参数重载要求目标矩形与源矩形同为 QRect 或同为 QRectF，不可混用。
+        painter.drawPixmap(dst, chunk, src)
     painter.end()
-    return result
+    return QPixmap.fromImage(image)
 
 
 class SnipOverlay(QWidget):
@@ -124,11 +132,11 @@ class SnipOverlay(QWidget):
         super().keyPressEvent(event)
 
     def _emit_crop(self, rect: QRect):
-        dpr = self._pixmap.devicePixelRatio()
-        dx = int(rect.x() * dpr)
-        dy = int(rect.y() * dpr)
-        dw = max(1, int(rect.width() * dpr))
-        dh = max(1, int(rect.height() * dpr))
+        dpr = float(self._pixmap.devicePixelRatio() or 1.0)
+        dx = int(round(rect.x() * dpr))
+        dy = int(round(rect.y() * dpr))
+        dw = max(1, int(round(rect.width() * dpr)))
+        dh = max(1, int(round(rect.height() * dpr)))
         cropped = self._pixmap.copy(dx, dy, dw, dh)
         if cropped.isNull():
             log_debug("截图识字: 裁剪结果为空")

@@ -1,20 +1,251 @@
 """帮助窗口模块 - 显示软件功能和使用说明"""
+from pathlib import Path
 from typing import Optional
+import subprocess
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFrame, QGraphicsDropShadowEffect, QScrollArea,
-    QTextEdit
+    QDialog,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl
-from PyQt6.QtGui import QFont, QColor, QCursor, QDesktopServices, QMouseEvent
-import subprocess
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPoint, QPointF, QRect
+from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QPixmap, QPainter, QIcon, QPainterPath
 
 try:
     from ..config import get_config, APP_NAME, APP_VERSION, BUILD_TIME, CONTACT_URL, UPDATE_INFO_TEXT
     from ..utils.theme import get_theme, get_scrollbar_style
+    from ..core.text_capture import _get_base_path
 except ImportError:
     from src.config import get_config, APP_NAME, APP_VERSION, BUILD_TIME, CONTACT_URL, UPDATE_INFO_TEXT
     from src.utils.theme import get_theme, get_scrollbar_style
+    from src.core.text_capture import _get_base_path
+
+
+def _project_root() -> Path:
+    """开发与 PyInstaller 打包环境下资源根目录（与 OCR 等资源一致）。"""
+    return _get_base_path()
+
+
+def _donate_qr_image_paths() -> list[Path]:
+    """`assets/Donate` 下的二维码图片，文件名排序后至多取 2 张。"""
+    folder = _project_root() / "assets" / "Donate"
+    if not folder.is_dir():
+        return []
+    exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+    paths = sorted(
+        [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in exts],
+        key=lambda p: p.name.lower(),
+    )
+    return paths[:2]
+
+
+def _heart_icon(size: int = 18) -> QIcon:
+    """红色矢量爱心图标（24×24 Material 心形路径，带边距避免抗锯齿裁切）。"""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#e74c3c"))
+    pad = max(1.0, size * 0.06)
+    sc = (size - 2 * pad) / 24.0
+    painter.translate(pad, pad)
+    painter.scale(sc, sc)
+
+    def pt(x: float, y: float) -> QPointF:
+        return QPointF(x, y)
+
+    path = QPainterPath()
+    path.moveTo(pt(12, 21.35))
+    path.lineTo(pt(10.55, 20.03))
+    path.cubicTo(pt(5.4, 15.36), pt(2, 12.28), pt(2, 8.5))
+    path.cubicTo(pt(2, 5.42), pt(4.42, 3), pt(7.5, 3))
+    path.cubicTo(pt(9.24, 3), pt(10.91, 3.81), pt(12, 5.09))
+    path.cubicTo(pt(13.09, 3.81), pt(14.76, 3), pt(16.5, 3))
+    path.cubicTo(pt(19.58, 3), pt(22, 5.42), pt(22, 8.5))
+    path.cubicTo(pt(22, 12.28), pt(18.6, 15.36), pt(13.45, 20.04))
+    path.lineTo(pt(12, 21.35))
+    path.closeSubpath()
+    painter.drawPath(path)
+    painter.end()
+    return QIcon(pm)
+
+
+class _DonateQrDialog(QDialog):
+    """无边框打赏二维码弹窗（不透明底避免半透明边缘）。"""
+
+    _qr_max_side = 430
+
+    def __init__(self, parent: Optional[QWidget], theme: dict, paths: list[Path]):
+        super().__init__(parent)
+        self.setObjectName("donateDlg")
+        self._theme = theme
+        self._paths = paths
+        self._is_dragging = False
+        self._drag_start: Optional[QPoint] = None
+        self._win_start: Optional[QPoint] = None
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog
+        )
+        self.setModal(True)
+        self.setStyleSheet(f"""
+            QDialog#donateDlg {{
+                background-color: {theme['bg_color']};
+                border: 1px solid {theme['border_color']};
+                border-radius: 10px;
+            }}
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 10, 16, 16)
+        root.setSpacing(14)
+
+        self._title_bar = QFrame()
+        self._title_bar.setFixedHeight(28)
+        self._title_bar.setStyleSheet("background: transparent;")
+        tb_l = QHBoxLayout(self._title_bar)
+        tb_l.setContentsMargins(0, 0, 0, 0)
+
+        title_lbl = QLabel("感谢支持 · 扫码赞赏")
+        title_lbl.setStyleSheet(
+            f"color: {theme['text_primary']}; font-size: 15px; font-weight: bold;"
+            " background: transparent;"
+        )
+        close_x = QPushButton("×")
+        close_x.setObjectName("donateCloseBtn")
+        close_x.setFixedSize(22, 22)
+        close_x.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        close_x.setStyleSheet(f"""
+            QPushButton#donateCloseBtn {{
+                background-color: transparent;
+                color: {theme['text_muted']};
+                border: none;
+                border-radius: 11px;
+                font-size: 14px;
+                font-weight: bold;
+                padding-bottom: 1px;
+            }}
+            QPushButton#donateCloseBtn:hover {{
+                background-color: {theme['close_hover']};
+                color: #ffffff;
+            }}
+        """)
+        close_x.clicked.connect(self.accept)
+
+        tb_l.addWidget(title_lbl)
+        tb_l.addStretch()
+        tb_l.addWidget(close_x)
+        root.addWidget(self._title_bar)
+
+        max_side = self._qr_max_side
+        if not paths:
+            tip = QLabel(
+                "未找到二维码图片。\n请将图片放入程序目录下的 assets\\Donate 文件夹\n（支持 png、jpg、webp 等）。"
+            )
+            tip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            tip.setWordWrap(True)
+            tip.setStyleSheet(
+                f"color: {theme['text_secondary']}; font-size: 13px; background: transparent;"
+            )
+            root.addWidget(tip)
+        else:
+            row = QHBoxLayout()
+            row.setSpacing(24)
+            for img_path in paths:
+                lbl = QLabel()
+                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                pix = QPixmap(str(img_path))
+                if pix.isNull():
+                    err = QLabel(f"无法加载：{img_path.name}")
+                    err.setStyleSheet(
+                        f"color: {theme.get('error_color', '#d32f2f')}; font-size: 12px;"
+                        " background: transparent;"
+                    )
+                    err.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    row.addWidget(err, 1)
+                    continue
+                pix = pix.scaled(
+                    max_side,
+                    max_side,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                lbl.setPixmap(pix)
+                cap = QLabel(img_path.stem)
+                cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                cap.setStyleSheet(
+                    f"color: {theme['text_muted']}; font-size: 12px; background: transparent;"
+                )
+                cell = QVBoxLayout()
+                cell.setSpacing(8)
+                cell.addWidget(lbl)
+                cell.addWidget(cap)
+                w = QWidget()
+                w.setLayout(cell)
+                row.addWidget(w, 1)
+            wrap = QWidget()
+            wrap.setLayout(row)
+            root.addWidget(wrap)
+
+        close_btn = QPushButton("关闭")
+        close_btn.setFixedHeight(36)
+        close_btn.setMinimumWidth(100)
+        close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {theme['button_bg']};
+                color: {theme['text_primary']};
+                border: none;
+                border-radius: 6px;
+                font-size: 14px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['button_hover']};
+            }}
+        """)
+        close_btn.clicked.connect(self.accept)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        btn_row.addStretch()
+        root.addLayout(btn_row)
+
+        min_w = 560 if paths else 400
+        self.setMinimumWidth(min_w)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        p = self.parent()
+        if p is not None and p.isVisible():
+            self.adjustSize()
+            fg = p.frameGeometry()
+            x = fg.center().x() - self.width() // 2
+            y = fg.center().y() - self.height() // 2
+            self.move(x, y)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton and self._title_bar is not None:
+            gp = self._title_bar.mapToGlobal(QPoint(0, 0))
+            hit = QRect(gp, self._title_bar.size())
+            if hit.contains(event.globalPosition().toPoint()):
+                self._is_dragging = True
+                self._drag_start = event.globalPosition().toPoint()
+                self._win_start = self.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self._is_dragging and self._drag_start is not None and self._win_start is not None:
+            delta = event.globalPosition().toPoint() - self._drag_start
+            self.move(self._win_start + delta)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._is_dragging = False
+            self._drag_start = None
+            self._win_start = None
+        super().mouseReleaseEvent(event)
 
 
 class HelpWindow(QWidget):
@@ -318,6 +549,33 @@ class HelpWindow(QWidget):
 
         btn_layout.addWidget(self._contact_btn)
 
+        # Buy me a coffee（打赏二维码）
+        self._donate_btn = QPushButton("Buy me a coffee")
+        self._donate_btn.setObjectName("donateBtn")
+        self._donate_btn.setIcon(_heart_icon(18))
+        self._donate_btn.setIconSize(QSize(18, 18))
+        self._donate_btn.setFixedHeight(36)
+        self._donate_btn.setMinimumWidth(168)
+        self._donate_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._donate_btn.setStyleSheet(f"""
+            QPushButton#donateBtn {{
+                background-color: transparent;
+                color: {theme['text_secondary']};
+                border: 1px solid {theme['border_color']};
+                border-radius: 6px;
+                font-size: 14px;
+                padding-left: 10px;
+                padding-right: 12px;
+            }}
+            QPushButton#donateBtn:hover {{
+                background-color: {theme['button_bg']};
+                color: {theme['text_primary']};
+            }}
+        """)
+        self._donate_btn.clicked.connect(self._open_donate_dialog)
+
+        btn_layout.addWidget(self._donate_btn)
+
         btn_layout.addStretch()
 
         self._ok_btn = QPushButton("知道了")
@@ -387,6 +645,13 @@ class HelpWindow(QWidget):
             self._is_dragging = False
             self._drag_start_pos = None
         super().mouseReleaseEvent(event)
+
+    def _open_donate_dialog(self):
+        """弹出对话框展示 assets/Donate 中的二维码（至多两张）。"""
+        theme = get_theme(self._theme_style)
+        paths = _donate_qr_image_paths()
+        dlg = _DonateQrDialog(self, theme, paths)
+        dlg.exec()
 
     def closeEvent(self, event):
         """关闭事件"""
@@ -512,6 +777,24 @@ class HelpWindow(QWidget):
                 font-size: 14px;
             }}
             QPushButton#contactBtn:hover {{
+                background-color: {theme['button_bg']};
+                color: {theme['text_primary']};
+            }}
+        """)
+
+        # 更新打赏按钮
+        self._donate_btn.setIcon(_heart_icon(18))
+        self._donate_btn.setStyleSheet(f"""
+            QPushButton#donateBtn {{
+                background-color: transparent;
+                color: {theme['text_secondary']};
+                border: 1px solid {theme['border_color']};
+                border-radius: 6px;
+                font-size: 14px;
+                padding-left: 10px;
+                padding-right: 12px;
+            }}
+            QPushButton#donateBtn:hover {{
                 background-color: {theme['button_bg']};
                 color: {theme['text_primary']};
             }}

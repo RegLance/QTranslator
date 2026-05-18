@@ -12,20 +12,20 @@ from datetime import datetime
 # 应用名称
 APP_NAME = "QTranslator"
 APP_ID = "com.qtranslator.app"
-APP_VERSION = "2.0.0"
+APP_VERSION = "1.0.0"
 BUILD_TIME = "2026-04-24"
 
 # 应用 URLs 和服务配置
-CONTACT_URL = "xxxx"
-UPDATE_CHECK_URL = "http://109.105.111.17:5005/update"
-UPDATE_GITHUB_URL = "https://github.com/SQAG/QTranslator/releases"
+CONTACT_URL = "https://github.com/RegLance/QTranslator/tree/main"
+UPDATE_CHECK_URL = ""
+UPDATE_GITHUB_URL = ""
 
 # 更新检查配置
 TOOL_NAME = "QTranslator"
 CHECK_TIMEOUT = 5  # 请求超时时间（秒），避免网络不通时长时间等待
 
 # 版本显示配置
-VERSION_AUTHOR = "Reg"  # 翻译窗口版本标签中的作者信息
+VERSION_AUTHOR = "RegLance"  # 翻译窗口版本标签中的作者信息
 UPDATE_INFO_TEXT = "暂无更新信息"  # 帮助窗口更新信息占位文本
 
 

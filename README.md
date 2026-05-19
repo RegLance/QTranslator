@@ -59,7 +59,7 @@ Designed for researchers, multilingual teams, and power users who want **IDE‑g
 - **Polish** — Improve wording; optional **phrase‑level diff** (soft red removals / soft green additions)
 - **Summarize** — Structured summaries for long inputs
 - **Selection writing** — Translate and replace in place; optional **keep original** below the result
-- **Screenshot OCR** — Region capture (default **`Ctrl+Shift+O`** or tray); local OCR fills the translator (**Chinese / English**, plus **Japanese / Korean / Cyrillic** where extra ONNX models are configured)
+- **Screenshot OCR** — Region capture (default **`Ctrl+Shift+O`** or tray); local OCR fills the translator (**Chinese / English**, plus **Korean** where an extra ONNX model is configured)
 
 ### Learning & vocabulary
 

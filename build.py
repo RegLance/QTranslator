@@ -18,6 +18,30 @@ NODE_RUNTIME_DIR = NATIVE_DIR / "node" / "win-x64"
 VERSION = "2.0.0"
 APP_NAME = "QTranslator"
 
+# 打包时不包含的 OCR 资源（已移除日文/俄文识别支持）
+_OCR_BUNDLE_EXCLUDE_NAMES = frozenset({
+    "japan_PP-OCRv3_rec_infer.onnx",
+    "cyrillic_PP-OCRv3_rec_infer.onnx",
+    "japan_dict.txt",
+    "cyrillic_dict.txt",
+})
+
+
+def collect_assets_datas(assets_dir: Path | None = None) -> list[tuple[str, str]]:
+    """生成 PyInstaller datas 条目，排除日文/俄文 OCR 模型与字典。"""
+    root = assets_dir or (PROJECT_ROOT / "assets")
+    if not root.is_dir():
+        return []
+    entries: list[tuple[str, str]] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.name in _OCR_BUNDLE_EXCLUDE_NAMES:
+            continue
+        rel = path.relative_to(root)
+        dest = "assets" if rel.parent == Path(".") else f"assets/{rel.parent.as_posix()}"
+        entries.append((str(path).replace("\\", "/"), dest))
+    return entries
+
+
 def get_spec_content() -> str:
     """生成 .spec 文件内容"""
 
@@ -148,9 +172,12 @@ def create_spec_file():
     # 绝对路径 - 使用正斜杠
     icon_path = str(PROJECT_ROOT / "assets" / "icon.ico").replace("\\", "/")
     native_path = str(PROJECT_ROOT / "native").replace("\\", "/")
-    assets_path = str(PROJECT_ROOT / "assets").replace("\\", "/")
-    # 嵌入式 Node.js 运行时路径
-    node_runtime_path = str(NODE_RUNTIME_DIR).replace("\\", "/")
+    assets_datas_lines = "\n".join(
+        f'        ("{src}", "{dest}"),'
+        for src, dest in collect_assets_datas()
+    )
+    if not assets_datas_lines:
+        assets_datas_lines = "        # (无 assets 文件)"
 
     content = rf'''# -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec file for QTranslator
@@ -175,6 +202,10 @@ except Exception:
 
 _ocr_hidden = collect_submodules("rapidocr_onnxruntime")
 
+_assets_datas = [
+{assets_datas_lines}
+]
+
 _binaries = []
 for _hook in ("onnxruntime", "cv2"):
     try:
@@ -188,8 +219,8 @@ a = Analysis(
     binaries=_binaries,
     datas=[
         ("{native_path}", "native"),
-        ("{assets_path}", "assets"),
     ]
+    + _assets_datas
     + _ocr_datas,
     hiddenimports=[
         "PyQt6.QtCore",

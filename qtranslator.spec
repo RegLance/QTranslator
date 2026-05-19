@@ -21,6 +21,31 @@ except Exception:
 
 _ocr_hidden = collect_submodules("rapidocr_onnxruntime")
 
+# 打包排除日文/俄文 OCR 模型与字典（与 build.collect_assets_datas 一致）
+_OCR_BUNDLE_EXCLUDE = frozenset({
+    "japan_PP-OCRv3_rec_infer.onnx",
+    "cyrillic_PP-OCRv3_rec_infer.onnx",
+    "japan_dict.txt",
+    "cyrillic_dict.txt",
+})
+
+
+def _collect_assets_datas():
+    root = project_root / "assets"
+    if not root.is_dir():
+        return []
+    out = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.name in _OCR_BUNDLE_EXCLUDE:
+            continue
+        rel = path.relative_to(root)
+        dest = "assets" if rel.parent == Path(".") else f"assets/{rel.parent.as_posix()}"
+        out.append((str(path), dest))
+    return out
+
+
+_assets_datas = _collect_assets_datas()
+
 _binaries = []
 for _hook in ("onnxruntime", "cv2"):
     try:
@@ -34,8 +59,8 @@ a = Analysis(
     binaries=_binaries,
     datas=[
         (str(project_root / "native"), "native"),
-        (str(project_root / "assets"), "assets"),
     ]
+    + _assets_datas
     + _ocr_datas,
     hiddenimports=[
         "PyQt6.QtCore",

@@ -13,33 +13,28 @@ except ImportError:
 
 # 配置键 ocr.language 取值
 OCR_LANGUAGE_CH_EN = "ch_en"
-OCR_LANGUAGE_JAPANESE = "japanese"
 OCR_LANGUAGE_KOREAN = "korean"
-OCR_LANGUAGE_CYRILLIC = "cyrillic"
 
 # 设置下拉顺序：(key, 显示名)
 OCR_LANGUAGE_OPTIONS: List[Tuple[str, str]] = [
     (OCR_LANGUAGE_CH_EN, "中文 / English（默认）"),
-    (OCR_LANGUAGE_JAPANESE, "日文"),
     (OCR_LANGUAGE_KOREAN, "韩文"),
-    (OCR_LANGUAGE_CYRILLIC, "俄文（西里尔字母）"),
 ]
 
 _DET_FILENAME = "ch_PP-OCRv3_det_infer.onnx"
 _CLS_FILENAME = "ch_ppocr_mobile_v2.0_cls_infer.onnx"
 _REC_BY_LANG = {
     OCR_LANGUAGE_CH_EN: "ch_PP-OCRv3_rec_infer.onnx",
-    OCR_LANGUAGE_JAPANESE: "japan_PP-OCRv3_rec_infer.onnx",
     OCR_LANGUAGE_KOREAN: "korean_PP-OCRv3_rec_infer.onnx",
-    OCR_LANGUAGE_CYRILLIC: "cyrillic_PP-OCRv3_rec_infer.onnx",
 }
 
-# 日文/韩文/俄文 rec 模型 ONNX 内无 character 元数据，须配套 Paddle 字典（每行一字）
+# 韩文 rec 模型 ONNX 内无 character 元数据，须配套 Paddle 字典（每行一字）
 _DICT_BY_LANG = {
-    OCR_LANGUAGE_JAPANESE: "japan_dict.txt",
     OCR_LANGUAGE_KOREAN: "korean_dict.txt",
-    OCR_LANGUAGE_CYRILLIC: "cyrillic_dict.txt",
 }
+
+# 旧版配置已移除的语种，回退为默认中英模型
+_DEPRECATED_OCR_LANG = frozenset({"japanese", "cyrillic"})
 
 _ocr_engine: Optional[Any] = None
 _ocr_engine_lang: Optional[str] = None
@@ -97,6 +92,8 @@ def dicts_dir() -> Path:
 
 def resolve_ocr_language(config_value: Optional[str]) -> str:
     v = (config_value or OCR_LANGUAGE_CH_EN).strip().lower()
+    if v in _DEPRECATED_OCR_LANG:
+        return OCR_LANGUAGE_CH_EN
     if v in _REC_BY_LANG:
         return v
     return OCR_LANGUAGE_CH_EN
@@ -144,7 +141,7 @@ def get_ocr_engine():
             if not p.is_file():
                 raise FileNotFoundError(
                     f"缺少 OCR 模型文件: {p.name}（当前语种 {lang}）。"
-                    f"若使用日文/韩文/俄文，请运行项目内 scripts/download_extra_ocr_models.py 下载对应 onnx 与字典。"
+                    f"若使用韩文，请运行项目内 scripts/download_extra_ocr_models.py 下载对应 onnx 与字典。"
                 )
 
         from rapidocr_onnxruntime import RapidOCR

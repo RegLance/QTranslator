@@ -189,7 +189,7 @@ class Config:
                 'edge_volume': '+0%',
             },
             'ocr': {
-                # 截图识字识别模型：ch_en | japanese | korean | cyrillic
+                # 截图识字识别模型：ch_en | korean
                 'language': 'ch_en',
             },
         }

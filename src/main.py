@@ -1702,6 +1702,8 @@ class SettingsDialog(QDialog):
             if old_ocr_lang != new_ocr_lang:
                 try:
                     invalidate_ocr_engine()
+                    self._ocr_engine_warmed = False
+                    QTimer.singleShot(500, self._warmup_ocr_engine_deferred)
                     log_info(f"OCR 识别语种已更新: {old_ocr_lang} -> {new_ocr_lang}")
                 except Exception as e:
                     log_error(f"刷新 OCR 引擎缓存失败: {e}")
@@ -2053,6 +2055,7 @@ class MainController(QObject):
         self._last_text: str = ""
         self._snip_overlay: Optional[SnipOverlay] = None
         self._ocr_worker: Optional[RapidOcrWorkerThread] = None
+        self._ocr_engine_warmed = False
 
         # 系统恢复检测 - 用于在休眠/锁屏恢复后重新注册热键
         self._last_health_check_time = time.time()
@@ -2072,6 +2075,24 @@ class MainController(QObject):
             ensure_tts_media_bridge()
         except Exception:
             pass
+
+        # 启动后空闲时预加载 OCR（避免首次截图识字时主线程卡顿）
+        QTimer.singleShot(2500, self._warmup_ocr_engine_deferred)
+
+    def _warmup_ocr_engine_deferred(self):
+        if self._ocr_engine_warmed:
+            return
+        try:
+            try:
+                from .utils.rapidocr_engine import warmup_ocr_engine
+            except ImportError:
+                from src.utils.rapidocr_engine import warmup_ocr_engine
+            log_info("[OCR] 空闲预加载引擎 …")
+            warmup_ocr_engine()
+            self._ocr_engine_warmed = True
+            log_info("[OCR] 引擎预加载完成")
+        except Exception as e:
+            log_debug(f"[OCR] 引擎预加载失败（首次识别时再加载）: {e}")
 
     def _connect_signals(self):
         self._selection_detector.selection_finished.connect(self._on_selection_finished)
@@ -2525,14 +2546,16 @@ class MainController(QObject):
             rgb = qpixmap_to_rgb_numpy(pixmap)
             sh = getattr(rgb, "shape", None)
             log_info(f"[OCR] 已转 RGB ndarray, shape={sh}, dtype={getattr(rgb, 'dtype', '?')}")
-            try:
+            if not self._ocr_engine_warmed:
                 try:
-                    from .utils.rapidocr_engine import warmup_ocr_engine
-                except ImportError:
-                    from src.utils.rapidocr_engine import warmup_ocr_engine
-                warmup_ocr_engine()
-            except Exception as warm_e:
-                log_debug(f"[OCR] 主线程预加载引擎: {warm_e}")
+                    try:
+                        from .utils.rapidocr_engine import warmup_ocr_engine
+                    except ImportError:
+                        from src.utils.rapidocr_engine import warmup_ocr_engine
+                    warmup_ocr_engine()
+                    self._ocr_engine_warmed = True
+                except Exception as warm_e:
+                    log_debug(f"[OCR] 框选后补加载引擎: {warm_e}")
         except Exception as e:
             log_error(f"截图转图像失败: {e}")
             mouse_pos = (QCursor.pos().x(), QCursor.pos().y())

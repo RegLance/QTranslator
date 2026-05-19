@@ -29,13 +29,25 @@ def virtual_desktop_rect() -> QRect:
     return u
 
 
-def _composite_desktop_pixmap(union: QRect) -> QPixmap:
+def _grab_all_screens() -> list[tuple[QScreen, QPixmap]]:
+    """每块屏只 grab 一次，供遮罩显示与后续合成复用。"""
+    out: list[tuple[QScreen, QPixmap]] = []
+    for screen in QGuiApplication.screens():
+        chunk = screen.grabWindow(0)
+        if not chunk.isNull():
+            out.append((screen, chunk))
+    return out
+
+
+def _composite_desktop_pixmap(
+    union: QRect,
+    grabs: list[tuple[QScreen, QPixmap]],
+) -> QPixmap:
     """在设备像素画布上拼接各屏 grab，供框选裁剪使用（不缩放，保持清晰）。"""
-    screens = QGuiApplication.screens()
-    if not screens or union.isNull():
+    if not grabs or union.isNull():
         return QPixmap()
 
-    max_dpr = max(float(s.devicePixelRatio() or 1.0) for s in screens)
+    max_dpr = max(float(s.devicePixelRatio() or 1.0) for s, _ in grabs)
     w_px = int(round(union.width() * max_dpr))
     h_px = int(round(union.height() * max_dpr))
     if w_px <= 0 or h_px <= 0:
@@ -45,14 +57,10 @@ def _composite_desktop_pixmap(union: QRect) -> QPixmap:
     image.fill(QColor(0, 0, 0).rgb())
 
     painter = QPainter(image)
-    for screen in screens:
+    for screen, chunk in grabs:
         sg = screen.geometry()
-        dpr = float(screen.devicePixelRatio() or 1.0)
         ox = int(round((sg.x() - union.x()) * max_dpr))
         oy = int(round((sg.y() - union.y()) * max_dpr))
-        chunk = screen.grabWindow(0)
-        if chunk.isNull():
-            continue
         dst = QRect(ox, oy, chunk.width(), chunk.height())
         src = QRect(0, 0, chunk.width(), chunk.height())
         painter.drawPixmap(dst, chunk, src)
@@ -130,34 +138,30 @@ class SnipOverlay(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._union = virtual_desktop_rect()
-        self._composite = _composite_desktop_pixmap(self._union)
+        self._grabs = _grab_all_screens()
+        self._composite: QPixmap | None = None
         self._panels: list[_SnipScreenPanel] = []
         self._selecting = False
         self._start_global: QPoint | None = None
         self._current_global: QPoint | None = None
         self._focus_panel: _SnipScreenPanel | None = None
 
-        screens = QGuiApplication.screens()
         log_info(
-            "[OCR][截图叠加] 多屏模式 union=(%d,%d) %d×%d | 屏数=%d | 合成图=%d×%d dpr=%.4f"
+            "[OCR][截图叠加] 多屏模式 union=(%d,%d) %d×%d | 屏数=%d（合成图延迟到框选完成）"
             % (
                 self._union.x(),
                 self._union.y(),
                 self._union.width(),
                 self._union.height(),
-                len(screens),
-                self._composite.width(),
-                self._composite.height(),
-                float(self._composite.devicePixelRatio() or 1.0),
+                len(self._grabs),
             )
         )
-        for i, screen in enumerate(screens):
+        for i, (screen, chunk) in enumerate(self._grabs):
             sg = screen.geometry()
-            chunk = screen.grabWindow(0)
             clw, clh = _pixmap_logical_size(chunk)
             gap_y = ""
             if i > 0:
-                prev = screens[i - 1].geometry()
+                prev = self._grabs[i - 1][0].geometry()
                 gap = sg.y() - (prev.y() + prev.height())
                 if gap != 0:
                     gap_y = f" | 与上一屏垂直间隙={gap}px"
@@ -245,16 +249,22 @@ class SnipOverlay(QWidget):
         for panel in self._panels:
             panel.update()
 
+    def _ensure_composite(self) -> QPixmap:
+        if self._composite is None:
+            self._composite = _composite_desktop_pixmap(self._union, self._grabs)
+        return self._composite
+
     def _emit_crop(self, rect_global: QRect):
         """rect_global 为相对虚拟桌面 union 左上角的逻辑坐标。"""
+        composite = self._ensure_composite()
         lx = rect_global.x() - self._union.x()
         ly = rect_global.y() - self._union.y()
-        dpr = float(self._composite.devicePixelRatio() or 1.0)
+        dpr = float(composite.devicePixelRatio() or 1.0)
         dx = int(round(lx * dpr))
         dy = int(round(ly * dpr))
         dw = max(1, int(round(rect_global.width() * dpr)))
         dh = max(1, int(round(rect_global.height() * dpr)))
-        pw, ph = self._composite.width(), self._composite.height()
+        pw, ph = composite.width(), composite.height()
         if dx < 0:
             dw += dx
             dx = 0
@@ -267,7 +277,7 @@ class SnipOverlay(QWidget):
             return
         dw = min(dw, pw - dx)
         dh = min(dh, ph - dy)
-        cropped = self._composite.copy(dx, dy, dw, dh)
+        cropped = composite.copy(dx, dy, dw, dh)
         if cropped.isNull():
             log_debug("截图识字: 裁剪结果为空")
             self.cancelled.emit()

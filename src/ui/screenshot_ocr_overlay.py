@@ -1,8 +1,8 @@
 """全屏框选截图 + OCR（RapidOCR）。"""
 from __future__ import annotations
 
-from PyQt6.QtCore import QPoint, QRect, Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QPainter, QPen, QPixmap, QScreen
+from PyQt6.QtCore import QRect, Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QImage, QPainter, QPen, QPixmap, QScreen
 from PyQt6.QtWidgets import QWidget
 
 try:
@@ -23,29 +23,21 @@ def virtual_desktop_rect() -> QRect:
 
 
 def _composite_desktop_pixmap(union: QRect) -> QPixmap:
-    """拼接所有屏幕的 grab，与 union 对齐（多显示器 OCR 选区）。"""
+    """拼接所有屏幕的 grab，与 union 对齐（多显示器 OCR 选区）。
+
+    Windows 在 125% / 混用缩放时，旧写法「max(devicePixelRatio) 合成 + drawPixmap(QPoint)」
+    易与各屏 grab 的坐标系不一致，表现为整屏水平偏移、一侧露黑。此处改为固定「虚拟桌面逻辑
+    像素」QImage 底图，并把每块 grab 缩放到该屏 geometry() 对应矩形（PyQt6 须 dst/src 同为 QRect）。
+    """
     screens = QGuiApplication.screens()
     if not screens or union.isNull():
         log_info("[OCR][截图拼接] 中止: 无屏幕或 union 为空")
         return QPixmap()
 
-    max_dpr = max(float(s.devicePixelRatio() or 1.0) for s in screens)
-    w_px = int(union.width() * max_dpr)
-    h_px = int(union.height() * max_dpr)
-
+    w, h = union.width(), union.height()
     log_info(
-        "[OCR][截图拼接] 虚拟桌面 union=(%d,%d) 逻辑=%d×%d | max_dpr=%.4f | "
-        "画布像素=%d×%d | 屏幕数=%d"
-        % (
-            union.x(),
-            union.y(),
-            union.width(),
-            union.height(),
-            max_dpr,
-            w_px,
-            h_px,
-            len(screens),
-        )
+        "[OCR][截图拼接] 虚拟桌面 union=(%d,%d) 逻辑=%d×%d | 模式=QImage逻辑画布+按屏缩放 | 屏幕数=%d"
+        % (union.x(), union.y(), w, h, len(screens))
     )
 
     for i, s in enumerate(screens):
@@ -73,14 +65,13 @@ def _composite_desktop_pixmap(union: QRect) -> QPixmap:
             )
         )
 
-    if w_px <= 0 or h_px <= 0:
-        log_info("[OCR][截图拼接] 中止: 画布尺寸无效")
+    if w <= 0 or h <= 0:
+        log_info("[OCR][截图拼接] 中止: union 尺寸无效")
         return QPixmap()
 
-    result = QPixmap(w_px, h_px)
-    result.setDevicePixelRatio(max_dpr)
-    result.fill(QColor(0, 0, 0))
-    painter = QPainter(result)
+    image = QImage(w, h, QImage.Format.Format_RGB32)
+    image.fill(QColor(0, 0, 0))
+    painter = QPainter(image)
     for i, screen in enumerate(screens):
         sg = screen.geometry()
         ox = sg.x() - union.x()
@@ -89,54 +80,27 @@ def _composite_desktop_pixmap(union: QRect) -> QPixmap:
         cw = chunk.width()
         ch = chunk.height()
         cdpr = float(chunk.devicePixelRatio() or 1.0)
-        # 说明：用户肉眼「整屏往左移、右侧一条黑」常见对应关系是——在 union 坐标里，
-        # 该屏区块「应该」占满 [ox, ox+geo.w)，但若 grab 在 QPainter 里绘出的逻辑宽度
-        # < geo.w，则右侧会露合成底色的黑（不是遮罩画上去的）。
-        exp_right = ox + sg.width()
-        content_right = ox + cw  # PyQt6：一般为设备无关像素宽，与 drawPixmap 铺宽一致
-        h_gap_px = sg.width() - cw
+        dst = QRect(ox, oy, sg.width(), sg.height())
+        src = QRect(0, 0, cw, ch)
         log_info(
-            "[OCR][截图拼接] 粘贴[%d] offset_union=(%d,%d) | grab null=%s | "
-            "chunk=%d×%d chunk_dpr=%.4f | geo 逻辑=%d×%d | "
-            "差(chunk−geo)=(%d,%d) | 水平: 内容右沿=%d geo右沿=%d 未铺满宽(+=右侧黑)=%d"
-            % (
-                i,
-                ox,
-                oy,
-                chunk.isNull(),
-                cw,
-                ch,
-                cdpr,
-                sg.width(),
-                sg.height(),
-                cw - sg.width(),
-                ch - sg.height(),
-                content_right,
-                exp_right,
-                h_gap_px,
-            )
+            "[OCR][截图拼接] 缩放贴[%d] dst(逻辑)=%d,%d %d×%d | chunk=%d×%d dpr=%.4f | null=%s"
+            % (i, ox, oy, sg.width(), sg.height(), cw, ch, cdpr, chunk.isNull())
         )
         if chunk.isNull():
             continue
-        painter.drawPixmap(QPoint(ox, oy), chunk)
+        painter.drawPixmap(dst, chunk, src)
     painter.end()
 
-    rdpr = float(result.devicePixelRatio() or 1.0)
-    log_w = result.width()
-    log_h = result.height()
-    approx_logical_w = log_w / rdpr if rdpr else float(log_w)
-    approx_logical_h = log_h / rdpr if rdpr else float(log_h)
+    result = QPixmap.fromImage(image)
+    result.setDevicePixelRatio(1.0)
     log_info(
-        "[OCR][截图拼接] 合成完成 result 报告 size=%d×%d dpr=%.4f | "
-        "约逻辑尺寸 %.1f×%.1f (size/dpr) | 期望逻辑 %d×%d"
+        "[OCR][截图拼接] 合成完成 QPixmap=%d×%d dpr=%.4f | union 期望=%d×%d"
         % (
-            log_w,
-            log_h,
-            rdpr,
-            approx_logical_w,
-            approx_logical_h,
-            union.width(),
-            union.height(),
+            result.width(),
+            result.height(),
+            float(result.devicePixelRatio() or 1.0),
+            w,
+            h,
         )
     )
     return result

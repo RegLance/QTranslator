@@ -114,6 +114,14 @@ def invalidate_ocr_engine() -> None:
         _ocr_engine_lang = None
 
 
+def warmup_ocr_engine() -> None:
+    """在主线程预加载 ONNX 引擎，避免 Windows 上在 QThread 内首次加载导致原生崩溃。"""
+    try:
+        get_ocr_engine()
+    except Exception as e:
+        log_debug(f"[OCR] 主线程预加载引擎失败（首次识别时会重试）: {e}")
+
+
 def get_ocr_engine():
     """按当前配置语种懒加载 RapidOCR（检测/角度分类共用中文模型，仅替换识别模型）。"""
     global _ocr_engine, _ocr_engine_lang
@@ -168,19 +176,25 @@ def get_ocr_engine():
 
 def qpixmap_to_rgb_numpy(pixmap) -> "object":
     """QPixmap -> RGB ndarray（必须在 Qt 主线程调用；结果可安全交给工作线程）。"""
-    from PyQt6.QtGui import QImage
+    import cv2
     import numpy as np
+    from PyQt6.QtCore import QBuffer, QIODevice
 
-    img = pixmap.toImage().convertToFormat(QImage.Format.Format_RGB888)
+    img = pixmap.toImage()
+    if img.isNull():
+        raise ValueError("无效的图片")
     w, h = img.width(), img.height()
     if w <= 0 or h <= 0:
         raise ValueError("无效的图片尺寸")
-    bpl = img.bytesPerLine()
-    bits = img.constBits()
-    bits.setsize(img.sizeInBytes())
-    raw = np.frombuffer(bits, dtype=np.uint8).reshape((h, bpl))
-    row_bytes = w * 3
-    return raw[:, :row_bytes].reshape((h, w, 3)).copy()
+    # 经 PNG 缓冲转码，避免 constBits().setsize() 越界导致堆损坏（Windows 0xC0000409）
+    buf = QBuffer()
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    if not img.save(buf, "PNG"):
+        raise ValueError("QImage 编码失败")
+    bgr = cv2.imdecode(np.frombuffer(bytes(buf.data()), np.uint8), cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise ValueError("cv2 解码截图失败")
+    return np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
 
 
 def _clamp_ocr_rgb(arr: "object") -> "object":
@@ -246,8 +260,17 @@ def run_ocr_on_rgb_numpy(arr: "object") -> str:
             f"[OCR] 小图已放大: shape {clamped_shape} -> {getattr(arr, 'shape', None)}, "
             f"scale≈{up_scale:.2f}"
         )
-    log_info("[OCR] get_ocr_engine() / 开始推理 …")
+    import numpy as np
+
+    if not isinstance(arr, np.ndarray) or arr.ndim != 3 or arr.shape[2] != 3:
+        raise ValueError(f"OCR 输入须为 H×W×3 ndarray，当前 shape={getattr(arr, 'shape', None)}")
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+    arr = np.ascontiguousarray(arr)
+
+    log_info("[OCR] get_ocr_engine() …")
     engine = get_ocr_engine()
+    log_info(f"[OCR] 开始推理 shape={arr.shape} …")
     result, _ = engine(arr)
     if not result:
         log_info("[OCR] 引擎返回空结果（未检测到文本行）")

@@ -2525,6 +2525,14 @@ class MainController(QObject):
             rgb = qpixmap_to_rgb_numpy(pixmap)
             sh = getattr(rgb, "shape", None)
             log_info(f"[OCR] 已转 RGB ndarray, shape={sh}, dtype={getattr(rgb, 'dtype', '?')}")
+            try:
+                try:
+                    from .utils.rapidocr_engine import warmup_ocr_engine
+                except ImportError:
+                    from src.utils.rapidocr_engine import warmup_ocr_engine
+                warmup_ocr_engine()
+            except Exception as warm_e:
+                log_debug(f"[OCR] 主线程预加载引擎: {warm_e}")
         except Exception as e:
             log_error(f"截图转图像失败: {e}")
             mouse_pos = (QCursor.pos().x(), QCursor.pos().y())

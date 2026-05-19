@@ -1,7 +1,7 @@
 """全屏框选截图 + OCR（RapidOCR）。"""
 from __future__ import annotations
 
-from PyQt6.QtCore import QRect, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QImage, QPainter, QPen, QPixmap, QScreen
 from PyQt6.QtWidgets import QWidget
 
@@ -9,6 +9,13 @@ try:
     from ..utils.logger import log_debug, log_error, log_info
 except ImportError:
     from src.utils.logger import log_debug, log_error, log_info
+
+
+def _pixmap_logical_size(pm: QPixmap) -> tuple[int, int]:
+    dpr = float(pm.devicePixelRatio() or 1.0)
+    if dpr <= 0:
+        dpr = 1.0
+    return int(round(pm.width() / dpr)), int(round(pm.height() / dpr))
 
 
 def virtual_desktop_rect() -> QRect:
@@ -23,97 +30,46 @@ def virtual_desktop_rect() -> QRect:
 
 
 def _composite_desktop_pixmap(union: QRect) -> QPixmap:
-    """拼接所有屏幕的 grab，与 union 对齐（多显示器 OCR 选区）。
-
-    Windows 在 125% / 混用缩放时，旧写法「max(devicePixelRatio) 合成 + drawPixmap(QPoint)」
-    易与各屏 grab 的坐标系不一致，表现为整屏水平偏移、一侧露黑。此处改为固定「虚拟桌面逻辑
-    像素」QImage 底图，并把每块 grab 缩放到该屏 geometry() 对应矩形（PyQt6 须 dst/src 同为 QRect）。
-    """
+    """在设备像素画布上拼接各屏 grab，供框选裁剪使用（不缩放，保持清晰）。"""
     screens = QGuiApplication.screens()
     if not screens or union.isNull():
-        log_info("[OCR][截图拼接] 中止: 无屏幕或 union 为空")
         return QPixmap()
 
-    w, h = union.width(), union.height()
-    log_info(
-        "[OCR][截图拼接] 虚拟桌面 union=(%d,%d) 逻辑=%d×%d | 模式=QImage逻辑画布+按屏缩放 | 屏幕数=%d"
-        % (union.x(), union.y(), w, h, len(screens))
-    )
-
-    for i, s in enumerate(screens):
-        sg = s.geometry()
-        ag = s.availableGeometry()
-        ps = (s.physicalDotsPerInchX(), s.physicalDotsPerInchY())
-        log_info(
-            "[OCR][截图拼接] 屏[%d] name=%r primary=%s | geometry=(%d,%d) %d×%d | "
-            "available=(%d,%d) %d×%d | dpr=%s | dpi=(%.1f,%.1f)"
-            % (
-                i,
-                s.name(),
-                s == QGuiApplication.primaryScreen(),
-                sg.x(),
-                sg.y(),
-                sg.width(),
-                sg.height(),
-                ag.x(),
-                ag.y(),
-                ag.width(),
-                ag.height(),
-                s.devicePixelRatio(),
-                ps[0],
-                ps[1],
-            )
-        )
-
-    if w <= 0 or h <= 0:
-        log_info("[OCR][截图拼接] 中止: union 尺寸无效")
+    max_dpr = max(float(s.devicePixelRatio() or 1.0) for s in screens)
+    w_px = int(round(union.width() * max_dpr))
+    h_px = int(round(union.height() * max_dpr))
+    if w_px <= 0 or h_px <= 0:
         return QPixmap()
 
-    image = QImage(w, h, QImage.Format.Format_RGB32)
-    image.fill(QColor(0, 0, 0))
+    image = QImage(w_px, h_px, QImage.Format.Format_RGB32)
+    image.fill(QColor(0, 0, 0).rgb())
+
     painter = QPainter(image)
-    for i, screen in enumerate(screens):
+    for screen in screens:
         sg = screen.geometry()
-        ox = sg.x() - union.x()
-        oy = sg.y() - union.y()
+        dpr = float(screen.devicePixelRatio() or 1.0)
+        ox = int(round((sg.x() - union.x()) * max_dpr))
+        oy = int(round((sg.y() - union.y()) * max_dpr))
         chunk = screen.grabWindow(0)
-        cw = chunk.width()
-        ch = chunk.height()
-        cdpr = float(chunk.devicePixelRatio() or 1.0)
-        dst = QRect(ox, oy, sg.width(), sg.height())
-        src = QRect(0, 0, cw, ch)
-        log_info(
-            "[OCR][截图拼接] 缩放贴[%d] dst(逻辑)=%d,%d %d×%d | chunk=%d×%d dpr=%.4f | null=%s"
-            % (i, ox, oy, sg.width(), sg.height(), cw, ch, cdpr, chunk.isNull())
-        )
         if chunk.isNull():
             continue
+        dst = QRect(ox, oy, chunk.width(), chunk.height())
+        src = QRect(0, 0, chunk.width(), chunk.height())
         painter.drawPixmap(dst, chunk, src)
     painter.end()
 
     result = QPixmap.fromImage(image)
-    result.setDevicePixelRatio(1.0)
-    log_info(
-        "[OCR][截图拼接] 合成完成 QPixmap=%d×%d dpr=%.4f | union 期望=%d×%d"
-        % (
-            result.width(),
-            result.height(),
-            float(result.devicePixelRatio() or 1.0),
-            w,
-            h,
-        )
-    )
+    result.setDevicePixelRatio(max_dpr)
     return result
 
 
-class SnipOverlay(QWidget):
-    """拼接全部显示器画面后，在虚拟桌面上框选区域。"""
+class _SnipScreenPanel(QWidget):
+    """单块显示器上的选区遮罩（避免 Windows 下单窗口跨屏绘制错位）。"""
 
-    region_captured = pyqtSignal(object)  # QPixmap
-    cancelled = pyqtSignal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def __init__(self, screen_geom: QRect, chunk: QPixmap, controller: "SnipOverlay"):
+        super().__init__(None)
+        self._controller = controller
+        self._chunk = chunk
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -123,50 +79,15 @@ class SnipOverlay(QWidget):
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-
-        geo = virtual_desktop_rect()
-        self.setGeometry(geo)
-        log_info(
-            "[OCR][截图叠加] SnipOverlay geometry=(%d,%d) %d×%d | widget_dpr=%.4f"
-            % (geo.x(), geo.y(), geo.width(), geo.height(), self.devicePixelRatio())
-        )
-        self._pixmap = _composite_desktop_pixmap(geo)
-        pm = self._pixmap
-        log_info(
-            "[OCR][截图叠加] 底图 QPixmap 报告 size=%d×%d dpr=%.4f | "
-            "控件逻辑=%d×%d | 若二者逻辑尺寸不一致 paint 会错位/露黑"
-            % (
-                pm.width(),
-                pm.height(),
-                float(pm.devicePixelRatio() or 1.0),
-                self.width(),
-                self.height(),
-            )
-        )
-        self._start = None
-        self._current = None
-        self._selecting = False
-        self._paint_logged = False
+        self.setGeometry(screen_geom)
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        if not self._paint_logged:
-            self._paint_logged = True
-            pm = self._pixmap
-            pm_dpr = float(pm.devicePixelRatio() or 1.0)
-            wg_dpr = float(self.devicePixelRatio() or 1.0)
-            dr = self.rect()
-            sr = pm.rect()
-            log_info(
-                "[OCR][截图叠加] paintEvent(仅记一次): dest(self.rect)=%dx%d 逻辑 | "
-                "src(pm.rect)=%dx%d | pm.dpr=%.4f widget.dpr=%.4f | "
-                "drawPixmap 会把 src 缩放到 dest；若两边逻辑尺寸不一致会像「平移/漏边」"
-                % (dr.width(), dr.height(), sr.width(), sr.height(), pm_dpr, wg_dpr)
-            )
-        painter.drawPixmap(self.rect(), self._pixmap, self._pixmap.rect())
+        painter.drawPixmap(0, 0, self._chunk)
         shade = QColor(0, 0, 0, 110)
-        if self._selecting and self._start and self._current:
-            r = QRect(self._start, self._current).normalized()
+        sel = self._controller.selection_in_local(self)
+        if sel is not None:
+            r = sel
             W, H = self.width(), self.height()
             painter.fillRect(0, 0, W, max(0, r.top()), shade)
             painter.fillRect(0, max(0, r.bottom()), W, max(0, H - r.bottom()), shade)
@@ -180,56 +101,173 @@ class SnipOverlay(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        wh = self.windowHandle()
-        if wh is not None:
-            scr = wh.screen()
-            log_info(
-                "[OCR][截图叠加] show 后 window dpr=%.4f | window.screen=%r"
-                % (
-                    wh.devicePixelRatio(),
-                    scr.name() if scr is not None else None,
-                )
-            )
-        self.activateWindow()
-        self.raise_()
-        self.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+        self._controller.on_panel_shown(self)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self._selecting = True
-            self._start = event.pos()
-            self._current = event.pos()
-            self.update()
+            self._controller.begin_selection(self.mapToGlobal(event.pos()), self)
 
     def mouseMoveEvent(self, event):
-        if self._selecting:
-            self._current = event.pos()
-            self.update()
+        self._controller.update_selection(self.mapToGlobal(event.pos()))
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._selecting:
-            self._selecting = False
-            r = QRect(self._start, event.pos()).normalized()
-            if r.width() >= 4 and r.height() >= 4:
-                self._emit_crop(r)
-            else:
-                self.cancelled.emit()
-            self.deleteLater()
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._controller.finish_selection(self.mapToGlobal(event.pos()))
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
-            self.cancelled.emit()
-            self.deleteLater()
+            self._controller.cancel()
             return
         super().keyPressEvent(event)
 
-    def _emit_crop(self, rect: QRect):
-        dpr = self._pixmap.devicePixelRatio()
-        dx = int(rect.x() * dpr)
-        dy = int(rect.y() * dpr)
-        dw = max(1, int(rect.width() * dpr))
-        dh = max(1, int(rect.height() * dpr))
-        cropped = self._pixmap.copy(dx, dy, dw, dh)
+
+class SnipOverlay(QWidget):
+    """多屏选区：每块屏独立窗口显示 grab，裁剪仍从虚拟桌面合成图取。"""
+
+    region_captured = pyqtSignal(object)
+    cancelled = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._union = virtual_desktop_rect()
+        self._composite = _composite_desktop_pixmap(self._union)
+        self._panels: list[_SnipScreenPanel] = []
+        self._selecting = False
+        self._start_global: QPoint | None = None
+        self._current_global: QPoint | None = None
+        self._focus_panel: _SnipScreenPanel | None = None
+
+        screens = QGuiApplication.screens()
+        log_info(
+            "[OCR][截图叠加] 多屏模式 union=(%d,%d) %d×%d | 屏数=%d | 合成图=%d×%d dpr=%.4f"
+            % (
+                self._union.x(),
+                self._union.y(),
+                self._union.width(),
+                self._union.height(),
+                len(screens),
+                self._composite.width(),
+                self._composite.height(),
+                float(self._composite.devicePixelRatio() or 1.0),
+            )
+        )
+        for i, screen in enumerate(screens):
+            sg = screen.geometry()
+            chunk = screen.grabWindow(0)
+            clw, clh = _pixmap_logical_size(chunk)
+            gap_y = ""
+            if i > 0:
+                prev = screens[i - 1].geometry()
+                gap = sg.y() - (prev.y() + prev.height())
+                if gap != 0:
+                    gap_y = f" | 与上一屏垂直间隙={gap}px"
+            log_info(
+                "[OCR][截图叠加] 屏[%d] panel geometry=(%d,%d) %d×%d | chunk 逻辑≈%d×%d%s"
+                % (i, sg.x(), sg.y(), sg.width(), sg.height(), clw, clh, gap_y)
+            )
+            panel = _SnipScreenPanel(sg, chunk, self)
+            self._panels.append(panel)
+
+    def show(self):
+        for panel in self._panels:
+            panel.show()
+        if self._panels:
+            self._panels[0].activateWindow()
+            self._panels[0].setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+
+    def close(self):
+        for panel in self._panels:
+            panel.close()
+        super().close()
+
+    def deleteLater(self):
+        for panel in self._panels:
+            panel.deleteLater()
+        self._panels.clear()
+        super().deleteLater()
+
+    def on_panel_shown(self, panel: _SnipScreenPanel):
+        panel.raise_()
+
+    def begin_selection(self, global_pos: QPoint, panel: _SnipScreenPanel):
+        self._selecting = True
+        self._start_global = global_pos
+        self._current_global = global_pos
+        self._focus_panel = panel
+        panel.grabMouse()
+        self._repaint_panels()
+
+    def update_selection(self, global_pos: QPoint):
+        if self._selecting:
+            self._current_global = global_pos
+            self._repaint_panels()
+
+    def finish_selection(self, global_pos: QPoint):
+        if not self._selecting:
+            return
+        self._release_grab()
+        self._selecting = False
+        self._current_global = global_pos
+        r = QRect(self._start_global, self._current_global).normalized()
+        self._repaint_panels()
+        if r.width() >= 4 and r.height() >= 4:
+            self._emit_crop(r)
+        else:
+            self.cancelled.emit()
+        self.deleteLater()
+
+    def cancel(self):
+        self._release_grab()
+        self.cancelled.emit()
+        self.deleteLater()
+
+    def _release_grab(self):
+        if self._focus_panel is not None:
+            try:
+                self._focus_panel.releaseMouse()
+            except Exception:
+                pass
+            self._focus_panel = None
+
+    def selection_in_local(self, panel: _SnipScreenPanel) -> QRect | None:
+        if not self._selecting or self._start_global is None or self._current_global is None:
+            return None
+        gr = QRect(self._start_global, self._current_global).normalized()
+        top_left = panel.mapFromGlobal(gr.topLeft())
+        bottom_right = panel.mapFromGlobal(gr.bottomRight())
+        lr = QRect(top_left, bottom_right).normalized()
+        lr &= panel.rect()
+        if lr.isNull():
+            return None
+        return lr
+
+    def _repaint_panels(self):
+        for panel in self._panels:
+            panel.update()
+
+    def _emit_crop(self, rect_global: QRect):
+        """rect_global 为相对虚拟桌面 union 左上角的逻辑坐标。"""
+        lx = rect_global.x() - self._union.x()
+        ly = rect_global.y() - self._union.y()
+        dpr = float(self._composite.devicePixelRatio() or 1.0)
+        dx = int(round(lx * dpr))
+        dy = int(round(ly * dpr))
+        dw = max(1, int(round(rect_global.width() * dpr)))
+        dh = max(1, int(round(rect_global.height() * dpr)))
+        pw, ph = self._composite.width(), self._composite.height()
+        if dx < 0:
+            dw += dx
+            dx = 0
+        if dy < 0:
+            dh += dy
+            dy = 0
+        if dx >= pw or dy >= ph:
+            log_debug("截图识字: 裁剪区域完全在合成图外")
+            self.cancelled.emit()
+            return
+        dw = min(dw, pw - dx)
+        dh = min(dh, ph - dy)
+        cropped = self._composite.copy(dx, dy, dw, dh)
         if cropped.isNull():
             log_debug("截图识字: 裁剪结果为空")
             self.cancelled.emit()

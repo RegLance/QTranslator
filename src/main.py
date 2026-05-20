@@ -269,7 +269,7 @@ try:
     from .ui.history_window import get_history_window
     from .ui.vocabulary_window import get_vocabulary_window
     from .ui.help_window import get_help_window
-    from .ui.splash_screen import show_splash_screen
+    from .ui.splash_screen import SplashScreen
     from .ui.screenshot_ocr_overlay import SnipOverlay, RapidOcrWorkerThread
     from .utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
     from .utils.history import add_translation_history
@@ -298,7 +298,7 @@ except ImportError:
     from src.ui.history_window import get_history_window
     from src.ui.vocabulary_window import get_vocabulary_window
     from src.ui.help_window import get_help_window
-    from src.ui.splash_screen import show_splash_screen
+    from src.ui.splash_screen import SplashScreen
     from src.ui.screenshot_ocr_overlay import SnipOverlay, RapidOcrWorkerThread
     from src.utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
     from src.utils.history import add_translation_history
@@ -2036,6 +2036,7 @@ class MainController(QObject):
     """主控制器"""
 
     writing_completed = pyqtSignal(object)
+    initialized = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -2076,10 +2077,8 @@ class MainController(QObject):
         except Exception:
             pass
 
-        # 启动后空闲时预加载 OCR（避免首次截图识字时主线程卡顿）
-        QTimer.singleShot(2500, self._warmup_ocr_engine_deferred)
-
     def _warmup_ocr_engine_deferred(self):
+        """预加载 OCR 引擎（避免首次截图识字时主线程卡顿）"""
         if self._ocr_engine_warmed:
             return
         try:
@@ -2220,73 +2219,92 @@ class MainController(QObject):
 
     def _pre_render_windows(self):
         """预创建并预渲染所有窗口，消除首次显示延迟"""
-        windows_to_prerender = []
-
-        # 翻译窗口（已在 __init__ 创建，但未渲染）
-        windows_to_prerender.append(self._translator_window)
-
-        # 历史窗口（懒加载单例，此处触发创建）
-        try:
-            from .ui.history_window import get_history_window
-        except ImportError:
-            from src.ui.history_window import get_history_window
-        try:
-            windows_to_prerender.append(get_history_window())
-        except Exception as e:
-            log_error(f"预创建历史窗口失败: {e}")
-
-        # 帮助窗口（懒加载单例，此处触发创建）
-        try:
-            from .ui.help_window import get_help_window
-        except ImportError:
-            from src.ui.help_window import get_help_window
-        try:
-            windows_to_prerender.append(get_help_window())
-        except Exception as e:
-            log_error(f"预创建帮助窗口失败: {e}")
-
-        # 设置对话框（新增单例，此处触发创建）
-        try:
-            windows_to_prerender.append(get_settings_dialog())
-        except Exception as e:
-            log_error(f"预创建设置对话框失败: {e}")
-
-        try:
-            windows_to_prerender.append(get_vocabulary_window())
-        except Exception as e:
-            log_error(f"预创建单词收藏窗口失败: {e}")
-
-        # 离屏预渲染：移至屏幕外 → show → 处理渲染事件 → hide
-        offscreen_pos = QPoint(-9999, -9999)
-        for widget in windows_to_prerender:
-            try:
-                original_pos = widget.pos()
-                # 对翻译窗口，预渲染前先设置好 splitter 状态，避免首次打开时分隔条跳动
-                if widget is self._translator_window:
-                    try:
-                        widget._splitter.setStretchFactor(0, 0)
-                        widget._splitter.setStretchFactor(1, 1)
-                        if widget._fixed_height_mode:
-                            widget._splitter.setSizes([180, 360])
-                        else:
-                            widget._splitter.setSizes([120, 180])
-                    except Exception:
-                        pass
-                widget.move(offscreen_pos)
-                widget.show()
-                QApplication.processEvents()
-                widget.hide()
-                widget.move(original_pos)
-            except Exception as e:
-                log_error(f"预渲染窗口失败: {type(widget).__name__}: {e}")
-
-        log_info("窗口预渲染完成")
-
-        # 预热翻译器（后台线程，不阻塞UI）
         import threading
-        def _warmup():
+
+        # 三阶段完成标记：pre_render / warmup / ocr
+        self._ready_flags = {'pre_render': False, 'warmup': False, 'ocr': False}
+
+        try:
+            windows_to_prerender = []
+
+            # 翻译窗口（已在 __init__ 创建，但未渲染）
+            windows_to_prerender.append(self._translator_window)
+
+            # 历史窗口（懒加载单例，此处触发创建）
             try:
-                # 预热语言检测模型
+                from .ui.history_window import get_history_window
+            except ImportError:
+                from src.ui.history_window import get_history_window
+            try:
+                windows_to_prerender.append(get_history_window())
+            except Exception as e:
+                log_error(f"预创建历史窗口失败: {e}")
+
+            # 帮助窗口（懒加载单例，此处触发创建）
+            try:
+                from .ui.help_window import get_help_window
+            except ImportError:
+                from src.ui.help_window import get_help_window
+            try:
+                windows_to_prerender.append(get_help_window())
+            except Exception as e:
+                log_error(f"预创建帮助窗口失败: {e}")
+
+            # 设置对话框（新增单例，此处触发创建）
+            try:
+                windows_to_prerender.append(get_settings_dialog())
+            except Exception as e:
+                log_error(f"预创建设置对话框失败: {e}")
+
+            try:
+                windows_to_prerender.append(get_vocabulary_window())
+            except Exception as e:
+                log_error(f"预创建单词收藏窗口失败: {e}")
+
+            # 离屏预渲染：移至屏幕外 → show → 处理渲染事件 → hide
+            offscreen_pos = QPoint(-9999, -9999)
+            for widget in windows_to_prerender:
+                try:
+                    original_pos = widget.pos()
+                    # 对翻译窗口，预渲染前先设置好 splitter 状态，避免首次打开时分隔条跳动
+                    if widget is self._translator_window:
+                        try:
+                            widget._splitter.setStretchFactor(0, 0)
+                            widget._splitter.setStretchFactor(1, 1)
+                            if widget._fixed_height_mode:
+                                widget._splitter.setSizes([180, 360])
+                            else:
+                                widget._splitter.setSizes([120, 180])
+                        except Exception:
+                            pass
+                    widget.move(offscreen_pos)
+                    widget.show()
+                    QApplication.processEvents()
+                    widget.hide()
+                    widget.move(original_pos)
+                except Exception as e:
+                    log_error(f"预渲染窗口失败: {type(widget).__name__}: {e}")
+
+            log_info("窗口预渲染完成")
+
+            # 预热翻译器（后台线程，不阻塞 UI）
+            threading.Thread(target=self._warmup_translator_in_thread, daemon=True).start()
+
+            # 预热 OCR 引擎（后台线程，不阻塞 UI）
+            threading.Thread(target=self._warmup_ocr_in_thread, daemon=True).start()
+        finally:
+            self._ready_flags['pre_render'] = True
+
+        # 启动轮询定时器，等待所有预热完成
+        self._check_ready_timer = QTimer()
+        self._check_ready_timer.timeout.connect(self._check_all_ready)
+        self._check_ready_timer.start(150)
+
+    def _warmup_translator_in_thread(self):
+        """后台线程：预热语言检测 + API 连接"""
+        try:
+            # 预热语言检测模型
+            try:
                 try:
                     from .utils.language_detector import detect_language
                 except ImportError:
@@ -2296,9 +2314,7 @@ class MainController(QObject):
             except Exception as e:
                 log_info(f"语言检测预热失败: {e}")
             try:
-                # 预热 API 连接：使用实际翻译同一路径的 chat/completions。
-                # 不使用 models.list()，因为部分内部 OpenAI 兼容网关只暴露聊天补全接口，
-                # 请求 {base_url}/models 会返回误导性的 404。
+                # 预热 API 连接
                 if self._translator and self._translator._client:
                     self._translator._client.chat.completions.create(
                         model=self._translator._model,
@@ -2315,7 +2331,32 @@ class MainController(QObject):
                     log_info("API连接预热失败: 翻译客户端未初始化")
             except Exception as e:
                 log_info(f"API连接预热失败: {e}")
-        threading.Thread(target=_warmup, daemon=True).start()
+        finally:
+            self._ready_flags['warmup'] = True
+
+    def _warmup_ocr_in_thread(self):
+        """后台线程：预热 OCR 引擎"""
+        try:
+            if not self._ocr_engine_warmed:
+                try:
+                    try:
+                        from .utils.rapidocr_engine import warmup_ocr_engine
+                    except ImportError:
+                        from src.utils.rapidocr_engine import warmup_ocr_engine
+                    log_info("[OCR] 预加载引擎 …")
+                    warmup_ocr_engine()
+                    self._ocr_engine_warmed = True
+                    log_info("[OCR] 引擎预加载完成")
+                except Exception as e:
+                    log_debug(f"[OCR] 引擎预加载失败（首次识别时再加载）: {e}")
+        finally:
+            self._ready_flags['ocr'] = True
+
+    def _check_all_ready(self):
+        """检查所有预热是否完成，完成后发射 initialized 信号"""
+        if all(self._ready_flags.values()):
+            self._check_ready_timer.stop()
+            self.initialized.emit()
 
     def start(self):
         self._selection_detector.start()
@@ -3262,22 +3303,31 @@ def main():
         from PyQt6.QtGui import QIcon
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    # 主控制器引用（延迟初始化）
-    controller = None
+    # 1. 立即显示 splash（带呼吸动画，事件驱动，不自定消失）
+    splash = SplashScreen()
+    splash.show_splash()
+    app.processEvents()  # 确保 splash 立即渲染
 
-    # 定义启动完成后的初始化函数
-    def on_splash_finished():
-        nonlocal controller
-        controller = MainController()
-        controller.start()
-        # 启动时清理旧日志（超过 7 天的日志文件）
-        try:
-            get_logger().clear_old_logs(days=7)
-        except Exception:
-            pass
+    # 2. 在 splash 可见期间创建 MainController（splash 持续动画）
+    controller = MainController()
 
-    # 显示启动动画，动画完成后初始化主控制器
-    show_splash_screen(on_splash_finished)
+    # 3. 初始化完成 → 淡出 splash → 显示翻译窗口
+    def on_initialized():
+        splash.set_status("启动完成")
+        def on_fade_done():
+            controller._on_translator_window_requested()
+        splash.start_fade_out(on_fade_done)
+
+    controller.initialized.connect(on_initialized)
+
+    # 4. start() 内部调度预渲染，完成后发射 initialized 信号
+    controller.start()
+
+    # 启动时清理旧日志（超过 7 天的日志文件）
+    try:
+        get_logger().clear_old_logs(days=7)
+    except Exception:
+        pass
 
     exit_code = app.exec()
 

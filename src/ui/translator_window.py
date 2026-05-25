@@ -399,6 +399,9 @@ class TranslatorWindow(QWidget):
     _FONT_FAMILIES = ["Microsoft YaHei", "Malgun Gothic", "Yu Gothic UI", "Noto Sans CJK SC", "sans-serif"]
     _FONT_FAMILY_CSS = '"Microsoft YaHei", "Malgun Gothic", "Yu Gothic UI", "Noto Sans CJK SC", sans-serif'
 
+    # 原文/译文区右下角悬浮控件相对右边缘额外内收（仅水平，与 margin 叠加）
+    _CORNER_CTRL_EXTRA_RIGHT = 4
+
     # 信号
     closed = pyqtSignal()
     settings_requested = pyqtSignal()
@@ -2820,7 +2823,7 @@ class TranslatorWindow(QWidget):
             margin = 6
 
             # 悬浮按钮位置：右下角，考虑边距
-            button_x = container_width - button_width - margin
+            button_x = container_width - button_width - margin - self._CORNER_CTRL_EXTRA_RIGHT
             button_y = container_height - button_height - margin
 
             self._floating_buttons_frame.move(button_x, button_y)
@@ -2875,7 +2878,7 @@ class TranslatorWindow(QWidget):
         }
         label = function_labels.get(function_name, '翻译')
         self._default_function_title_restore_timer.stop()
-        self._title_label.setText(f"QTranslator - 默认功能: {label}")
+        self._title_label.setText(f"QTranslator - Enter 默认功能: {label}")
         self._default_function_title_restore_timer.start(2000)
 
     def _run_function_button(self, function_name: str):

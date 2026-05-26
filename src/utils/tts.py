@@ -292,6 +292,7 @@ class TTSEngine:
         self._lock = threading.Lock()
         self._current_thread: Optional[threading.Thread] = None
         self._stop_requested = False
+        self._speak_generation = 0
         self._thread_engine = None
 
         self._on_start_callback: Optional[Callable] = None
@@ -352,6 +353,7 @@ class TTSEngine:
         with self._lock:
             if self._state == TTSState.SPEAKING:
                 return False
+            self._speak_generation += 1
             self._stop_requested = False
             self._state = TTSState.SPEAKING
 
@@ -382,6 +384,7 @@ class TTSEngine:
     def _run_edge_speak(self, text: str, lang_hint: Optional[str]):
         enqueued_playback = [False]
         aborted_before_enqueue = [False]
+        gen = self._speak_generation
 
         def _thread():
             tmp_path: Optional[str] = None
@@ -430,7 +433,7 @@ class TTSEngine:
 
                 start_cb_fired = False
                 for seg_idx, seg_text in enumerate(segments):
-                    if self._stop_requested:
+                    if self._stop_requested or self._speak_generation != gen:
                         aborted_before_enqueue[0] = True
                         break
                     fd, tmp_path = tempfile.mkstemp(suffix=".mp3", prefix="qtr_tts_")
@@ -465,7 +468,7 @@ class TTSEngine:
                         f"Edge thread: seg{seg_idx + 1} mp3 size={mp3_sz} path={tmp_path!r}"
                     )
 
-                    if self._stop_requested:
+                    if self._stop_requested or self._speak_generation != gen:
                         aborted_before_enqueue[0] = True
                         cleanup_mp3()
                         break

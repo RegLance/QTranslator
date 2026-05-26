@@ -267,9 +267,10 @@ try:
     from .ui.tray_icon import get_tray_icon
     from .ui.translator_window import get_translator_window
     from .ui.history_window import get_history_window
+    from .ui.vocabulary_window import get_vocabulary_window
     from .ui.help_window import get_help_window
     from .ui.splash_screen import SplashScreen
-    from .utils.logger import get_logger, log_info, log_error, log_debug
+    from .utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
     from .utils.history import add_translation_history
     from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
     from .utils.hotkey_manager import get_hotkey_manager
@@ -293,9 +294,10 @@ except ImportError:
     from src.ui.tray_icon import get_tray_icon
     from src.ui.translator_window import get_translator_window
     from src.ui.history_window import get_history_window
+    from src.ui.vocabulary_window import get_vocabulary_window
     from src.ui.help_window import get_help_window
     from src.ui.splash_screen import SplashScreen
-    from src.utils.logger import get_logger, log_info, log_error, log_debug
+    from src.utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
     from src.utils.history import add_translation_history
     from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
     from src.utils.hotkey_manager import get_hotkey_manager
@@ -1061,7 +1063,7 @@ class SettingsDialog(QDialog):
             }}
 
             /* 快捷键按钮 */
-            QPushButton#hotkeyBtn, QPushButton#hotkeyBtn2, QPushButton#hotkeyBtn3 {{
+            QPushButton#hotkeyBtn, QPushButton#hotkeyBtn2, QPushButton#hotkeyBtn3, QPushButton#hotkeyBtn4 {{
                 background-color: {t['input_bg']};
                 border: 1px solid {t['input_border']};
                 border-radius: 6px;
@@ -1070,10 +1072,10 @@ class SettingsDialog(QDialog):
                 font-size: 13px;
                 text-align: left;
             }}
-            QPushButton#hotkeyBtn:hover, QPushButton#hotkeyBtn2:hover, QPushButton#hotkeyBtn3:hover {{
+            QPushButton#hotkeyBtn:hover, QPushButton#hotkeyBtn2:hover, QPushButton#hotkeyBtn3:hover, QPushButton#hotkeyBtn4:hover {{
                 border-color: {t['accent_color']};
             }}
-            QPushButton#hotkeyBtn:focus, QPushButton#hotkeyBtn2:focus, QPushButton#hotkeyBtn3:focus {{
+            QPushButton#hotkeyBtn:focus, QPushButton#hotkeyBtn2:focus, QPushButton#hotkeyBtn3:focus, QPushButton#hotkeyBtn4:focus {{
                 border-color: {t['accent_color']};
                 background-color: {t['accent_color']};
                 color: #ffffff;
@@ -1165,7 +1167,7 @@ class SettingsDialog(QDialog):
             self._writing_hotkey_btn.setText("请按下快捷键...")
             self._writing_hotkey_btn.setFocus()
             self._capturing_hotkey_target = "writing"
-        else:
+        elif target == "selection_translate":
             self._selection_translate_hotkey_btn.setText("请按下快捷键...")
             self._selection_translate_hotkey_btn.setFocus()
             self._capturing_hotkey_target = "selection_translate"
@@ -1204,7 +1206,7 @@ class SettingsDialog(QDialog):
             elif self._capturing_hotkey_target == "writing":
                 self._writing_hotkey_value = hotkey
                 self._writing_hotkey_btn.setText(hotkey)
-            else:
+            elif self._capturing_hotkey_target == "selection_translate":
                 self._selection_translate_hotkey_value = hotkey
                 self._selection_translate_hotkey_btn.setText(hotkey)
 
@@ -2006,6 +2008,7 @@ class MainController(QObject):
         self._tray_icon.exit_requested.connect(self._on_exit_requested)
         self._tray_icon.translator_window_requested.connect(self._on_translator_window_requested)
         self._tray_icon.history_requested.connect(self._on_history_requested)
+        self._tray_icon.vocabulary_requested.connect(self._on_vocabulary_requested)
         self._tray_icon.help_requested.connect(self._on_help_requested)
         # 翻译窗口关闭信号
         self._translator_window.closed.connect(self._on_translator_window_closed)
@@ -2016,6 +2019,7 @@ class MainController(QObject):
             self._on_selection_translate_hotkey_triggered
         )
         self.writing_completed.connect(self._on_writing_completed)
+        get_vocabulary_window().open_in_translator.connect(self._on_vocabulary_open_in_translator)
 
     def _check_config(self):
         """检查配置（API 配置已硬编码，无需检查）"""
@@ -2151,6 +2155,11 @@ class MainController(QObject):
             except Exception as e:
                 log_error(f"预创建设置对话框失败: {e}")
 
+            try:
+                windows_to_prerender.append(get_vocabulary_window())
+            except Exception as e:
+                log_error(f"预创建单词收藏窗口失败: {e}")
+
             # 离屏预渲染：移至屏幕外 → show → 处理渲染事件 → hide
             offscreen_pos = QPoint(-9999, -9999)
             for widget in windows_to_prerender:
@@ -2201,9 +2210,7 @@ class MainController(QObject):
             except Exception as e:
                 log_info(f"语言检测预热失败: {e}")
             try:
-                # 预热 API 连接：使用实际翻译同一路径的 chat/completions。
-                # 不使用 models.list()，因为部分内部 OpenAI 兼容网关只暴露聊天补全接口，
-                # 请求 {base_url}/models 会返回误导性的 404。
+                # 预热 API 连接
                 if self._translator and self._translator._client:
                     self._translator._client.chat.completions.create(
                         model=self._translator._model,
@@ -2269,6 +2276,14 @@ class MainController(QObject):
             from src.utils.history import get_history
         try:
             get_history().flush()
+        except Exception:
+            pass
+        try:
+            from .utils.vocabulary import get_vocabulary
+        except ImportError:
+            from src.utils.vocabulary import get_vocabulary
+        try:
+            get_vocabulary().flush()
         except Exception:
             pass
 
@@ -2920,6 +2935,15 @@ class MainController(QObject):
         # 显示历史窗口
         history_window = get_history_window()
         history_window.show_window()
+
+    def _on_vocabulary_requested(self):
+        self._translate_button.hide()
+        get_vocabulary_window().show_window()
+
+    def _on_vocabulary_open_in_translator(self, word: str, translation: str):
+        self._translate_button.hide()
+        self._translator_window.load_translation_pair(word, translation)
+        self._translator_window.show_window()
 
     def _on_help_requested(self):
         """显示帮助窗口"""

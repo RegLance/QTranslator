@@ -29,6 +29,7 @@ class TrayIcon(QObject):
     exit_requested = pyqtSignal()
     translator_window_requested = pyqtSignal()  # 双击显示翻译窗口
     history_requested = pyqtSignal()  # 显示历史窗口
+    vocabulary_requested = pyqtSignal()  # 单词收藏窗口
     help_requested = pyqtSignal()  # 显示帮助窗口
 
     def __init__(self):
@@ -163,6 +164,10 @@ class TrayIcon(QObject):
         self._history_action = QAction("翻译历史", self._menu)
         self._history_action.triggered.connect(self._on_history)
         self._menu.addAction(self._history_action)
+
+        self._vocabulary_action = QAction("单词收藏", self._menu)
+        self._vocabulary_action.triggered.connect(self._on_vocabulary)
+        self._menu.addAction(self._vocabulary_action)
 
         # 设置选项
         self._settings_action = QAction("设置...", self._menu)
@@ -348,6 +353,12 @@ class TrayIcon(QObject):
             self.history_requested.emit()
         except Exception as e:
             self._log_error("_on_history", e)
+
+    def _on_vocabulary(self):
+        try:
+            self.vocabulary_requested.emit()
+        except Exception as e:
+            self._log_error("_on_vocabulary", e)
 
     def _on_help(self):
         """打开帮助窗口"""

@@ -1238,11 +1238,14 @@ class SettingsDialog(QDialog):
             current_mode = self._api_key_edit.echoMode()
             self._api_key_toggle_action.setIcon(self._get_eye_icon(current_mode == QLineEdit.EchoMode.Normal))
 
+    def _title_bar_rect_in_window(self) -> QRect:
+        """标题栏在窗口坐标系下的矩形（含 content_layout 上边距，勿用 pos.y()<=28）。"""
+        top_left = self._title_bar.mapTo(self, QPoint(0, 0))
+        return QRect(top_left, self._title_bar.size())
+
     def _is_over_title_bar_button(self, pos: QPoint) -> bool:
         """判断鼠标是否在标题栏按钮区域内"""
-        title_bar_height = 28
-        # 首先检查是否在标题栏区域
-        if pos.y() > title_bar_height:
+        if not self._title_bar_rect_in_window().contains(pos):
             return False
 
         # 关闭按钮在标题栏右侧，按钮大小 20x20
@@ -1260,9 +1263,8 @@ class SettingsDialog(QDialog):
         """鼠标按下事件"""
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
-            title_bar_height = 28
             # 只有在标题栏的非按钮区域才开始拖动
-            if pos.y() <= title_bar_height and not self._is_over_title_bar_button(pos):
+            if self._title_bar_rect_in_window().contains(pos) and not self._is_over_title_bar_button(pos):
                 self._is_dragging = True
                 self._drag_start_pos = event.globalPosition().toPoint()
                 self._drag_window_start_pos = self.pos()
@@ -1279,9 +1281,8 @@ class SettingsDialog(QDialog):
             self.move(new_pos)
         else:
             # 智能光标控制
-            title_bar_height = 28
             # 检查是否在标题栏非按钮区域（显示拖动光标）
-            if pos.y() <= title_bar_height and not self._is_over_title_bar_button(pos):
+            if self._title_bar_rect_in_window().contains(pos) and not self._is_over_title_bar_button(pos):
                 self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
             # 其他区域显示默认箭头光标
             else:

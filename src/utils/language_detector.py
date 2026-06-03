@@ -15,7 +15,7 @@ except ImportError:
     from src.utils.logger import log_debug, log_warning, log_info
 
 # ---------------------------------------------------------------------------
-# 本地检测（与原 QTranslator 行为一致）：中文比例 + langdetect
+# 本地检测（与原 QTranslator 行为一致）：中文比例 + 拉丁预判 + langdetect
 # ---------------------------------------------------------------------------
 
 CHINESE_CODES = ['zh-cn', 'zh-tw', 'zh-hans', 'zh-hant', 'zh']
@@ -153,7 +153,7 @@ _MISSING_NAME = '英文'
 
 def is_chinese_text(text: str) -> bool:
     """判断文本是否主要是中文"""
-    chinese_chars = re.findall(r'[\u4e00-\u9fff]', text)
+    chinese_chars = re.findall(r'[一-鿿]', text)
     non_space_chars = re.sub(r'\s', '', text)
 
     if len(non_space_chars) == 0:
@@ -170,8 +170,46 @@ def is_chinese_text(text: str) -> bool:
     return result
 
 
+# 非拉丁文字系统的 Unicode 区块 — 用于快速判断文本是否纯拉丁文字
+_NON_LATIN_SCRIPTS_RE = re.compile(
+    r'[一-鿿'   # CJK 统一表意文字（中文汉字）
+    r'぀-ヿ'    # 日文假名（平假名 + 片假名）
+    r'가-힯'    # 韩文谚文音节
+    r'Ѐ-ӿ'    # 西里尔字母（俄文等）
+    r'؀-ۿ'    # 阿拉伯文
+    r'฀-๿'    # 泰文
+    r']'
+)
+
+
+def is_predominantly_latin(text: str) -> bool:
+    """判断文本是否主要由拉丁字母组成（不含 CJK/假名/谚文/西里尔等）。
+
+    如果超过 85% 的非空白字符是拉丁字母，视为纯拉丁文本。
+    这类文本被 langdetect 误判时（如技术英文→法语/意大利语），应强制修正为英文。
+    """
+    non_space = re.sub(r'\s', '', text)
+    if len(non_space) == 0:
+        return False
+
+    non_latin_count = len(_NON_LATIN_SCRIPTS_RE.findall(non_space))
+    ratio = non_latin_count / len(non_space)
+
+    result = ratio <= 0.15
+    log_debug(
+        f"[语言检测] 非拉丁字符数={non_latin_count}, "
+        f"总字符数={len(non_space)}, 非拉丁比例={ratio:.2f}, 判断为纯拉丁文本={result}"
+    )
+    return result
+
+
 def _detect_language_local(text: str) -> Tuple[str, str]:
-    """原 QTranslator 本地逻辑：中文比例优先，其余 langdetect。"""
+    """本地语言检测：中文优先 → 拉丁预判修正 → langdetect。
+
+    1. 中文比例 > 30%：直接判定为中文
+    2. 纯拉丁文字（>85%）且 langdetect 误判为非英文：修正为英文
+    3. 其余：信任 langdetect 结果
+    """
     if not text or not text.strip():
         return ('en', '英文')
 
@@ -183,6 +221,16 @@ def _detect_language_local(text: str) -> Tuple[str, str]:
     try:
         sample = text[:200] if len(text) > 200 else text
         lang_code = detect(sample)
+
+        # 纯拉丁文字文本被 langdetect 误判（如技术英文→法语/意大利语/德语）：
+        # langdetect 基于字符 n-gram，拉丁词根的技术词汇（-tion, ex-, auto-）
+        # 与罗曼语族模式重合，对短技术文本误判率极高，强制修正为英文
+        if is_predominantly_latin(text) and lang_code != 'en':
+            log_debug(
+                f"[语言检测] langdetect 结果 '{lang_code}' 被拉丁文字预判修正为 'en'"
+            )
+            lang_code = 'en'
+
         lang_name = LANG_CODE_TO_NAME.get(lang_code, _MISSING_NAME)
         log_debug(f"检测到语言(本地): {lang_code} -> {lang_name}")
         return (lang_code, lang_name)

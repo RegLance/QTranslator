@@ -27,9 +27,6 @@ except ImportError:
     from src.utils.language_detector import detect_language, is_chinese_text, get_translation_direction
 
 
-# 语言检测锁，确保线程安全
-_language_detect_lock = threading.Lock()
-
 
 def _log_crash_safe(message: str, exc: Exception = None):
     """安全地记录崩溃日志"""
@@ -298,11 +295,7 @@ Examples:
         Returns:
             tuple: (system_prompt, user_prompt)
         """
-        # 检测源语言（使用锁确保线程安全）
-        with _language_detect_lock:
-            source_code, source_lang = detect_language(text)
-
-        system_prompt = 'You are an expert translator, translate directly without explanation.'
+        system_prompt = 'You are an expert text editor. Edit the text to improve clarity, conciseness, and coherence while preserving the original language. Do not translate or change the language of the text.'
 
         # 避免模型在润色中滥用破折号（英/em/en dash、中文 —— 等）
         no_dash_rule = (
@@ -312,7 +305,7 @@ Examples:
 
         # 润色差异由客户端对「原文 vs 润色结果」做词/短语级 diff 展示，模型只输出润色后的纯文本
         command_prompt = (
-            f"Please edit the following sentences in {source_lang} to improve clarity, conciseness, and coherence, "
+            f"Please edit the following sentences to improve clarity, conciseness, and coherence, "
             f"making them match the expression of native speakers. {no_dash_rule}"
         )
 

@@ -74,6 +74,8 @@ a = Analysis(
         (str(project_root / "native"), "native"),
         # 添加 assets 目录 - 包含应用图标
         (str(project_root / "assets"), "assets"),
+        # 添加 data 目录 - CMU 发音字典
+        (str(project_root / "src" / "data"), "src/data"),
     ],
     hiddenimports=[
         {hidden_imports_str}
@@ -122,6 +124,7 @@ def create_spec_file():
     icon_path = str(PROJECT_ROOT / "assets" / "icon.ico").replace("\\", "/")
     native_path = str(PROJECT_ROOT / "native").replace("\\", "/")
     assets_path = str(PROJECT_ROOT / "assets").replace("\\", "/")
+    data_path = str(PROJECT_ROOT / "src" / "data").replace("\\", "/")
     # 嵌入式 Node.js 运行时路径
     node_runtime_path = str(NODE_RUNTIME_DIR).replace("\\", "/")
 
@@ -145,6 +148,8 @@ a = Analysis(
         ("{native_path}", "native"),
         # 添加 assets 目录 - 包含应用图标
         ("{assets_path}", "assets"),
+        # 添加 data 目录 - CMU 发音字典
+        ("{data_path}", "src/data"),
     ],
     hiddenimports=[
         "PyQt6.QtCore",
@@ -197,6 +202,8 @@ a = Analysis(
         "src.utils.tts_media",
         "src.utils.tts_speak_indicator",
         "src.utils.__init__",
+        # 音标模块
+        "src.utils.phonetic",
     ],
     hookspath=[],
     hooksconfig={{}},

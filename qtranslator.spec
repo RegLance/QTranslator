@@ -18,6 +18,8 @@ a = Analysis(
         ("E:/qoder/QTranslator/native", "native"),
         # 添加 assets 目录 - 包含应用图标
         ("E:/qoder/QTranslator/assets", "assets"),
+        # 添加 data 目录 - CMU 发音字典（音标数据）
+        ("E:/qoder/QTranslator/src/data", "src/data"),
     ],
     hiddenimports=[
         "PyQt6.QtCore",
@@ -70,6 +72,8 @@ a = Analysis(
         "src.utils.tts_media",
         "src.utils.tts_speak_indicator",
         "src.utils.__init__",
+        # 音标模块
+        "src.utils.phonetic",
     ],
     hookspath=[],
     hooksconfig={},

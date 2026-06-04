@@ -26,6 +26,21 @@ except ImportError:
     from src.utils.logger import log_warning, log_info, log_translation, log_debug, log_error
     from src.utils.language_detector import detect_language, is_chinese_text, get_translation_direction
 
+# 音标校正模块 (惰性导入)
+_phonetic_module = None
+
+def _get_phonetic_module():
+    """惰性加载音标模块"""
+    global _phonetic_module
+    if _phonetic_module is None:
+        try:
+            from ..utils.phonetic import correct_phonetic_in_text
+            _phonetic_module = correct_phonetic_in_text
+        except ImportError:
+            from src.utils.phonetic import correct_phonetic_in_text
+            _phonetic_module = correct_phonetic_in_text
+    return _phonetic_module
+
 
 
 def _log_crash_safe(message: str, exc: Exception = None):
@@ -437,9 +452,15 @@ Examples:
         # 存入缓存（仅在成功时）
         full_text = "".join(full_text_chunks)
         if full_text and not full_text.startswith("[错误:"):
+            translated = full_text.strip()
+            if self._is_word_mode(text, target_lang):
+                log_info(f"[音标] 检测到单词模式: '{text}' -> {target_lang}，尝试替换音标")
+                translated = self._apply_phonetic_correction(translated, text)
+            else:
+                log_info(f"[音标] 非单词模式 '{text}' -> {target_lang}，跳过音标替换")
             result = TranslationResult(
                 original_text=text,
-                translated_text=full_text.strip(),
+                translated_text=translated,
                 source_language=source_lang,
                 target_language=target_lang
             )
@@ -484,6 +505,12 @@ Examples:
             )
 
             translated_text = response.choices[0].message.content.strip()
+            # 单词模式：用字典音标替换 AI 音标
+            if self._is_word_mode(text, target_lang):
+                log_info(f"[音标] 检测到单词模式: '{text}' -> {target_lang}，尝试替换音标")
+                translated_text = self._apply_phonetic_correction(translated_text, text)
+            else:
+                log_info(f"[音标] 非单词模式 '{text}' -> {target_lang}，跳过音标替换")
 
             result = TranslationResult(
                 original_text=text,
@@ -513,6 +540,28 @@ Examples:
         """重新初始化客户端（配置变更后）"""
         self._load_api_config()
         self._init_client()
+
+    @staticmethod
+    def _is_word_mode(text: str, target_lang: str) -> bool:
+        """判断当前翻译是否为单词词典模式（需要音标）"""
+        to_chinese = target_lang in ['中文', 'zh', 'zh-cn', 'zh-hans']
+        if not to_chinese:
+            return False
+        stripped = text.strip()
+        is_latin_dominant = stripped.isascii() or all(
+            c.isascii() or c in '·\'\u201c\u201d\u2014\u2013' for c in stripped
+        )
+        is_single_word = is_latin_dominant and len(stripped) <= 20 and ' ' not in stripped
+        return is_single_word and not is_chinese_text(text)
+
+    @staticmethod
+    def _apply_phonetic_correction(translated_text: str, original_word: str) -> str:
+        """用 CMU 字典音标替换 AI 生成的音标"""
+        try:
+            correct_fn = _get_phonetic_module()
+            return correct_fn(translated_text, original_word)
+        except Exception:
+            return translated_text
 
 
 # 全局翻译器实例

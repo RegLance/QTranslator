@@ -267,10 +267,18 @@ class StreamingTranslationWorker(QThread):
             full_text = ""
 
             # 使用智能翻译（自动检测语言）
-            for chunk in translator.translate_stream(self._text, self._target_language, auto_detect=True):
+            gen = translator.translate_stream(self._text, self._target_language, auto_detect=True)
+            while True:
+                try:
+                    chunk = next(gen)
+                except StopIteration as e:
+                    # e.value 是 translate_stream return 的修正后文本
+                    if e.value:
+                        full_text = e.value
+                    break
+
                 if self._is_cancelled:
                     return
-
                 if chunk:
                     full_text += chunk
                     self.chunk_received.emit(chunk)
@@ -2442,6 +2450,11 @@ class TranslatorWindow(QWidget):
                 self.translation_completed.emit(original_text, result)
 
             self._current_worker = None
+
+            # 音标校正：用修正后的文本更新显示（流式输出的是原始 AI 文本）
+            current_display = self._output_text.toPlainText()
+            if result and current_display and result != current_display:
+                self._output_text.setPlainText(result)
 
             # 保存翻译历史
             if result:

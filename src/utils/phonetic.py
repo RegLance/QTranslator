@@ -370,6 +370,10 @@ def get_phonetic_display(word: str) -> Optional[str]:
 
     us, uk = result['us'], result['uk']
 
+    # 去除次重音符号（有道等主流词典不显示次重音）
+    us = us.replace('ˌ', '')
+    uk = uk.replace('ˌ', '')
+
     if us == uk:
         return f"/{us}/"
     else:
@@ -437,7 +441,7 @@ def correct_phonetic_in_text(text: str, word: str) -> str:
             old_phonetic_raw = m_old.group(1) if m_old else ''
             # 归一化比较
             new_phonetic_raw = phonetic_display.replace('美 /', '').replace(' 英 /', '').replace('/', '')
-            if _normalize_ipa(old_phonetic_raw) == _normalize_ipa(new_phonetic_raw):
+            if _normalize_ipa(old_phonetic_raw) == _normalize_ipa(new_phonetic_raw) and old_phonetic_raw == new_phonetic_raw:
                 msg = f"[音标] 单词 '{word}' AI 音标已正确，无需替换: {old_phonetic_line}"
                 log_info(msg)
                 print(msg)

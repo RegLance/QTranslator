@@ -451,8 +451,8 @@ Examples:
 
         # 存入缓存（仅在成功时）
         full_text = "".join(full_text_chunks)
+        translated = full_text.strip()
         if full_text and not full_text.startswith("[错误:"):
-            translated = full_text.strip()
             if self._is_word_mode(text, target_lang):
                 log_info(f"[音标] 检测到单词模式: '{text}' -> {target_lang}，尝试替换音标")
                 translated = self._apply_phonetic_correction(translated, text)
@@ -465,6 +465,8 @@ Examples:
                 target_language=target_lang
             )
             self._put_cache(cache_key, result)
+
+        return translated
 
     def translate_sync(self, text: str, target_language: str = None,
                         auto_detect: bool = True) -> TranslationResult:

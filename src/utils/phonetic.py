@@ -418,10 +418,10 @@ def correct_phonetic_in_text(text: str, word: str) -> str:
         print(msg)
         return text
 
-    # 匹配音标行: [xxx]· /yyy/ 或 [xxx]· /yyy/ (后缀内容)
+    # 匹配音标行: [xxx]· /yyy/ 或 [xxx] /yyy/ 或 [xxx]· /yyy/ 后跟内容
+    # · 可选，因为 LLM 不总是遵从 prompt 格式要求
     # 去掉 $ 以容忍 LLM 在行尾附加内容（如词性标注）
-    # 语言标记可能是中文、英文等，如 [英语]、[English]、[en]
-    pattern = r'^(\[[^\]]+\]\s*·)\s*/[^/]+/'
+    pattern = r'^(\[[^\]]+\])\s*·?\s*/[^/]+/'
 
     lines = text.split('\n')
     replaced = False
@@ -442,10 +442,10 @@ def correct_phonetic_in_text(text: str, word: str) -> str:
                 log_info(msg)
                 print(msg)
                 return text
-            # 计算原始行前导空白以保持格式
+            # 替换：补回 [xxx]· <phonetic> 格式
             leading = line[:len(line) - len(line.lstrip())]
-            prefix = match.group(1)
-            lines[i] = f"{leading}{prefix} {phonetic_display}"
+            label = match.group(1)  # [英语]
+            lines[i] = f"{leading}{label}· {phonetic_display}"
             replaced = True
             break
 

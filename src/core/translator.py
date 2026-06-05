@@ -30,15 +30,18 @@ except ImportError:
 _phonetic_module = None
 
 def _get_phonetic_module():
-    """惰性加载音标模块"""
+    """惰性加载音标模块，导入失败返回 None"""
     global _phonetic_module
     if _phonetic_module is None:
         try:
             from ..utils.phonetic import correct_phonetic_in_text
             _phonetic_module = correct_phonetic_in_text
         except ImportError:
-            from src.utils.phonetic import correct_phonetic_in_text
-            _phonetic_module = correct_phonetic_in_text
+            try:
+                from src.utils.phonetic import correct_phonetic_in_text
+                _phonetic_module = correct_phonetic_in_text
+            except ImportError:
+                _phonetic_module = None  # 打包环境下可能两个路径都失败
     return _phonetic_module
 
 
@@ -256,8 +259,8 @@ class Translator:
 如果你认为单词拼写错误，请提示我最可能的正确拼写，否则请严格按照下面格式给到翻译结果：
 
 <单词>
-[<语种>]· /[<音标>]
-[<词性缩写>] <中文含义>]
+[<语种>]· [<音标>]
+[<词性缩写>] <中文含义>
 例句：
 <序号><例句>(例句翻译)
 词源：
@@ -561,8 +564,14 @@ Examples:
         """用 CMU 字典音标替换 AI 生成的音标"""
         try:
             correct_fn = _get_phonetic_module()
+            if correct_fn is None:
+                log_info("[音标] 音标模块加载失败，跳过替换")
+                return translated_text
             return correct_fn(translated_text, original_word)
-        except Exception:
+        except Exception as e:
+            log_info(f"[音标] 音标替换异常: {e}")
+            import traceback
+            traceback.print_exc()
             return translated_text
 
 

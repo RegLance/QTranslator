@@ -12,15 +12,19 @@ from typing import Optional, Dict, Tuple, List
 _log_info = None
 
 def _get_log_info():
-    """惰性获取 log_info 函数"""
+    """惰性获取 log_info 函数，导入失败则回退到 print"""
     global _log_info
     if _log_info is None:
         try:
             from ..utils.logger import log_info
             _log_info = log_info
         except ImportError:
-            from src.utils.logger import log_info
-            _log_info = log_info
+            try:
+                from src.utils.logger import log_info
+                _log_info = log_info
+            except ImportError:
+                # 打包环境下可能两个路径都失败，回退到 print
+                _log_info = print
     return _log_info
 
 
@@ -80,7 +84,8 @@ _loaded: bool = False
 def _get_data_dir() -> Path:
     """获取数据目录路径 (兼容开发环境和 PyInstaller 打包环境)"""
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        base = Path(sys._MEIPASS)
+        # PyInstaller 打包后，数据文件在 _MEIPASS/src/data 下
+        base = Path(sys._MEIPASS) / 'src'
     else:
         base = Path(__file__).parent.parent  # src/
     return base / 'data'

@@ -187,6 +187,10 @@ class Config:
                 'edge_rate': '+0%',  # Edge 语速，如 +20% / -10%
                 'edge_volume': '+0%',
             },
+            'phonetic': {
+                'enabled': True,  # 用本地开源词典(ipa-dict)替换大模型生成的英文音标，
+                                  # 同时显示英式/美式音标（谷歌/Oxford 风格，相同则合并显示一个）
+            },
         }
 
     def _merge_with_defaults(self, config: Dict[str, Any]) -> Dict[str, Any]:

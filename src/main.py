@@ -142,6 +142,21 @@ class StyledSpinBox(QSpinBox):
         super().mouseMoveEvent(event)
 
 
+class ClickableLabel(QLabel):
+    """可点击标签（用于快捷键清除按钮，避免 QPushButton 在 Windows 上的默认焦点框）"""
+
+    clicked = pyqtSignal()
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.pos()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
 # ============================================================================
 # 全局异常处理器和闪退日志机制
 # ============================================================================
@@ -585,7 +600,9 @@ class SettingsDialog(QDialog):
         self._hotkey_btn.setObjectName("hotkeyBtn")
         self._hotkey_btn.setMinimumHeight(32)
         self._hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._hotkey_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._hotkey_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._hotkey_btn.setAutoDefault(False)
+        self._hotkey_btn.setDefault(False)
         self._hotkey_label = QLabel("唤醒翻译窗口:")
         self._hotkey_row, self._hotkey_clear_btn = self._create_hotkey_row(self._hotkey_btn)
         hotkey_layout.addRow(self._hotkey_label, self._hotkey_row)
@@ -595,7 +612,9 @@ class SettingsDialog(QDialog):
         self._writing_hotkey_btn.setObjectName("hotkeyBtn2")
         self._writing_hotkey_btn.setMinimumHeight(32)
         self._writing_hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._writing_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._writing_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._writing_hotkey_btn.setAutoDefault(False)
+        self._writing_hotkey_btn.setDefault(False)
         self._writing_hotkey_label = QLabel("划词写作:")
         self._writing_hotkey_row, self._writing_hotkey_clear_btn = self._create_hotkey_row(
             self._writing_hotkey_btn
@@ -606,7 +625,9 @@ class SettingsDialog(QDialog):
         self._selection_translate_hotkey_btn.setObjectName("hotkeyBtn3")
         self._selection_translate_hotkey_btn.setMinimumHeight(32)
         self._selection_translate_hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._selection_translate_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._selection_translate_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._selection_translate_hotkey_btn.setAutoDefault(False)
+        self._selection_translate_hotkey_btn.setDefault(False)
         self._selection_translate_hotkey_label = QLabel("选中翻译:")
         self._selection_translate_hotkey_row, self._selection_translate_hotkey_clear_btn = (
             self._create_hotkey_row(self._selection_translate_hotkey_btn)
@@ -1088,11 +1109,12 @@ class SettingsDialog(QDialog):
                 border-color: {t['accent_color']};
             }}
             QPushButton#hotkeyBtn:focus, QPushButton#hotkeyBtn2:focus, QPushButton#hotkeyBtn3:focus, QPushButton#hotkeyBtn4:focus {{
-                border-color: {t['accent_color']};
-                background-color: {t['accent_color']};
-                color: #ffffff;
+                outline: none;
+                border: 1px solid {t['input_border']};
+                background-color: {t['input_bg']};
+                color: {t['text_primary']};
             }}
-            QPushButton#hotkeyClearBtn {{
+            QLabel#hotkeyClearBtn {{
                 background-color: transparent;
                 border: 1px solid {t['input_border']};
                 border-radius: 6px;
@@ -1101,19 +1123,10 @@ class SettingsDialog(QDialog):
                 font-weight: bold;
                 padding: 0;
             }}
-            QPushButton#hotkeyClearBtn:hover {{
-                border-color: {t['accent_color']};
+            QLabel#hotkeyClearBtn:hover {{
+                border: 1px solid {t['input_border']};
                 color: {t['text_primary']};
                 background-color: {t['button_hover']};
-            }}
-            QPushButton#hotkeyClearBtn:pressed {{
-                background-color: {t['input_bg']};
-            }}
-            QPushButton#hotkeyClearBtn:focus {{
-                outline: none;
-                border: 1px solid {t['input_border']};
-                color: {t['text_muted']};
-                background-color: transparent;
             }}
 
             /* 复选框 */
@@ -1200,12 +1213,11 @@ class SettingsDialog(QDialog):
         layout.setSpacing(6)
         hotkey_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        clear_btn = QPushButton("×")
+        clear_btn = ClickableLabel("×")
         clear_btn.setObjectName("hotkeyClearBtn")
         clear_btn.setFixedSize(32, 32)
-        clear_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        clear_btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
         clear_btn.setToolTip("清除快捷键")
-        clear_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         layout.addWidget(hotkey_btn)
         layout.addWidget(clear_btn)
@@ -1215,6 +1227,16 @@ class SettingsDialog(QDialog):
         """根据快捷键值更新按钮显示文本"""
         btn.setText(value if value else "点击设置快捷键")
 
+    def _release_hotkey_focus(self):
+        """清除快捷键按钮的焦点，避免出现主题色边框"""
+        for btn in (
+            self._hotkey_btn,
+            self._writing_hotkey_btn,
+            self._selection_translate_hotkey_btn,
+        ):
+            btn.clearFocus()
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+
     def _clear_hotkey(self, target: str):
         """清除指定快捷键"""
         if getattr(self, '_capturing_hotkey_target', None) == target:
@@ -1223,33 +1245,29 @@ class SettingsDialog(QDialog):
         if target == "translator":
             self._hotkey_value = ""
             self._set_hotkey_btn_text(self._hotkey_btn, "")
-            self._hotkey_btn.clearFocus()
         elif target == "writing":
             self._writing_hotkey_value = ""
             self._set_hotkey_btn_text(self._writing_hotkey_btn, "")
-            self._writing_hotkey_btn.clearFocus()
         elif target == "selection_translate":
             self._selection_translate_hotkey_value = ""
             self._set_hotkey_btn_text(self._selection_translate_hotkey_btn, "")
-            self._selection_translate_hotkey_btn.clearFocus()
 
-        # 避免焦点落到左侧快捷键按钮上出现主题色边框
-        self.setFocus(Qt.FocusReason.OtherFocusReason)
+        # 延迟到事件处理结束后再释放焦点，避免点击 × 后左侧按钮残留高亮
+        QTimer.singleShot(0, self._release_hotkey_focus)
 
     def _start_hotkey_capture(self, target: str):
         """开始捕获快捷键"""
         if target == "translator":
             self._hotkey_btn.setText("请按下快捷键...")
-            self._hotkey_btn.setFocus()
             self._capturing_hotkey_target = "translator"
         elif target == "writing":
             self._writing_hotkey_btn.setText("请按下快捷键...")
-            self._writing_hotkey_btn.setFocus()
             self._capturing_hotkey_target = "writing"
         elif target == "selection_translate":
             self._selection_translate_hotkey_btn.setText("请按下快捷键...")
-            self._selection_translate_hotkey_btn.setFocus()
             self._capturing_hotkey_target = "selection_translate"
+        # 焦点放在对话框上接收按键，避免快捷键按钮出现主题色边框
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def keyPressEvent(self, event):
         """键盘事件处理 - 用于捕获快捷键"""
@@ -1290,6 +1308,7 @@ class SettingsDialog(QDialog):
                 self._set_hotkey_btn_text(self._selection_translate_hotkey_btn, hotkey)
 
             self._capturing_hotkey_target = None
+            QTimer.singleShot(0, self._release_hotkey_focus)
             return
 
         super().keyPressEvent(event)

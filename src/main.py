@@ -1102,12 +1102,12 @@ class SettingsDialog(QDialog):
                 padding: 0;
             }}
             QPushButton#hotkeyClearBtn:hover {{
-                border-color: #e74c3c;
-                color: #e74c3c;
-                background-color: rgba(231, 76, 60, 0.12);
+                border-color: {t['accent_color']};
+                color: {t['text_primary']};
+                background-color: {t['button_hover']};
             }}
             QPushButton#hotkeyClearBtn:pressed {{
-                background-color: rgba(231, 76, 60, 0.22);
+                background-color: {t['input_bg']};
             }}
 
             /* 复选框 */

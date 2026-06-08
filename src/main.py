@@ -1109,6 +1109,12 @@ class SettingsDialog(QDialog):
             QPushButton#hotkeyClearBtn:pressed {{
                 background-color: {t['input_bg']};
             }}
+            QPushButton#hotkeyClearBtn:focus {{
+                outline: none;
+                border: 1px solid {t['input_border']};
+                color: {t['text_muted']};
+                background-color: transparent;
+            }}
 
             /* 复选框 */
             QCheckBox {{
@@ -1217,12 +1223,18 @@ class SettingsDialog(QDialog):
         if target == "translator":
             self._hotkey_value = ""
             self._set_hotkey_btn_text(self._hotkey_btn, "")
+            self._hotkey_btn.clearFocus()
         elif target == "writing":
             self._writing_hotkey_value = ""
             self._set_hotkey_btn_text(self._writing_hotkey_btn, "")
+            self._writing_hotkey_btn.clearFocus()
         elif target == "selection_translate":
             self._selection_translate_hotkey_value = ""
             self._set_hotkey_btn_text(self._selection_translate_hotkey_btn, "")
+            self._selection_translate_hotkey_btn.clearFocus()
+
+        # 避免焦点落到左侧快捷键按钮上出现主题色边框
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _start_hotkey_capture(self, target: str):
         """开始捕获快捷键"""

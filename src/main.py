@@ -587,7 +587,8 @@ class SettingsDialog(QDialog):
         self._hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._hotkey_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._hotkey_label = QLabel("唤醒翻译窗口:")
-        hotkey_layout.addRow(self._hotkey_label, self._hotkey_btn)
+        self._hotkey_row, self._hotkey_clear_btn = self._create_hotkey_row(self._hotkey_btn)
+        hotkey_layout.addRow(self._hotkey_label, self._hotkey_row)
 
         # 写作快捷键按钮
         self._writing_hotkey_btn = QPushButton("Ctrl+I")
@@ -596,7 +597,10 @@ class SettingsDialog(QDialog):
         self._writing_hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._writing_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._writing_hotkey_label = QLabel("划词写作:")
-        hotkey_layout.addRow(self._writing_hotkey_label, self._writing_hotkey_btn)
+        self._writing_hotkey_row, self._writing_hotkey_clear_btn = self._create_hotkey_row(
+            self._writing_hotkey_btn
+        )
+        hotkey_layout.addRow(self._writing_hotkey_label, self._writing_hotkey_row)
 
         self._selection_translate_hotkey_btn = QPushButton("Ctrl+Shift+T")
         self._selection_translate_hotkey_btn.setObjectName("hotkeyBtn3")
@@ -604,10 +608,13 @@ class SettingsDialog(QDialog):
         self._selection_translate_hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._selection_translate_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._selection_translate_hotkey_label = QLabel("选中翻译:")
-        hotkey_layout.addRow(self._selection_translate_hotkey_label, self._selection_translate_hotkey_btn)
+        self._selection_translate_hotkey_row, self._selection_translate_hotkey_clear_btn = (
+            self._create_hotkey_row(self._selection_translate_hotkey_btn)
+        )
+        hotkey_layout.addRow(self._selection_translate_hotkey_label, self._selection_translate_hotkey_row)
 
         # 快捷键提示文字
-        self._hotkey_hint_label = QLabel("点击按钮后按下新的快捷键组合")
+        self._hotkey_hint_label = QLabel("点击按钮后按下新的快捷键组合，点击 × 可清除")
         self._hotkey_hint_label.setProperty("class", "hint")
         self._hotkey_hint_label.setWordWrap(True)
         hotkey_layout.addRow("", self._hotkey_hint_label)
@@ -622,6 +629,11 @@ class SettingsDialog(QDialog):
         self._writing_hotkey_btn.clicked.connect(lambda: self._start_hotkey_capture("writing"))
         self._selection_translate_hotkey_btn.clicked.connect(
             lambda: self._start_hotkey_capture("selection_translate")
+        )
+        self._hotkey_clear_btn.clicked.connect(lambda: self._clear_hotkey("translator"))
+        self._writing_hotkey_clear_btn.clicked.connect(lambda: self._clear_hotkey("writing"))
+        self._selection_translate_hotkey_clear_btn.clicked.connect(
+            lambda: self._clear_hotkey("selection_translate")
         )
 
         scroll_layout.addWidget(self._hotkey_group)
@@ -1080,6 +1092,23 @@ class SettingsDialog(QDialog):
                 background-color: {t['accent_color']};
                 color: #ffffff;
             }}
+            QPushButton#hotkeyClearBtn {{
+                background-color: transparent;
+                border: 1px solid {t['input_border']};
+                border-radius: 6px;
+                color: {t['text_muted']};
+                font-size: 16px;
+                font-weight: bold;
+                padding: 0;
+            }}
+            QPushButton#hotkeyClearBtn:hover {{
+                border-color: #e74c3c;
+                color: #e74c3c;
+                background-color: rgba(231, 76, 60, 0.12);
+            }}
+            QPushButton#hotkeyClearBtn:pressed {{
+                background-color: rgba(231, 76, 60, 0.22);
+            }}
 
             /* 复选框 */
             QCheckBox {{
@@ -1157,6 +1186,44 @@ class SettingsDialog(QDialog):
             self._config.get('theme.custom_bg', '#2d2d2d'),
         )
 
+    def _create_hotkey_row(self, hotkey_btn: QPushButton):
+        """创建「快捷键按钮 + 清除按钮」行布局"""
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        hotkey_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        clear_btn = QPushButton("×")
+        clear_btn.setObjectName("hotkeyClearBtn")
+        clear_btn.setFixedSize(32, 32)
+        clear_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        clear_btn.setToolTip("清除快捷键")
+        clear_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        layout.addWidget(hotkey_btn)
+        layout.addWidget(clear_btn)
+        return row, clear_btn
+
+    def _set_hotkey_btn_text(self, btn: QPushButton, value: str):
+        """根据快捷键值更新按钮显示文本"""
+        btn.setText(value if value else "点击设置快捷键")
+
+    def _clear_hotkey(self, target: str):
+        """清除指定快捷键"""
+        if getattr(self, '_capturing_hotkey_target', None) == target:
+            self._capturing_hotkey_target = None
+
+        if target == "translator":
+            self._hotkey_value = ""
+            self._set_hotkey_btn_text(self._hotkey_btn, "")
+        elif target == "writing":
+            self._writing_hotkey_value = ""
+            self._set_hotkey_btn_text(self._writing_hotkey_btn, "")
+        elif target == "selection_translate":
+            self._selection_translate_hotkey_value = ""
+            self._set_hotkey_btn_text(self._selection_translate_hotkey_btn, "")
+
     def _start_hotkey_capture(self, target: str):
         """开始捕获快捷键"""
         if target == "translator":
@@ -1202,13 +1269,13 @@ class SettingsDialog(QDialog):
             # 更新对应的快捷键
             if self._capturing_hotkey_target == "translator":
                 self._hotkey_value = hotkey
-                self._hotkey_btn.setText(hotkey)
+                self._set_hotkey_btn_text(self._hotkey_btn, hotkey)
             elif self._capturing_hotkey_target == "writing":
                 self._writing_hotkey_value = hotkey
-                self._writing_hotkey_btn.setText(hotkey)
+                self._set_hotkey_btn_text(self._writing_hotkey_btn, hotkey)
             elif self._capturing_hotkey_target == "selection_translate":
                 self._selection_translate_hotkey_value = hotkey
-                self._selection_translate_hotkey_btn.setText(hotkey)
+                self._set_hotkey_btn_text(self._selection_translate_hotkey_btn, hotkey)
 
             self._capturing_hotkey_target = None
             return
@@ -1336,18 +1403,18 @@ class SettingsDialog(QDialog):
         self._font_size_spin.setValue(font_size)
 
         # 快捷键
-        hotkey = self._config.get('hotkey.translator_window', 'Ctrl+O')
+        hotkey = self._config.get('hotkey.translator_window', 'Ctrl+O') or ''
         self._hotkey_value = hotkey
-        self._hotkey_btn.setText(hotkey)
+        self._set_hotkey_btn_text(self._hotkey_btn, hotkey)
 
         # 写作快捷键
-        writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+I')
+        writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+I') or ''
         self._writing_hotkey_value = writing_hotkey
-        self._writing_hotkey_btn.setText(writing_hotkey)
+        self._set_hotkey_btn_text(self._writing_hotkey_btn, writing_hotkey)
 
-        sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+Shift+T')
+        sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+Shift+T') or ''
         self._selection_translate_hotkey_value = sel_tr_hotkey
-        self._selection_translate_hotkey_btn.setText(sel_tr_hotkey)
+        self._set_hotkey_btn_text(self._selection_translate_hotkey_btn, sel_tr_hotkey)
 
         # 保留原文选项
         keep_original = self._config.get('writing.keep_original', False)
@@ -2040,17 +2107,32 @@ class MainController(QObject):
 
     def _register_all_hotkeys(self):
         """注册所有热键（支持重试）"""
-        hotkey = self._config.get('hotkey.translator_window', 'Ctrl+O')
-        success1 = self._hotkey_manager.register_hotkey(hotkey, name="translator_window")
-        log_debug(f"注册翻译窗口热键: {hotkey}, 结果: {success1}")
+        hotkey = self._config.get('hotkey.translator_window', 'Ctrl+O') or ''
+        if hotkey.strip():
+            success1 = self._hotkey_manager.register_hotkey(hotkey, name="translator_window")
+            log_debug(f"注册翻译窗口热键: {hotkey}, 结果: {success1}")
+        else:
+            self._hotkey_manager.unregister_hotkey("translator_window")
+            success1 = True
+            log_debug("翻译窗口热键未设置，已跳过注册")
 
-        writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+I')
-        success2 = self._hotkey_manager.register_hotkey(writing_hotkey, name="writing")
-        log_debug(f"注册写作热键: {writing_hotkey}, 结果: {success2}")
+        writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+I') or ''
+        if writing_hotkey.strip():
+            success2 = self._hotkey_manager.register_hotkey(writing_hotkey, name="writing")
+            log_debug(f"注册写作热键: {writing_hotkey}, 结果: {success2}")
+        else:
+            self._hotkey_manager.unregister_hotkey("writing")
+            success2 = True
+            log_debug("写作热键未设置，已跳过注册")
 
-        sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+Shift+T')
-        success3 = self._hotkey_manager.register_hotkey(sel_tr_hotkey, name="selection_translate")
-        log_debug(f"注册选中翻译热键: {sel_tr_hotkey}, 结果: {success3}")
+        sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+Shift+T') or ''
+        if sel_tr_hotkey.strip():
+            success3 = self._hotkey_manager.register_hotkey(sel_tr_hotkey, name="selection_translate")
+            log_debug(f"注册选中翻译热键: {sel_tr_hotkey}, 结果: {success3}")
+        else:
+            self._hotkey_manager.unregister_hotkey("selection_translate")
+            success3 = True
+            log_debug("选中翻译热键未设置，已跳过注册")
 
         if not success1 or not success2 or not success3:
             self._hotkey_retry_count += 1

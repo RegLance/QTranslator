@@ -171,6 +171,11 @@ class HotkeyManager(QObject):
         Returns:
             bool: 是否成功注册
         """
+        if not hotkey or not str(hotkey).strip():
+            if name in self._hotkeys:
+                self.unregister_hotkey(name)
+            return True
+
         # 验证格式是否可转换
         pynput_format = _convert_hotkey_format(hotkey)
         if pynput_format is None:
@@ -320,6 +325,10 @@ class HotkeyManager(QObject):
         Returns:
             bool: 是否成功更新
         """
+        if not new_hotkey or not str(new_hotkey).strip():
+            self.unregister_hotkey(name)
+            log_info(f"已清除全局热键: {name}")
+            return True
         return self.register_hotkey(new_hotkey, name=name)
 
     def get_hotkey(self, name: str = "translator_window") -> Optional[str]:

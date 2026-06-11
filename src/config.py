@@ -166,6 +166,9 @@ class Config:
             'popup': {
                 'opacity': 0.95,
             },
+            'selection': {
+                'enabled': True,  # 托盘右键「启用划词」开关
+            },
             'writing': {
                 'keep_original': False,  # 保留原文
                 'newline_hotkey': 'enter',  # 换行快捷键：enter / shift+enter / ctrl+enter

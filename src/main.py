@@ -2075,6 +2075,11 @@ class MainController(QObject):
         self._hotkey_manager = get_hotkey_manager()
         self._writing_service = get_writing_service()
 
+        # TextCapture 初始化时会自动启动 selection-hook；若用户上次关闭了划词，立即停掉
+        if not self._config.get('selection.enabled', True):
+            self._text_capture.stop_selection_hook()
+            self._selection_detector.set_enabled(False)
+
         # 翻译窗口实例
         self._translator_window = get_translator_window()
         self._current_worker = None
@@ -2351,9 +2356,13 @@ class MainController(QObject):
             self.initialized.emit()
 
     def start(self):
+        selection_enabled = self._config.get('selection.enabled', True)
+        self._selection_detector.set_enabled(selection_enabled)
         self._selection_detector.start()
+        if not selection_enabled:
+            self._text_capture.stop_selection_hook()
         self._tray_icon.show()
-        log_info(f"{APP_NAME} 已启动")
+        log_info(f"{APP_NAME} 已启动（划词{'已启用' if selection_enabled else '已禁用'}）")
         # 延迟预渲染所有窗口，消除首次打开延迟
         QTimer.singleShot(800, self._pre_render_windows)
 

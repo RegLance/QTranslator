@@ -145,7 +145,6 @@ class TrayIcon(QObject):
         # 启用/禁用选项
         self._enable_action = QAction("启用划词", self._menu)
         self._enable_action.setCheckable(True)
-        self._enable_action.setChecked(True)
         self._enable_action.setIcon(self._check_icon)  # 设置勾选图标
         self._enable_action.triggered.connect(self._on_enable_toggle)
         self._menu.addAction(self._enable_action)
@@ -214,6 +213,21 @@ class TrayIcon(QObject):
         # 连接信号
         self._tray.activated.connect(self._on_tray_activated)
 
+        # 从配置文件恢复「启用划词」状态
+        self._apply_enabled_state_from_config()
+
+    def _apply_enabled_state_from_config(self):
+        """从配置文件恢复启用/禁用状态（不触发 enabled_changed 信号）"""
+        enabled = get_config().get('selection.enabled', True)
+        self._is_enabled = enabled
+        self._enable_action.setChecked(enabled)
+        self._update_action_icon()
+        if self._tray:
+            if enabled:
+                self._tray.setIcon(self._create_enabled_icon())
+            else:
+                self._tray.setIcon(self._create_disabled_icon())
+
     def show(self):
         """显示托盘图标"""
         if self._tray:
@@ -236,10 +250,8 @@ class TrayIcon(QObject):
         self._enable_action.setChecked(enabled)
 
         if enabled:
-            self._tray.setToolTip(f"{APP_NAME} - 已启用")
             self._tray.setIcon(self._create_enabled_icon())
         else:
-            self._tray.setToolTip(f"{APP_NAME} - 已禁用")
             self._tray.setIcon(self._create_disabled_icon())
 
         self.enabled_changed.emit(enabled)
@@ -328,7 +340,11 @@ class TrayIcon(QObject):
     def _on_enable_toggle(self):
         """启用/禁用切换"""
         try:
-            self.set_enabled(self._enable_action.isChecked())
+            enabled = self._enable_action.isChecked()
+            config = get_config()
+            config.set('selection.enabled', enabled)
+            config.save()
+            self.set_enabled(enabled)
             self._update_action_icon()  # 立即更新图标
         except Exception as e:
             self._log_error("_on_enable_toggle", e)

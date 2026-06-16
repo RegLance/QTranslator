@@ -5,6 +5,7 @@
  * 输出格式：{"text": "选中的文本", "x": 100, "y": 200, "program": "程序名"}
  * 
  * 使用方式：node selection-service.js
+ * 黑名单：启动时读环境变量 QTRANSLATOR_BLACKLIST（JSON 数组）；运行中可通过 stdin 热更新。
  */
 
 const SelectionHook = require('selection-hook');
@@ -32,31 +33,52 @@ const INCLUDE_CLIPBOARD_DELAY_READ = [
     'foxitreader.exe',
 ];
 
-// Cherry Studio 同款：默认过滤掉明显不适合划词助手的程序，减少误触发。
-const PREDEFINED_BLACKLIST = [
-    'explorer.exe',
-    'snipaste.exe',
-    'pixpin.exe',
-    'sharex.exe',
-    'excel.exe',
-    'powerpnt.exe',
-    'photoshop.exe',
-    'illustrator.exe',
-    'adobe premiere pro.exe',
-    'afterfx.exe',
-    'adobe audition.exe',
-    'blender.exe',
-    '3dsmax.exe',
-    'maya.exe',
-    'acad.exe',
-    'sldworks.exe',
-    'mstsc.exe',
-];
-
 // 防抖控制
 let lastText = '';
 let lastTime = 0;
 const DEBOUNCE_MS = 100;
+
+/** @type {string[]} */
+let activeBlacklist = [];
+
+function normalizeProgramList(programs) {
+    if (!Array.isArray(programs)) {
+        return [];
+    }
+    return programs
+        .map((p) => String(p || '').trim().toLowerCase())
+        .filter(Boolean);
+}
+
+function readInitialBlacklistFromEnv() {
+    const raw = process.env.QTRANSLATOR_BLACKLIST;
+    if (!raw) {
+        return [];
+    }
+    try {
+        return normalizeProgramList(JSON.parse(raw));
+    } catch (_err) {
+        return [];
+    }
+}
+
+function applyBlacklist(programs) {
+    activeBlacklist = normalizeProgramList(programs);
+
+    if (!SelectionHook.FilterMode) {
+        return true;
+    }
+
+    if (activeBlacklist.length === 0) {
+        selectionHook.setGlobalFilterMode(SelectionHook.FilterMode.DEFAULT, []);
+    } else {
+        selectionHook.setGlobalFilterMode(
+            SelectionHook.FilterMode.EXCLUDE_LIST,
+            activeBlacklist,
+        );
+    }
+    return true;
+}
 
 function pointOrNull(point) {
     if (!point || point.x === SelectionHook.INVALID_COORDINATE || point.y === SelectionHook.INVALID_COORDINATE) {
@@ -80,7 +102,6 @@ function getSelectionPosition(data) {
         const mouseEnd = pointOrNull(data.mousePosEnd);
         if (mouseStart && mouseEnd) {
             const yDistance = mouseEnd.y - mouseStart.y;
-            const xDistance = mouseEnd.x - mouseStart.x;
             if (Math.abs(yDistance) > 14) {
                 return {
                     x: mouseEnd.x,
@@ -137,12 +158,7 @@ function configureSelectionHook() {
         );
     }
 
-    if (SelectionHook.FilterMode) {
-        selectionHook.setGlobalFilterMode(
-            SelectionHook.FilterMode.EXCLUDE_LIST,
-            PREDEFINED_BLACKLIST,
-        );
-    }
+    applyBlacklist(readInitialBlacklistFromEnv());
 }
 
 // 监听文本选择事件
@@ -224,6 +240,16 @@ rl.on('line', (line) => {
         const message = JSON.parse(line);
         if (message && message.cmd === 'get-current-selection') {
             emitCurrentSelection(message.id || null);
+            return;
+        }
+        if (message && message.cmd === 'set-blacklist') {
+            applyBlacklist(message.programs || []);
+            console.log(JSON.stringify({
+                type: 'blacklist-updated',
+                ok: true,
+                count: activeBlacklist.length,
+                timestamp: Date.now(),
+            }));
         }
     } catch (err) {
         console.error(JSON.stringify({ error: err.message }));

@@ -168,6 +168,7 @@ class Config:
             },
             'selection': {
                 'enabled': True,  # 托盘右键「启用划词」开关
+                'blacklist': None,  # 划词黑名单，None 表示使用内置默认列表
             },
             'writing': {
                 'keep_original': False,  # 保留原文

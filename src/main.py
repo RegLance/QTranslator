@@ -289,6 +289,12 @@ try:
     from .utils.history import add_translation_history
     from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
     from .utils.hotkey_manager import get_hotkey_manager
+    from .utils.selection_blacklist import (
+        normalize_blacklist_entries,
+        normalize_exe,
+        entries_for_config,
+        get_active_blacklist_exes,
+    )
     from .utils.tts import (
         EDGE_TTS_VOICE_PRESETS,
         EDGE_TTS_RATE_SLIDER_MIN,
@@ -316,6 +322,12 @@ except ImportError:
     from src.utils.history import add_translation_history
     from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
     from src.utils.hotkey_manager import get_hotkey_manager
+    from src.utils.selection_blacklist import (
+        normalize_blacklist_entries,
+        normalize_exe,
+        entries_for_config,
+        get_active_blacklist_exes,
+    )
     from src.utils.tts import (
         EDGE_TTS_VOICE_PRESETS,
         EDGE_TTS_RATE_SLIDER_MIN,
@@ -658,6 +670,90 @@ class SettingsDialog(QDialog):
         )
 
         scroll_layout.addWidget(self._hotkey_group)
+
+        # 划词黑名单
+        self._blacklist_group = QGroupBox("划词黑名单")
+        blacklist_outer = QVBoxLayout(self._blacklist_group)
+        blacklist_outer.setSpacing(8)
+        blacklist_outer.setContentsMargins(12, 20, 12, 12)
+
+        self._blacklist_hint_label = QLabel(
+            "左侧为划词黑名单（这些程序中不显示划词图标）；点击 → 移出后出现在右侧，"
+            "可从右侧点击 ← 重新加入黑名单。进程名可在任务管理器「详细信息」中查看。"
+        )
+        self._blacklist_hint_label.setProperty("class", "hint")
+        self._blacklist_hint_label.setWordWrap(True)
+        blacklist_outer.addWidget(self._blacklist_hint_label)
+
+        panels_row = QHBoxLayout()
+        panels_row.setSpacing(12)
+
+        # 左侧：黑名单
+        left_panel = QVBoxLayout()
+        left_panel.setSpacing(6)
+        self._blacklist_left_title = QLabel("黑名单")
+        self._blacklist_left_title.setProperty("class", "blacklistPanelTitle")
+        left_panel.addWidget(self._blacklist_left_title)
+
+        self._blacklist_active_host = QWidget()
+        self._blacklist_active_layout = QVBoxLayout(self._blacklist_active_host)
+        self._blacklist_active_layout.setContentsMargins(0, 0, 0, 0)
+        self._blacklist_active_layout.setSpacing(4)
+
+        self._blacklist_active_scroll = QScrollArea()
+        self._blacklist_active_scroll.setWidgetResizable(True)
+        self._blacklist_active_scroll.setFrameShape(QFrame.Shape.StyledPanel)
+        self._blacklist_active_scroll.setMinimumHeight(160)
+        self._blacklist_active_scroll.setMaximumHeight(200)
+        self._blacklist_active_scroll.setWidget(self._blacklist_active_host)
+        left_panel.addWidget(self._blacklist_active_scroll)
+
+        # 右侧：已移出
+        right_panel = QVBoxLayout()
+        right_panel.setSpacing(6)
+        self._blacklist_right_title = QLabel("已移出黑名单")
+        self._blacklist_right_title.setProperty("class", "blacklistPanelTitle")
+        right_panel.addWidget(self._blacklist_right_title)
+
+        self._blacklist_inactive_host = QWidget()
+        self._blacklist_inactive_layout = QVBoxLayout(self._blacklist_inactive_host)
+        self._blacklist_inactive_layout.setContentsMargins(0, 0, 0, 0)
+        self._blacklist_inactive_layout.setSpacing(4)
+
+        self._blacklist_inactive_scroll = QScrollArea()
+        self._blacklist_inactive_scroll.setWidgetResizable(True)
+        self._blacklist_inactive_scroll.setFrameShape(QFrame.Shape.StyledPanel)
+        self._blacklist_inactive_scroll.setMinimumHeight(160)
+        self._blacklist_inactive_scroll.setMaximumHeight(200)
+        self._blacklist_inactive_scroll.setWidget(self._blacklist_inactive_host)
+        right_panel.addWidget(self._blacklist_inactive_scroll)
+
+        panels_row.addLayout(left_panel, 1)
+        panels_row.addLayout(right_panel, 1)
+        blacklist_outer.addLayout(panels_row)
+
+        add_row = QWidget()
+        add_layout = QHBoxLayout(add_row)
+        add_layout.setContentsMargins(0, 0, 0, 0)
+        add_layout.setSpacing(8)
+        self._blacklist_app_edit = QLineEdit()
+        self._blacklist_app_edit.setPlaceholderText("应用名称")
+        self._blacklist_app_edit.setMinimumHeight(32)
+        self._blacklist_exe_edit = QLineEdit()
+        self._blacklist_exe_edit.setPlaceholderText("进程名，如 notepad.exe")
+        self._blacklist_exe_edit.setMinimumHeight(32)
+        self._blacklist_add_btn = QPushButton("添加")
+        self._blacklist_add_btn.setObjectName("blacklistAddBtn")
+        self._blacklist_add_btn.setMinimumHeight(32)
+        self._blacklist_add_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._blacklist_add_btn.clicked.connect(self._on_add_blacklist_entry)
+        add_layout.addWidget(self._blacklist_app_edit, 2)
+        add_layout.addWidget(self._blacklist_exe_edit, 2)
+        add_layout.addWidget(self._blacklist_add_btn, 0)
+        blacklist_outer.addWidget(add_row)
+
+        self._blacklist_entries = []
+        scroll_layout.addWidget(self._blacklist_group)
 
         # 写作设置组
         self._writing_group = QGroupBox("写作设置")
@@ -1129,6 +1225,57 @@ class SettingsDialog(QDialog):
                 background-color: {t['button_hover']};
             }}
 
+            QWidget#blacklistRow {{
+                background-color: transparent;
+            }}
+            QLabel[class="blacklistPanelTitle"] {{
+                color: {t['group_title']};
+                font-size: 13px;
+                font-weight: bold;
+            }}
+            QLabel#blacklistAppLabel {{
+                color: {t['text_primary']};
+                font-size: 13px;
+            }}
+            QLabel#blacklistExeLabel {{
+                color: {t['text_muted']};
+                font-size: 11px;
+            }}
+            QPushButton#blacklistMoveOutBtn, QPushButton#blacklistMoveInBtn {{
+                background-color: transparent;
+                border: 1px solid {t['input_border']};
+                border-radius: 6px;
+                color: {t['text_muted']};
+                font-size: 14px;
+                font-weight: bold;
+                min-width: 28px;
+                max-width: 28px;
+                min-height: 28px;
+                max-height: 28px;
+                padding: 0;
+            }}
+            QPushButton#blacklistMoveOutBtn:hover {{
+                border-color: {t['accent_color']};
+                color: {t['accent_color']};
+                background-color: {t['button_hover']};
+            }}
+            QPushButton#blacklistMoveInBtn:hover {{
+                border-color: {t['accent_color']};
+                color: {t['accent_color']};
+                background-color: {t['button_hover']};
+            }}
+            QPushButton#blacklistAddBtn {{
+                background-color: {t['input_bg']};
+                border: 1px solid {t['input_border']};
+                border-radius: 6px;
+                color: {t['text_primary']};
+                font-size: 13px;
+                padding: 4px 14px;
+            }}
+            QPushButton#blacklistAddBtn:hover {{
+                border-color: {t['accent_color']};
+            }}
+
             /* 复选框 */
             QCheckBox {{
                 color: {t['text_primary']};
@@ -1226,6 +1373,129 @@ class SettingsDialog(QDialog):
     def _set_hotkey_btn_text(self, btn: QPushButton, value: str):
         """根据快捷键值更新按钮显示文本"""
         btn.setText(value if value else "点击设置快捷键")
+
+    def _clear_blacklist_panel(self, layout: QVBoxLayout):
+        """清空某一侧黑名单列表 UI。"""
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+    def _create_blacklist_row_widget(
+        self,
+        entry: dict,
+        *,
+        side: str,
+        target_layout: QVBoxLayout,
+    ):
+        """创建黑名单行：side 为 active（左）或 inactive（右）。"""
+        row = QWidget()
+        row.setObjectName("blacklistRow")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(6)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(0)
+        app_label = QLabel(str(entry.get("app_name") or entry.get("exe", "")))
+        app_label.setObjectName("blacklistAppLabel")
+        exe_label = QLabel(str(entry.get("exe", "")))
+        exe_label.setObjectName("blacklistExeLabel")
+        text_col.addWidget(app_label)
+        text_col.addWidget(exe_label)
+
+        exe_key = str(entry.get("exe", ""))
+        if side == "active":
+            action_btn = QPushButton("→")
+            action_btn.setObjectName("blacklistMoveOutBtn")
+            action_btn.setToolTip("移出黑名单")
+            action_btn.clicked.connect(lambda _checked=False, e=exe_key: self._on_move_blacklist_out(e))
+        else:
+            action_btn = QPushButton("←")
+            action_btn.setObjectName("blacklistMoveInBtn")
+            action_btn.setToolTip("加入黑名单")
+            action_btn.clicked.connect(lambda _checked=False, e=exe_key: self._on_move_blacklist_in(e))
+
+        action_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+
+        layout.addLayout(text_col, 1)
+        layout.addWidget(action_btn, 0)
+        target_layout.addWidget(row)
+
+    def _reload_blacklist_ui(self, entries=None):
+        """根据条目数据刷新左右两侧黑名单列表。"""
+        if entries is None:
+            entries = normalize_blacklist_entries(self._config.get('selection.blacklist'))
+        self._blacklist_entries = normalize_blacklist_entries(entries)
+
+        active_entries = [e for e in self._blacklist_entries if e.get("enabled", True)]
+        inactive_entries = [e for e in self._blacklist_entries if not e.get("enabled", True)]
+
+        self._clear_blacklist_panel(self._blacklist_active_layout)
+        self._clear_blacklist_panel(self._blacklist_inactive_layout)
+
+        for entry in active_entries:
+            self._create_blacklist_row_widget(entry, side="active", target_layout=self._blacklist_active_layout)
+        for entry in inactive_entries:
+            self._create_blacklist_row_widget(entry, side="inactive", target_layout=self._blacklist_inactive_layout)
+
+        self._blacklist_active_layout.addStretch(1)
+        self._blacklist_inactive_layout.addStretch(1)
+
+        self._blacklist_left_title.setText(f"黑名单 ({len(active_entries)})")
+        self._blacklist_right_title.setText(f"已移出黑名单 ({len(inactive_entries)})")
+
+    def _collect_blacklist_entries_from_ui(self):
+        """收集当前黑名单配置（enabled=True 为左侧黑名单）。"""
+        return entries_for_config(self._blacklist_entries)
+
+    def _set_blacklist_entry_enabled(self, exe: str, enabled: bool):
+        """切换条目在左/右列表间的归属。"""
+        for item in self._blacklist_entries:
+            if item.get("exe") == exe:
+                item["enabled"] = enabled
+                break
+        self._reload_blacklist_ui(self._blacklist_entries)
+
+    def _on_move_blacklist_out(self, exe: str):
+        """从黑名单移出到右侧。"""
+        self._set_blacklist_entry_enabled(exe, False)
+
+    def _on_move_blacklist_in(self, exe: str):
+        """从右侧重新加入黑名单。"""
+        self._set_blacklist_entry_enabled(exe, True)
+
+    def _on_add_blacklist_entry(self):
+        """添加自定义条目到左侧黑名单。"""
+        exe = normalize_exe(self._blacklist_exe_edit.text())
+        app_name = self._blacklist_app_edit.text().strip()
+        if not exe:
+            self._show_message_dialog("提示", "请输入进程名，例如 notepad.exe", "warning")
+            return
+        if not app_name:
+            app_name = exe
+
+        for entry in self._blacklist_entries:
+            if entry.get("exe") == exe:
+                if entry.get("enabled", True):
+                    self._show_message_dialog("提示", f"{app_name} 已在黑名单中", "warning")
+                else:
+                    entry["app_name"] = app_name
+                    entry["enabled"] = True
+                    self._blacklist_exe_edit.clear()
+                    self._blacklist_app_edit.clear()
+                    self._reload_blacklist_ui(self._blacklist_entries)
+                return
+
+        self._blacklist_entries.append({
+            "exe": exe,
+            "app_name": app_name,
+            "enabled": True,
+        })
+        self._blacklist_exe_edit.clear()
+        self._blacklist_app_edit.clear()
+        self._reload_blacklist_ui(self._blacklist_entries)
 
     def _release_hotkey_focus(self):
         """清除快捷键按钮的焦点，避免出现主题色边框"""
@@ -1507,6 +1777,8 @@ class SettingsDialog(QDialog):
 
         self._auto_start_check.setChecked(self._config.get('startup.auto_start', False))
 
+        self._reload_blacklist_ui()
+
         # 禁用滚轮事件，避免误触
         self._disable_wheel_event(self._popup_style_combo)
         self._disable_wheel_event(self._lang_detect_combo)
@@ -1679,6 +1951,10 @@ class SettingsDialog(QDialog):
             old_sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+Shift+T')
             new_sel_tr_hotkey = self._selection_translate_hotkey_value
 
+            old_blacklist_exes = get_active_blacklist_exes(self._config.get('selection.blacklist'))
+            new_blacklist_entries = self._collect_blacklist_entries_from_ui()
+            new_blacklist_exes = get_active_blacklist_exes(new_blacklist_entries)
+
             # API 配置
             self._config.set('translator.base_url', self._api_url_edit.text().strip())
             self._config.set('translator.api_key', self._api_key_edit.text().strip())
@@ -1700,6 +1976,7 @@ class SettingsDialog(QDialog):
             self._config.set('hotkey.translator_window', new_hotkey)
             self._config.set('hotkey.writing', new_writing_hotkey)
             self._config.set('hotkey.selection_translate', new_sel_tr_hotkey)
+            self._config.set('selection.blacklist', new_blacklist_entries)
 
             # 写作设置
             keep_original = self._keep_original_check.isChecked()
@@ -1773,6 +2050,15 @@ class SettingsDialog(QDialog):
                     log_info(f"选中翻译热键已更新: {old_sel_tr_hotkey} -> {new_sel_tr_hotkey}")
                 except Exception as e:
                     log_error(f"更新选中翻译热键失败: {e}")
+
+            if old_blacklist_exes != new_blacklist_exes:
+                try:
+                    text_capture = get_text_capture()
+                    if text_capture.is_ready():
+                        text_capture.update_selection_blacklist(new_blacklist_exes)
+                    log_info(f"划词黑名单已更新: {len(old_blacklist_exes)} -> {len(new_blacklist_exes)} 项")
+                except Exception as e:
+                    log_error(f"更新划词黑名单失败: {e}")
 
             # 更新所有窗口主题
             self._update_all_themes()

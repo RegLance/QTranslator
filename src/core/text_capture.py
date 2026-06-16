@@ -137,6 +137,7 @@ class TextCapture:
         # 设置环境变量，确保原生模块可加载
         env = os.environ.copy()
         env['NODE_PATH'] = str(native_dir / "node_modules")
+        env['QTRANSLATOR_BLACKLIST'] = json.dumps(self._get_configured_blacklist_exes())
 
         try:
             # 启动 Node.js 子进程
@@ -502,6 +503,41 @@ class TextCapture:
     def is_ready(self) -> bool:
         """检查服务是否就绪"""
         return self._ready
+
+    def _get_configured_blacklist_exes(self) -> list:
+        """从配置文件读取当前启用的划词黑名单进程名。"""
+        try:
+            try:
+                from ..config import get_config
+                from ..utils.selection_blacklist import get_active_blacklist_exes
+            except ImportError:
+                from src.config import get_config
+                from src.utils.selection_blacklist import get_active_blacklist_exes
+            return get_active_blacklist_exes(get_config().get('selection.blacklist'))
+        except Exception:
+            return []
+
+    def update_selection_blacklist(self, programs: Optional[list] = None) -> bool:
+        """热更新 selection-hook 划词黑名单（保存设置后立即生效）。"""
+        if programs is None:
+            programs = self._get_configured_blacklist_exes()
+        if not self._process or not self._process.stdin:
+            return False
+        try:
+            self._process.stdin.write(json.dumps({
+                'cmd': 'set-blacklist',
+                'programs': programs,
+            }) + '\n')
+            self._process.stdin.flush()
+            print(f"[TextCapture] 划词黑名单已热更新: {len(programs)} 项", file=sys.stderr)
+            return True
+        except Exception as e:
+            print(f"[TextCapture] 更新划词黑名单失败: {e}", file=sys.stderr)
+            return False
+
+    def apply_blacklist_from_config(self) -> bool:
+        """从当前配置应用划词黑名单。"""
+        return self.update_selection_blacklist(self._get_configured_blacklist_exes())
 
     def stop_selection_hook(self):
         """终止 selection-hook 子进程（全局鼠标/文本钩子）。可与 start_selection_hook() 配对反复调用。"""

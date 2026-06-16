@@ -45,7 +45,8 @@ _KEY_MAP = {
     'right': '<right>',
 }
 
-# 功能键单独处理: F1~F24
+# 反引号键（Esc 下方、Tab 上方；中文键盘常标为 · 或 `）
+_GRAVE_KEY_ALIASES = frozenset({'`', '·', '~', '、', '｀', 'grave', 'backquote', 'backtick'})
 for _i in range(1, 25):
     _KEY_MAP[f'f{_i}'] = f'<f{_i}>'
 
@@ -68,6 +69,8 @@ def _convert_hotkey_format(hotkey: str) -> Optional[str]:
 
             if part_lower in _KEY_MAP:
                 converted.append(_KEY_MAP[part_lower])
+            elif part_lower in _GRAVE_KEY_ALIASES or part_stripped in _GRAVE_KEY_ALIASES:
+                converted.append('`')
             elif len(part_stripped) == 1:
                 # 单个字符键（字母、数字、符号）
                 converted.append(part_stripped.lower())

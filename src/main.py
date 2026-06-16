@@ -633,7 +633,7 @@ class SettingsDialog(QDialog):
         )
         hotkey_layout.addRow(self._writing_hotkey_label, self._writing_hotkey_row)
 
-        self._selection_translate_hotkey_btn = QPushButton("Ctrl+Shift+T")
+        self._selection_translate_hotkey_btn = QPushButton("Ctrl+`")
         self._selection_translate_hotkey_btn.setObjectName("hotkeyBtn3")
         self._selection_translate_hotkey_btn.setMinimumHeight(32)
         self._selection_translate_hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -655,7 +655,7 @@ class SettingsDialog(QDialog):
         # 存储当前快捷键值
         self._hotkey_value = "Ctrl+O"
         self._writing_hotkey_value = "Ctrl+I"
-        self._selection_translate_hotkey_value = "Ctrl+Shift+T"
+        self._selection_translate_hotkey_value = "Ctrl+`"
 
         # 监听按钮点击
         self._hotkey_btn.clicked.connect(lambda: self._start_hotkey_capture("translator"))
@@ -1713,7 +1713,7 @@ class SettingsDialog(QDialog):
         self._writing_hotkey_value = writing_hotkey
         self._set_hotkey_btn_text(self._writing_hotkey_btn, writing_hotkey)
 
-        sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+Shift+T') or ''
+        sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+`') or ''
         self._selection_translate_hotkey_value = sel_tr_hotkey
         self._set_hotkey_btn_text(self._selection_translate_hotkey_btn, sel_tr_hotkey)
 
@@ -1948,7 +1948,7 @@ class SettingsDialog(QDialog):
             old_writing_hotkey = self._config.get('hotkey.writing', 'Ctrl+I')
             new_writing_hotkey = self._writing_hotkey_value
 
-            old_sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+Shift+T')
+            old_sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+`')
             new_sel_tr_hotkey = self._selection_translate_hotkey_value
 
             old_blacklist_exes = get_active_blacklist_exes(self._config.get('selection.blacklist'))
@@ -2447,7 +2447,7 @@ class MainController(QObject):
             success2 = True
             log_debug("写作热键未设置，已跳过注册")
 
-        sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+Shift+T') or ''
+        sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+`') or ''
         if sel_tr_hotkey.strip():
             success3 = self._hotkey_manager.register_hotkey(sel_tr_hotkey, name="selection_translate")
             log_debug(f"注册选中翻译热键: {sel_tr_hotkey}, 结果: {success3}")
@@ -2729,11 +2729,12 @@ class MainController(QObject):
             self._translator_window.show_window()
 
     def _on_selection_translate_hotkey_triggered(self):
-        """选中内容翻译热键：主动取当前选区并打开翻译（适合 Excel / PowerPoint 等）。"""
+        """选中内容翻译热键：主动取当前选区并打开翻译（适合 Excel / PowerPoint 等）。
+
+        取词优先级：UIA → selection-hook（仅启用划词时）→ 剪贴板模拟 Ctrl+C。
+        「启用划词」关闭时仍可用 UIA 与剪贴板路径，仅跳过 selection-hook。
+        """
         log_debug("选中翻译热键触发")
-        if not self._tray_icon._is_enabled:
-            log_debug("翻译功能已禁用，跳过选中翻译")
-            return
 
         cursor_pos = QCursor.pos()
         mouse_pos = (cursor_pos.x(), cursor_pos.y())
@@ -2757,7 +2758,7 @@ class MainController(QObject):
                 f"len={len(text)}"
             )
 
-            if not text:
+            if not text and self._tray_icon._is_enabled:
                 hook_sel = self._text_capture.get_current_selection(timeout=0.65)
                 text = (hook_sel.text or "").strip()
                 if text:
@@ -2765,6 +2766,8 @@ class MainController(QObject):
                         f"选中翻译: selection-hook 查询 method={hook_sel.method}, "
                         f"error={hook_sel.error}"
                     )
+            elif not text:
+                log_debug("划词未启用，跳过 selection-hook 取词")
 
             editor_selection_state = self._get_foreground_editor_selection_state()
             if not text and editor_selection_state is not False:
@@ -3306,18 +3309,16 @@ class MainController(QObject):
         self._last_text = ""
 
     def _on_enabled_changed(self, enabled: bool):
-        # 关闭划词时完全停止 selection-hook 子进程，避免仍占用全局钩子并导致第三方应用卡顿；
-        # 启用时再启动子进程。
+        # 关闭划词时停止 selection-hook 子进程与划词图标检测；快捷键仍可用 UIA/剪贴板取词。
         if enabled:
             self._text_capture.start_selection_hook()
             self._selection_detector.set_enabled(True)
-            self._tray_icon.show_message(APP_NAME, "已启用", "info")
+            self._tray_icon.show_message(APP_NAME, "划词监听已启用", "info")
         else:
             self._selection_detector.set_enabled(False)
             self._translate_button.hide()
-            self._translator_window.hide()
             self._text_capture.stop_selection_hook()
-            self._tray_icon.show_message(APP_NAME, "已禁用", "info")
+            self._tray_icon.show_message(APP_NAME, "划词监听已禁用", "info")
 
     def _on_settings_requested(self):
         dialog = get_settings_dialog()

@@ -158,7 +158,7 @@ class Config:
             'hotkey': {
                 'translator_window': 'Ctrl+O',  # 唤醒翻译窗口的快捷键
                 'writing': 'Ctrl+I',  # 写作快捷键
-                'selection_translate': 'Ctrl+Shift+T',  # 当前窗口选中内容翻译（适合 Excel/PPT 等）
+                'selection_translate': 'Ctrl+`',  # 当前窗口选中内容翻译（Esc 下方 ` 键）
             },
             'startup': {
                 'auto_start': False,  # 开机自启

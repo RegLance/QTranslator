@@ -230,15 +230,12 @@ class WritingService:
     # Step 4: 混合输入策略（keyboard + 剪贴板）
     # ========================================================================
 
-    def _paste_via_clipboard(self, text: str):
+    def _paste_via_clipboard(self, text: str, deselect_with_right: bool = False):
         """通过剪贴板粘贴文本（同步恢复）
 
-        关键：粘贴后按 End 键取消选中。
-        很多应用（微信、钉钉、Word等）在 Ctrl+V 粘贴后会自动选中粘贴内容，
-        如果不取消选中，下一次粘贴或输入会替换掉之前粘贴的内容。
-        使用 End 而非 Right，因为 Right 在未选中时会多移一个字符位，
-        在某些应用中会导致光标跳行、产生额外换行等排版问题；
-        End 无论是否选中都移到行末，光标位置一致。
+        关键：粘贴后取消选中，避免下次输入替换已粘贴内容。
+        - 选区替换模式：用 Right 取消选中，光标停在译文末尾（行内后续文字之前）
+        - 全文替换模式：用 End 取消选中，避免 Right 在行末误跳下一行
         """
         try:
             import pyperclip
@@ -265,13 +262,12 @@ class WritingService:
             # 等待粘贴操作完成
             time.sleep(0.1)
 
-            # 按 End 键取消选中，防止应用自动选中粘贴内容
-            # 使用 End 而非 Right：
-            #   - 选中时：End 取消选中并移到行末 = 粘贴文本末尾 ✓
-            #   - 未选中时：End 移到行末 = 当前位置（已在一行末尾） ✓
-            #   - Right 在未选中时会多移一个字符，可能跳行或产生额外换行 ✗
+            # 取消粘贴后的选中状态
             with INPUT_LOCK:
-                keyboard.press_and_release('end')
+                if deselect_with_right:
+                    keyboard.press_and_release('right')
+                else:
+                    keyboard.press_and_release('end')
             time.sleep(0.02)
 
             # 同步恢复剪贴板
@@ -364,7 +360,10 @@ class WritingService:
                 else:
                     # 长文本用剪贴板粘贴
                     log_info(f"[长文本粘贴] 长度={len(segment)}, 内容前20字='{segment[:20]}...'")
-                    self._paste_via_clipboard(segment)
+                    self._paste_via_clipboard(
+                        segment,
+                        deselect_with_right=self._is_translate_selected_text,
+                    )
                     time.sleep(0.05)
 
             # 输入完成后确保修饰键释放
@@ -603,8 +602,11 @@ class WritingService:
                                 log_info(f"增量翻译: {len(actions)} 个操作")
                                 action = self._incremental_actions.pop()
                                 self._do_incremental_writing(action, on_complete)
-                                self._finish_writing(clean_text, on_complete,
-                                                     keep_original=keep_original)
+                                self._finish_writing(
+                                    clean_text, on_complete,
+                                    keep_original=keep_original,
+                                    translated_document=clean_text,
+                                )
                                 return
                     except Exception as e:
                         log_warning(f"增量翻译失败，退回全量翻译: {e}")
@@ -667,6 +669,9 @@ class WritingService:
                     # 删除占位符
                     self._delete_placeholder()
 
+                    # 去掉 API 首 chunk 可能夹带的 BOM / 前导空白，避免译文开头多字符
+                    chunk = chunk.lstrip('\ufeff').lstrip()
+
                     # 第一个 chunk：添加指纹（非选中文本模式）
                     if add_fingerprint and not has_selection:
                         chunk = self._add_fingerprint(chunk)
@@ -712,82 +717,47 @@ class WritingService:
     def _finish_writing(self, original_text: str,
                         on_complete: Callable[[WritingResult], None] = None,
                         result: WritingResult = None,
-                        keep_original: bool = False):
+                        keep_original: bool = False,
+                        translated_document: Optional[str] = None):
         """翻译完成后的收尾工作"""
         log_info(f"[收尾] keep_original={keep_original}, result_error={result.error if result else 'N/A'}")
 
         try:
             import keyboard
-            import pyperclip
 
             if keep_original:
                 if result and result.translated_text and not result.error:
                     self._previous_translated_text = result.translated_text
             else:
-                # 写 "✅" 动画反馈
+                # 写 "✅" 动画反馈（按实际字符数回退，避免多删译文末尾）
+                feedback = " ✅"
                 log_info("[收尾] 写入✅反馈")
                 with INPUT_LOCK:
-                    keyboard.write(" ✅")
+                    keyboard.write(feedback)
                 time.sleep(0.3)
                 with INPUT_LOCK:
-                    keyboard.press_and_release('backspace')
-                    keyboard.press_and_release('backspace')
-                    keyboard.press_and_release('backspace')
+                    for _ in range(len(feedback)):
+                        keyboard.press_and_release('backspace')
+                        time.sleep(0.01)
 
                 keyboard.release('ctrl')
                 keyboard.release('shift')
                 keyboard.release('alt')
 
-                # 全选并复制以读取当前文本
-                log_info("[收尾] ctrl+a -> ctrl+c 读取当前文本")
-                saved_clipboard = None
-                try:
-                    saved_clipboard = pyperclip.paste()
-                except Exception:
-                    pass
+                # 用已知译文更新状态，避免 ctrl+a 把光标移到全文末尾
+                stored_text = translated_document
+                if stored_text is None and result and result.translated_text and not result.error:
+                    stored_text = result.translated_text
 
-                with INPUT_LOCK:
-                    keyboard.press_and_release('ctrl+a')
-                    time.sleep(0.02)
-                    keyboard.press('ctrl')
-                    time.sleep(0.02)
-                    keyboard.press('c')
-                    time.sleep(0.02)
-                    keyboard.release('c')
-                    time.sleep(0.02)
-                    keyboard.release('ctrl')
-
-                keyboard.release('ctrl')
-                keyboard.release('shift')
-                keyboard.release('alt')
-                time.sleep(0.1)
-
-                try:
-                    current_text = pyperclip.paste()
-                    if current_text:
-                        fp_count = self._count_fingerprint(current_text)
-                        log_info(f"[收尾] 读取到输入框文本: len={len(current_text)}, 指纹数={fp_count}, "
-                                 f"前30字='{current_text[:30]}'")
-                        if fp_count > 0:
-                            self._fingerprint_count = (fp_count % FINGERPRINT_MAX_COUNT) + 1
-                        self._previous_translated_text = self._strip_fingerprint(current_text)
-                    else:
-                        log_warning("[收尾] 读取到空文本！")
-                except Exception as e:
-                    log_error(f"[收尾] 读取输入框文本失败: {e}")
-
-                if saved_clipboard:
-                    try:
-                        pyperclip.copy(saved_clipboard)
-                    except Exception:
-                        pass
-
-                with INPUT_LOCK:
-                    keyboard.press_and_release('right')
-
-                keyboard.release('ctrl')
-                keyboard.release('shift')
-                keyboard.release('alt')
+                if stored_text:
+                    fp_count = self._count_fingerprint(stored_text)
+                    log_info(f"[收尾] 更新译文状态: len={len(stored_text)}, 指纹数={fp_count}, "
+                             f"前30字='{stored_text[:30]}'")
+                    if fp_count > 0:
+                        self._fingerprint_count = (fp_count % FINGERPRINT_MAX_COUNT) + 1
+                    self._previous_translated_text = self._strip_fingerprint(stored_text)
+                else:
+                    log_warning("[收尾] 无可用译文，跳过状态更新")
 
         except Exception as e:
             log_error(f"写作收尾失败: {e}")
@@ -871,6 +841,19 @@ class WritingService:
         except Exception as e:
             log_error(f"准备输入位置失败: {e}")
 
+    def _should_animate_text(self, text: str) -> bool:
+        """判断文本是否适合逐字动画输入
+
+        零宽指纹字符和非 BMP 字符经 keyboard.write 逐字输入时容易出错，
+        改为剪贴板粘贴更可靠。
+        """
+        if not text:
+            return False
+        for char in text:
+            if char == FINGERPRINT_CHAR or ord(char) > 0xFFFF:
+                return False
+        return True
+
     def _stream_type_text(self, text: str):
         """流式输入文本（使用混合输入策略）"""
         if not text:
@@ -882,11 +865,16 @@ class WritingService:
             config = get_config()
             animation_enabled = config.get('writing.animation', True)
 
-            if not self._is_start_writing and animation_enabled:
+            if (not self._is_start_writing
+                    and animation_enabled
+                    and self._should_animate_text(text)):
                 self._is_start_writing = True
                 log_info(f"[流式输入] 第一个chunk, 动画模式, text='{text[:30]}...' (len={len(text)})")
                 self._write_text_hybrid(text, animated=True)
                 return
+
+            if not self._is_start_writing:
+                self._is_start_writing = True
 
             self._stream_buffer += text
 

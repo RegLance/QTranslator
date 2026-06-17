@@ -2819,11 +2819,6 @@ class MainController(QObject):
             log_debug("写作正在进行中，跳过")
             return
 
-        # 检查是否启用了翻译功能
-        if not self._tray_icon._is_enabled:
-            log_debug("翻译功能已禁用，跳过写作")
-            return
-
         try:
             import keyboard
             import pyperclip

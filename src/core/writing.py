@@ -3,13 +3,11 @@
 - 写作提示词逻辑（三段式结构）
 - 流式写作翻译
 - 文本替换/插入
-- 输入锁、占位符、指纹追踪
-- 增量翻译（diff 对比）
+- 输入锁
 - 混合输入策略（keyboard + 剪贴板）
 """
 import sys
 import time
-import difflib
 import threading
 from typing import Optional, Generator, Callable
 from dataclasses import dataclass
@@ -17,10 +15,6 @@ from pathlib import Path
 
 # 模块级常量
 INPUT_LOCK = threading.Lock()
-PLACEHOLDER_TEXT = "..."
-FINGERPRINT_CHAR = "\u200C"  # Zero Width Non-Joiner
-FINGERPRINT_MAX_COUNT = 7
-INCREMENTAL_MOD_THRESHOLD = 10  # 修改量小于此值走增量
 
 # 添加父目录到路径以支持相对导入
 _parent_dir = Path(__file__).parent.parent
@@ -51,6 +45,17 @@ def _log_keyboard_state(prefix: str = ""):
         pass
 
 
+def _release_modifier_keys():
+    """释放可能残留的修饰键"""
+    try:
+        import keyboard
+        keyboard.release('ctrl')
+        keyboard.release('shift')
+        keyboard.release('alt')
+    except Exception:
+        pass
+
+
 @dataclass
 class WritingResult:
     """写作结果"""
@@ -59,14 +64,6 @@ class WritingResult:
     source_language: Optional[str] = None
     target_language: Optional[str] = None
     error: Optional[str] = None
-
-
-@dataclass
-class IncrementalAction:
-    """增量翻译操作"""
-    left_arrow_count: int
-    right_arrow_count: int
-    insertion_content: str
 
 
 class WritingService:
@@ -78,15 +75,9 @@ class WritingService:
         self._current_thread: Optional[threading.Thread] = None
         self._stop_flag = False
         self._translator = None
-        # 增量翻译和指纹追踪状态
-        self._previous_translated_text: str = ""
-        self._fingerprint_count: int = 1
-        self._need_to_add_fingerprint: bool = False
-        self._is_translate_selected_text: bool = False
-        self._is_start_writing: bool = False
-        self._incremental_actions: list = []
+        self._is_start_writing = False
         self._stream_buffer: str = ""
-        self._chunk_count: int = 0  # 调试用：跟踪 chunk 数量
+        self._chunk_count: int = 0
         self._load_api_config()
 
     def _get_translator(self):
@@ -99,10 +90,6 @@ class WritingService:
                 from src.core.translator import get_translator
                 self._translator = get_translator()
         return self._translator
-
-    # ========================================================================
-    # Step 3: 改进提示词（三段式结构）
-    # ========================================================================
 
     def _build_writing_prompt(self, text: str, source_lang: str, target_lang: str) -> tuple:
         """构建写作提示词（三段式结构）"""
@@ -135,10 +122,6 @@ class WritingService:
         content_prompt = text
         return (role_prompt, command_prompt, content_prompt)
 
-    # ========================================================================
-    # 语言检测与 API 配置
-    # ========================================================================
-
     def get_writing_target_language(self, text: str) -> tuple:
         """根据源文本确定写作目标语言"""
         source_lang, target_lang, source_code = get_translation_direction(text)
@@ -153,10 +136,6 @@ class WritingService:
         self._model = config.get('translator.model', '')
         self._timeout = config.get('translator.timeout', 60)
         self._no_proxy = config.get('translator.no_proxy', '109.105.120.122')
-
-    # ========================================================================
-    # 流式翻译 API 调用
-    # ========================================================================
 
     def writing_stream(self, text: str,
                        on_chunk: Callable[[str], None] = None) -> Generator[str, None, None]:
@@ -226,16 +205,10 @@ class WritingService:
 
             yield f"[错误: {error_msg}]"
 
-    # ========================================================================
-    # Step 4: 混合输入策略（keyboard + 剪贴板）
-    # ========================================================================
-
-    def _paste_via_clipboard(self, text: str, deselect_with_right: bool = False):
+    def _paste_via_clipboard(self, text: str):
         """通过剪贴板粘贴文本（同步恢复）
 
-        关键：粘贴后取消选中，避免下次输入替换已粘贴内容。
-        - 选区替换模式：用 Right 取消选中，光标停在译文末尾（行内后续文字之前）
-        - 全文替换模式：用 End 取消选中，避免 Right 在行末误跳下一行
+        粘贴后按 End 键取消选中，避免部分应用在 Ctrl+V 后自动选中粘贴内容。
         """
         try:
             import pyperclip
@@ -259,27 +232,19 @@ class WritingService:
                 time.sleep(0.02)
                 keyboard.release('ctrl')
 
-            # 等待粘贴操作完成
             time.sleep(0.1)
 
-            # 取消粘贴后的选中状态
             with INPUT_LOCK:
-                if deselect_with_right:
-                    keyboard.press_and_release('right')
-                else:
-                    keyboard.press_and_release('end')
+                keyboard.press_and_release('end')
             time.sleep(0.02)
 
-            # 同步恢复剪贴板
             if saved_clipboard:
                 try:
                     pyperclip.copy(saved_clipboard)
                 except Exception:
                     pass
 
-            keyboard.release('ctrl')
-            keyboard.release('shift')
-            keyboard.release('alt')
+            _release_modifier_keys()
 
         except ImportError as e:
             log_error(f"缺少必要的库: {e}")
@@ -311,10 +276,7 @@ class WritingService:
                     keyboard.release(mod)
                     time.sleep(0.01)
 
-            # 确保修饰键释放
-            keyboard.release('ctrl')
-            keyboard.release('shift')
-            keyboard.release('alt')
+            _release_modifier_keys()
 
         except ImportError as e:
             log_error(f"缺少必要的库: {e}")
@@ -343,7 +305,6 @@ class WritingService:
                     continue
 
                 if animated and len(segment) < paste_threshold:
-                    # 动画逐字输入 — 每个 char 前检查修饰键
                     for char in segment:
                         if self._stop_flag:
                             return
@@ -352,204 +313,21 @@ class WritingService:
                             keyboard.write(char)
                         time.sleep(0.025)
                 elif len(segment) < paste_threshold:
-                    # 短文本直接 keyboard.write
                     _log_keyboard_state(f"[短文本输入] 即将输入 '{segment[:20]}...' 前")
                     with INPUT_LOCK:
                         keyboard.write(segment)
-                    _log_keyboard_state(f"[短文本输入] 输入后")
+                    _log_keyboard_state("[短文本输入] 输入后")
                 else:
-                    # 长文本用剪贴板粘贴
                     log_info(f"[长文本粘贴] 长度={len(segment)}, 内容前20字='{segment[:20]}...'")
-                    self._paste_via_clipboard(
-                        segment,
-                        deselect_with_right=self._is_translate_selected_text,
-                    )
+                    self._paste_via_clipboard(segment)
                     time.sleep(0.05)
 
-            # 输入完成后确保修饰键释放
-            keyboard.release('ctrl')
-            keyboard.release('shift')
-            keyboard.release('alt')
+            _release_modifier_keys()
 
         except ImportError as e:
             log_error(f"缺少必要的库: {e}")
         except Exception as e:
             log_error(f"混合输入失败: {e}")
-
-    # ========================================================================
-    # Step 5: 占位符机制
-    # ========================================================================
-
-    def _delete_placeholder(self):
-        """删除占位符文本（backspace 计数）"""
-        try:
-            import keyboard
-
-            placeholder_len = len(PLACEHOLDER_TEXT)
-            log_info(f"[占位符] 删除占位符, backspace次数={placeholder_len}, 占位符='{PLACEHOLDER_TEXT}'")
-
-            with INPUT_LOCK:
-                for _ in range(placeholder_len):
-                    keyboard.press_and_release('backspace')
-                    time.sleep(0.01)
-
-            keyboard.release('shift')
-            keyboard.release('ctrl')
-            keyboard.release('alt')
-            time.sleep(0.03)
-
-            _log_keyboard_state("[占位符] 删除后")
-
-        except ImportError as e:
-            log_error(f"缺少必要的库: {e}")
-        except Exception as e:
-            log_error(f"删除占位符失败: {e}")
-
-    # ========================================================================
-    # Step 6: 指纹追踪
-    # ========================================================================
-
-    def _add_fingerprint(self, text: str) -> str:
-        """给文本添加指纹字符"""
-        fingerprint = FINGERPRINT_CHAR * self._fingerprint_count
-        self._fingerprint_count = (self._fingerprint_count % FINGERPRINT_MAX_COUNT) + 1
-        return fingerprint + text
-
-    def _check_fingerprint(self, content: str) -> bool:
-        """检查内容是否带有当前指纹"""
-        if not content:
-            return False
-        fp = FINGERPRINT_CHAR * self._fingerprint_count
-        fp_next = FINGERPRINT_CHAR * (self._fingerprint_count + 1)
-        return content.startswith(fp) and not content.startswith(fp_next)
-
-    def _strip_fingerprint(self, content: str) -> str:
-        """去除内容开头的指纹字符"""
-        count = self._count_fingerprint(content)
-        return content[count:]
-
-    def _count_fingerprint(self, content: str) -> int:
-        """计算内容开头的指纹字符数量"""
-        count = 0
-        for char in content:
-            if char == FINGERPRINT_CHAR:
-                count += 1
-            else:
-                break
-        return count
-
-    # ========================================================================
-    # Step 7: 增量翻译（diff 对比）
-    # ========================================================================
-
-    def _compute_diff(self, old_text: str, new_text: str) -> tuple:
-        """计算两段文本的 diff"""
-        sm = difflib.SequenceMatcher(None, old_text, new_text, autojunk=False)
-        opcodes = sm.get_opcodes()
-        mod_count = sum(1 for tag, _, _, _, _ in opcodes if tag in ('replace', 'insert', 'delete'))
-        return opcodes, mod_count
-
-    def _build_incremental_actions(self, opcodes, new_text: str) -> list:
-        """根据 diff opcodes 构建增量翻译操作列表"""
-        actions = []
-        inserts = []
-        for tag, i1, i2, j1, j2 in opcodes:
-            if tag in ('insert', 'replace'):
-                content = new_text[j1:j2]
-                if content.strip():
-                    inserts.append({
-                        'content': content,
-                        'j1': j1,
-                        'j2': j2,
-                    })
-
-        if not inserts:
-            return actions
-
-        for idx, ins in enumerate(inserts):
-            content = ins['content']
-            leading_newlines = len(content) - len(content.lstrip('\n'))
-            trailing_newlines = len(content) - len(content.rstrip('\n'))
-
-            if idx == 0:
-                left_arrow = sum(len(inserts[k]['content']) for k in range(1, len(inserts)))
-                left_arrow += trailing_newlines
-                actions.append(IncrementalAction(
-                    left_arrow_count=left_arrow,
-                    right_arrow_count=0,
-                    insertion_content=content,
-                ))
-            else:
-                prev_ins = inserts[idx - 1]
-                right_arrow = ins['j1'] - prev_ins['j2'] + leading_newlines
-                actions.append(IncrementalAction(
-                    left_arrow_count=0,
-                    right_arrow_count=right_arrow,
-                    insertion_content=content,
-                ))
-
-        return actions
-
-    def _do_incremental_writing(self, action: IncrementalAction,
-                                on_complete: Callable[[WritingResult], None] = None):
-        """执行单个增量翻译操作"""
-        try:
-            import keyboard
-
-            if action.left_arrow_count > 0:
-                with INPUT_LOCK:
-                    for _ in range(action.left_arrow_count):
-                        keyboard.press_and_release('left')
-                        time.sleep(0.005)
-                time.sleep(0.02)
-            elif action.right_arrow_count > 0:
-                with INPUT_LOCK:
-                    for _ in range(action.right_arrow_count):
-                        keyboard.press_and_release('right')
-                        time.sleep(0.005)
-                time.sleep(0.02)
-
-            with INPUT_LOCK:
-                keyboard.press_and_release('shift+ctrl+right')
-                time.sleep(0.01)
-                keyboard.press_and_release('delete')
-            time.sleep(0.02)
-
-            keyboard.release('ctrl')
-            keyboard.release('shift')
-            keyboard.release('alt')
-
-            self._write_text_hybrid(PLACEHOLDER_TEXT, animated=False)
-            time.sleep(0.05)
-
-            result_text = ""
-            source_lang, target_lang = self.get_writing_target_language(action.insertion_content)
-
-            for chunk in self.writing_stream(action.insertion_content):
-                if self._stop_flag:
-                    break
-
-                if chunk and not chunk.startswith("[错误"):
-                    if not self._is_start_writing:
-                        self._is_start_writing = True
-                        self._delete_placeholder()
-
-                    self._stream_type_text(chunk)
-
-                result_text += chunk
-
-            self._flush_stream_buffer()
-
-            if not result_text or result_text.startswith("[错误"):
-                self._delete_placeholder()
-
-        except Exception as e:
-            log_error(f"增量翻译操作失败: {e}")
-            self._delete_placeholder()
-
-    # ========================================================================
-    # 写作主入口
-    # ========================================================================
 
     def writing_command(self, text: str, has_selection: bool = True,
                         keep_original: bool = False,
@@ -565,57 +343,18 @@ class WritingService:
 
         self._is_writing = True
         self._stop_flag = False
-        self._incremental_actions.clear()
         self._is_start_writing = False
         self._stream_buffer = ""
         self._chunk_count = 0
 
         def _writing_thread():
             try:
-                has_fingerprint = self._count_fingerprint(text) > 0
-                clean_text = self._strip_fingerprint(text) if has_fingerprint else text
-
                 log_info(f"[写作入口] has_selection={has_selection}, keep_original={keep_original}, "
-                         f"has_fingerprint={has_fingerprint}, text_len={len(clean_text)}")
-
-                if has_selection:
-                    self._is_translate_selected_text = True
-                    self._do_full_translation(
-                        clean_text, has_selection=True, keep_original=keep_original,
-                        add_fingerprint=False, on_complete=on_complete, on_chunk=on_chunk
-                    )
-                    return
-
-                self._is_translate_selected_text = False
-
-                if (self._previous_translated_text
-                        and has_fingerprint):
-                    try:
-                        opcodes, mod_count = self._compute_diff(
-                            self._previous_translated_text, clean_text
-                        )
-                        if 0 < mod_count < INCREMENTAL_MOD_THRESHOLD:
-                            actions = self._build_incremental_actions(opcodes, clean_text)
-                            if actions:
-                                actions.reverse()
-                                self._incremental_actions = actions
-                                log_info(f"增量翻译: {len(actions)} 个操作")
-                                action = self._incremental_actions.pop()
-                                self._do_incremental_writing(action, on_complete)
-                                self._finish_writing(
-                                    clean_text, on_complete,
-                                    keep_original=keep_original,
-                                    translated_document=clean_text,
-                                )
-                                return
-                    except Exception as e:
-                        log_warning(f"增量翻译失败，退回全量翻译: {e}")
-
+                         f"text_len={len(text)}")
                 self._do_full_translation(
-                    clean_text, has_selection=False, keep_original=keep_original,
-                    add_fingerprint=True, on_complete=on_complete, on_chunk=on_chunk
+                    text, has_selection=has_selection, keep_original=keep_original,
+                    on_complete=on_complete, on_chunk=on_chunk
                 )
-
             except Exception as e:
                 log_error(f"写作线程错误: {e}")
                 if on_complete:
@@ -631,67 +370,37 @@ class WritingService:
         self._current_thread.start()
 
     def _do_full_translation(self, text: str, has_selection: bool, keep_original: bool,
-                              add_fingerprint: bool,
                               on_complete: Callable[[WritingResult], None] = None,
                               on_chunk: Callable[[str], None] = None):
-        """执行全量翻译（内部方法）"""
+        """执行全量翻译"""
         result_text = ""
         source_lang, target_lang = self.get_writing_target_language(text)
 
-        log_info(f"[全量翻译] 开始: has_selection={has_selection}, keep_original={keep_original}, "
-                 f"add_fingerprint={add_fingerprint}")
+        log_info(f"[全量翻译] 开始: has_selection={has_selection}, keep_original={keep_original}")
 
-        # 1. 立即准备输入位置
         log_info("[全量翻译] Step1: 准备输入位置")
         self._prepare_for_input(has_selection, keep_original)
         time.sleep(0.05)
         _log_keyboard_state("[全量翻译] 准备输入位置后")
 
-        # 2. 写入占位符
-        log_info(f"[全量翻译] Step2: 写入占位符 '{PLACEHOLDER_TEXT}'")
-        self._write_text_hybrid(PLACEHOLDER_TEXT, animated=False)
-        time.sleep(0.05)
-        _log_keyboard_state("[全量翻译] 写入占位符后")
-
-        # 3. 开始流式翻译
-        log_info("[全量翻译] Step3: 开始流式翻译")
-        first_chunk = True
+        log_info("[全量翻译] Step2: 开始流式翻译")
         for chunk in self.writing_stream(text, on_chunk):
             if self._stop_flag:
                 break
 
             if chunk and not chunk.startswith("[错误"):
                 self._chunk_count += 1
-
-                if first_chunk:
-                    first_chunk = False
-                    log_info(f"[全量翻译] 收到第1个chunk: '{chunk[:30]}...' (len={len(chunk)})")
-                    # 删除占位符
-                    self._delete_placeholder()
-
-                    # 去掉 API 首 chunk 可能夹带的 BOM / 前导空白，避免译文开头多字符
-                    chunk = chunk.lstrip('\ufeff').lstrip()
-
-                    # 第一个 chunk：添加指纹（非选中文本模式）
-                    if add_fingerprint and not has_selection:
-                        chunk = self._add_fingerprint(chunk)
-                        self._need_to_add_fingerprint = True
-                        log_info(f"[全量翻译] 添加指纹后chunk: len={len(chunk)}, 指纹字符数={self._count_fingerprint(chunk)}")
-                else:
-                    if self._chunk_count <= 5:
-                        log_info(f"[全量翻译] 收到第{self._chunk_count}个chunk: '{chunk[:30]}' (len={len(chunk)})")
-
-                # 流式输入
+                if self._chunk_count <= 5:
+                    log_info(f"[全量翻译] 收到第{self._chunk_count}个chunk: "
+                             f"'{chunk[:30]}' (len={len(chunk)})")
                 self._stream_type_text(chunk)
                 _log_keyboard_state(f"[全量翻译] 第{self._chunk_count}个chunk输入后")
 
             result_text += chunk
 
-        # 刷新剩余的流式缓冲区
         self._flush_stream_buffer()
         log_info(f"[全量翻译] 流式翻译结束, 共{self._chunk_count}个chunk, result_len={len(result_text)}")
 
-        # 4. 翻译完成
         if not self._stop_flag and result_text and not result_text.startswith("[错误"):
             result = WritingResult(
                 original_text=text,
@@ -700,8 +409,6 @@ class WritingService:
                 target_language=target_lang
             )
         else:
-            if first_chunk:
-                self._delete_placeholder()
             result = WritingResult(
                 original_text=text,
                 translated_text=result_text,
@@ -711,66 +418,15 @@ class WritingService:
         if on_complete:
             on_complete(result)
 
-        self._finish_writing(text, on_complete=on_complete, result=result,
-                             keep_original=keep_original)
+        self._finish_writing(result=result)
 
-    def _finish_writing(self, original_text: str,
-                        on_complete: Callable[[WritingResult], None] = None,
-                        result: WritingResult = None,
-                        keep_original: bool = False,
-                        translated_document: Optional[str] = None):
-        """翻译完成后的收尾工作"""
-        log_info(f"[收尾] keep_original={keep_original}, result_error={result.error if result else 'N/A'}")
-
-        try:
-            import keyboard
-
-            if keep_original:
-                if result and result.translated_text and not result.error:
-                    self._previous_translated_text = result.translated_text
-            else:
-                # 写 "✅" 动画反馈（按实际字符数回退，避免多删译文末尾）
-                feedback = " ✅"
-                log_info("[收尾] 写入✅反馈")
-                with INPUT_LOCK:
-                    keyboard.write(feedback)
-                time.sleep(0.3)
-                with INPUT_LOCK:
-                    for _ in range(len(feedback)):
-                        keyboard.press_and_release('backspace')
-                        time.sleep(0.01)
-
-                keyboard.release('ctrl')
-                keyboard.release('shift')
-                keyboard.release('alt')
-
-                # 用已知译文更新状态，避免 ctrl+a 把光标移到全文末尾
-                stored_text = translated_document
-                if stored_text is None and result and result.translated_text and not result.error:
-                    stored_text = result.translated_text
-
-                if stored_text:
-                    fp_count = self._count_fingerprint(stored_text)
-                    log_info(f"[收尾] 更新译文状态: len={len(stored_text)}, 指纹数={fp_count}, "
-                             f"前30字='{stored_text[:30]}'")
-                    if fp_count > 0:
-                        self._fingerprint_count = (fp_count % FINGERPRINT_MAX_COUNT) + 1
-                    self._previous_translated_text = self._strip_fingerprint(stored_text)
-                else:
-                    log_warning("[收尾] 无可用译文，跳过状态更新")
-
-        except Exception as e:
-            log_error(f"写作收尾失败: {e}")
-
-        # 清理状态
+    def _finish_writing(self, result: WritingResult = None):
+        """翻译完成后的收尾：释放修饰键并清理状态"""
+        log_info(f"[收尾] result_error={result.error if result else 'N/A'}")
+        _release_modifier_keys()
         self._is_start_writing = False
-        self._need_to_add_fingerprint = False
         self._stream_buffer = ""
         log_info("[收尾] 状态已清理")
-
-    # ========================================================================
-    # 兼容性：保留旧接口
-    # ========================================================================
 
     def start_writing(self, text: str, has_selection: bool = True, keep_original: bool = False,
                       on_complete: Callable[[WritingResult], None] = None,
@@ -780,10 +436,6 @@ class WritingService:
             text, has_selection=has_selection, keep_original=keep_original,
             on_complete=on_complete, on_chunk=on_chunk
         )
-
-    # ========================================================================
-    # 输入准备和流式输入
-    # ========================================================================
 
     def _prepare_for_input(self, has_selection: bool, keep_original: bool = False):
         """准备输入位置"""
@@ -828,11 +480,8 @@ class WritingService:
                 log_info("[准备输入] 全选删除完成")
                 time.sleep(0.05)
 
-            # 显式释放修饰键
             log_info("[准备输入] 释放修饰键 ctrl/shift/alt")
-            keyboard.release('ctrl')
-            keyboard.release('shift')
-            keyboard.release('alt')
+            _release_modifier_keys()
             time.sleep(0.05)
             _log_keyboard_state("[准备输入] 释放修饰键后")
 
@@ -841,40 +490,20 @@ class WritingService:
         except Exception as e:
             log_error(f"准备输入位置失败: {e}")
 
-    def _should_animate_text(self, text: str) -> bool:
-        """判断文本是否适合逐字动画输入
-
-        零宽指纹字符和非 BMP 字符经 keyboard.write 逐字输入时容易出错，
-        改为剪贴板粘贴更可靠。
-        """
-        if not text:
-            return False
-        for char in text:
-            if char == FINGERPRINT_CHAR or ord(char) > 0xFFFF:
-                return False
-        return True
-
     def _stream_type_text(self, text: str):
         """流式输入文本（使用混合输入策略）"""
         if not text:
             return
 
         try:
-            import keyboard
-
             config = get_config()
             animation_enabled = config.get('writing.animation', True)
 
-            if (not self._is_start_writing
-                    and animation_enabled
-                    and self._should_animate_text(text)):
+            if not self._is_start_writing and animation_enabled:
                 self._is_start_writing = True
                 log_info(f"[流式输入] 第一个chunk, 动画模式, text='{text[:30]}...' (len={len(text)})")
                 self._write_text_hybrid(text, animated=True)
                 return
-
-            if not self._is_start_writing:
-                self._is_start_writing = True
 
             self._stream_buffer += text
 
@@ -899,10 +528,6 @@ class WritingService:
             self._stream_buffer = ""
         except Exception as e:
             log_error(f"刷新流式缓冲区失败: {e}")
-
-    # ========================================================================
-    # 控制方法
-    # ========================================================================
 
     def stop_writing(self):
         """停止写作"""

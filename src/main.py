@@ -2751,7 +2751,7 @@ class MainController(QObject):
             except Exception:
                 pass
 
-            current_selection = self._text_capture.get_selected_text_nextai_style()
+            current_selection = self._text_capture.get_selected_text_direct()
             text = (current_selection.text or "").strip()
             log_debug(
                 f"选中翻译: method={current_selection.method}, "
@@ -2834,7 +2834,7 @@ class MainController(QObject):
                 pass
             log_info(f"[写作诊断] 触发前剪贴板: {self._format_text_snapshot(saved_clipboard)}")
 
-            current_selection = self._text_capture.get_selected_text_nextai_style()
+            current_selection = self._text_capture.get_selected_text_direct()
             selected_text = current_selection.text or ""
             log_info(f"[写作诊断] 选区查询: method={current_selection.method}, "
                      f"error={current_selection.error}, "

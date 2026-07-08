@@ -857,6 +857,16 @@ class SettingsDialog(QDialog):
         self._always_on_top_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._always_on_top_hint_label)
 
+        # 划词查词勾选框
+        self._word_popup_check = QCheckBox("启用划词查词")
+        self._word_popup_check.toggled.connect(self._on_checkbox_toggled)
+        translator_window_layout.addWidget(self._word_popup_check)
+
+        self._word_popup_hint_label = QLabel("勾选后，在原文框或译文框中选中英文单词时，自动弹出单词释义和发音弹窗")
+        self._word_popup_hint_label.setProperty("class", "checkbox-hint")
+        self._word_popup_hint_label.setWordWrap(True)
+        translator_window_layout.addWidget(self._word_popup_hint_label)
+
         scroll_layout.addWidget(self._translator_window_group)
 
         # 朗读 TTS 设置
@@ -1340,7 +1350,8 @@ class SettingsDialog(QDialog):
         for cb in (self._auto_start_check, self._keep_original_check,
                    self._fixed_height_check, self._remember_size_check,
                    self._remember_position_check, self._always_on_top_check,
-                   self._polishing_show_diff_check, self._animation_check):
+                   self._polishing_show_diff_check, self._animation_check,
+                   self._word_popup_check):
             cb.setIcon(self._cached_check_icon if cb.isChecked() else self._cached_uncheck_icon)
         self._applied_theme_signature = self._get_theme_signature()
 
@@ -1775,6 +1786,10 @@ class SettingsDialog(QDialog):
         always_on_top = self._config.get('translator_window.always_on_top', False)
         self._always_on_top_check.setChecked(always_on_top)
 
+        # 划词查词选项
+        word_popup_enabled = self._config.get('word_popup.enabled', True)
+        self._word_popup_check.setChecked(word_popup_enabled)
+
         self._auto_start_check.setChecked(self._config.get('startup.auto_start', False))
 
         self._reload_blacklist_ui()
@@ -2010,6 +2025,10 @@ class SettingsDialog(QDialog):
             # 翻译窗口始终置顶
             always_on_top = self._always_on_top_check.isChecked()
             self._config.set('translator_window.always_on_top', always_on_top)
+
+            # 划词查词
+            word_popup_enabled = self._word_popup_check.isChecked()
+            self._config.set('word_popup.enabled', word_popup_enabled)
 
             auto_start = self._auto_start_check.isChecked()
             self._config.set('startup.auto_start', auto_start)

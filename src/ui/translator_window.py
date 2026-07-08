@@ -27,6 +27,7 @@ try:
     from ..config import get_config, APP_VERSION, VERSION_AUTHOR
     from ..utils.tts import get_tts
     from ..utils.tts_speak_indicator import TtsSpeakPrepareIndicator
+    from ..ui.word_popup import show_word_popup, is_english_word, get_word_popup
 except ImportError:
     from src.utils.theme import (
         get_theme,
@@ -41,6 +42,7 @@ except ImportError:
     from src.config import get_config, APP_VERSION, VERSION_AUTHOR
     from src.utils.tts import get_tts
     from src.utils.tts_speak_indicator import TtsSpeakPrepareIndicator
+    from src.ui.word_popup import show_word_popup, is_english_word, get_word_popup
 
 
 class AnimatedSplitterHandle(QSplitterHandle):
@@ -463,6 +465,12 @@ class TranslatorWindow(QWidget):
         self._collect_refresh_timer.setInterval(120)
         self._collect_refresh_timer.timeout.connect(self._refresh_collect_button_state)
 
+        # 单词选中弹窗防抖定时器
+        self._word_selection_timer = QTimer(self)
+        self._word_selection_timer.setSingleShot(True)
+        self._word_selection_timer.setInterval(300)
+        self._word_selection_timer.timeout.connect(self._check_word_selection)
+
         # 当前译文所对应的原文（新增收藏时校验，避免输入已改却仍配对旧译文）
         self._output_paired_source_text = ""
         self._pending_operation_source_text = ""
@@ -517,6 +525,9 @@ class TranslatorWindow(QWidget):
         except ImportError:
             from src.utils.theme import get_theme_manager
         get_theme_manager().theme_changed.connect(self.update_theme)
+
+        # 悬浮窗收藏变更 → 同步翻译窗口的收藏按钮状态
+        get_word_popup().collection_changed.connect(self._refresh_collect_button_state)
 
         # 首次启动时检查更新
         QTimer.singleShot(3000, self._check_for_update)
@@ -1151,6 +1162,9 @@ class TranslatorWindow(QWidget):
         self._input_text.customContextMenuRequested.connect(self._show_input_context_menu)
         self._input_text.setAcceptRichText(False)  # 禁用富文本
         self._input_text.installEventFilter(self)  # 安装事件过滤器以处理回车键
+        self._input_text.selectionChanged.connect(
+            lambda: self._on_text_selection_changed(self._input_text)
+        )
 
         self._input_collect_frame = QFrame(self._input_container)
         self._input_collect_frame.setObjectName("inputCollectFloatingFrame")
@@ -1232,6 +1246,9 @@ class TranslatorWindow(QWidget):
         self._output_text.customContextMenuRequested.connect(self._show_output_context_menu)
         self._output_text.setAcceptRichText(False)  # 禁用富文本
         self._output_text.installEventFilter(self)
+        self._output_text.selectionChanged.connect(
+            lambda: self._on_text_selection_changed(self._output_text)
+        )
 
         # 悬浮按钮容器（右下角）- 完全透明，无边框
         self._floating_buttons_frame = QFrame()
@@ -2793,6 +2810,40 @@ class TranslatorWindow(QWidget):
         except RuntimeError:
             # 窗口已被销毁，忽略
             pass
+
+    # ------------------------------------------------------------------
+    # 单词选中弹窗
+    # ------------------------------------------------------------------
+
+    def _on_text_selection_changed(self, text_edit: QTextEdit):
+        """文本选择变化时触发（防抖后检查是否为单词选中）。"""
+        self._pending_word_text_edit = text_edit
+        self._word_selection_timer.start()
+
+    def _check_word_selection(self):
+        """检查当前选中的文本是否是英文单词，如果是则弹出单词查询窗口。"""
+        if not get_config().get('word_popup.enabled', True):
+            return
+
+        text_edit = getattr(self, '_pending_word_text_edit', None)
+        if text_edit is None:
+            return
+
+        cursor = text_edit.textCursor()
+        if not cursor.hasSelection():
+            return
+
+        selected = cursor.selectedText().strip()
+        if not selected or not is_english_word(selected):
+            return
+
+        # 获取选中文本的屏幕坐标
+        rect = text_edit.cursorRect(cursor)
+        global_bottom_left = text_edit.viewport().mapToGlobal(
+            QPoint(rect.left(), rect.bottom() + 2)
+        )
+
+        show_word_popup(selected, global_bottom_left, text_edit)
 
     def _show_input_context_menu(self, pos):
         """显示输入框右键菜单"""

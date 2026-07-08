@@ -152,7 +152,7 @@ class WordVocabulary:
         except ValueError:
             pass
         self._schedule_save()
-        log_debug(f"单词收藏: 已删除「{w[:30]}」")
+        log_info(f"单词收藏: 已删除「{w[:30]}」")
         return True
 
     def list_items(self) -> List[VocabularyItem]:

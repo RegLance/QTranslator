@@ -110,9 +110,14 @@ class Translator:
         """获取最后的错误信息"""
         return self._last_error
 
+    # 提示词版本：修改单词模式/翻译模式 prompt 时递增此值，旧缓存自动失效
+    _PROMPT_VERSION = "3"
+
     def _get_cache_key(self, text: str, target_language: str, source_language: str = None) -> str:
-        """生成缓存键"""
-        return hashlib.md5(f"{text}:{source_language}:{target_language}".encode()).hexdigest()
+        """生成缓存键（含 prompt 版本，修改 prompt 后旧缓存自动失效）"""
+        return hashlib.md5(
+            f"{text}:{source_language}:{target_language}:v{self._PROMPT_VERSION}".encode()
+        ).hexdigest()
 
     def _put_cache(self, key: str, result: TranslationResult):
         """存入缓存（LRU 淘汰策略）"""
@@ -273,8 +278,10 @@ class Translator:
 [<词性缩写>] <中文含义>
 例句：
 <序号><例句>(例句翻译)
-词源：
-<词源>"""
+形态变化：
+复数: xxx / 第三人称单数: xxx / 过去式: xxx / 过去分词: xxx / 现在分词: xxx / 比较级: xxx / 最高级: xxx（只列出该单词实际有的变化，没有的写"无"）
+速记：
+<提供真正有效的记忆方法，优先使用：1. 词根词缀拆解 2. 谐音联想 3. 生活场景关联。如果找不到好的方法就写"无"，不要生搬硬凑。>"""
                 user_prompt = f"单词是：{text}"
 
                 # 用本地开源词典（ipa-dict）查询权威英美音标（已归一化为谷歌/Oxford 风格、

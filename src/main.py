@@ -946,6 +946,10 @@ class SettingsDialog(QDialog):
         self._auto_start_check.toggled.connect(self._on_checkbox_toggled)
         sys_layout.addWidget(self._auto_start_check)
 
+        self._disable_update_check = QCheckBox("禁用更新检查")
+        self._disable_update_check.toggled.connect(self._on_checkbox_toggled)
+        sys_layout.addWidget(self._disable_update_check)
+
         scroll_layout.addWidget(self._sys_group)
 
         self._scroll_area.setWidget(self._scroll_content)
@@ -1351,7 +1355,7 @@ class SettingsDialog(QDialog):
                    self._fixed_height_check, self._remember_size_check,
                    self._remember_position_check, self._always_on_top_check,
                    self._polishing_show_diff_check, self._animation_check,
-                   self._word_popup_check):
+                   self._word_popup_check, self._disable_update_check):
             cb.setIcon(self._cached_check_icon if cb.isChecked() else self._cached_uncheck_icon)
         self._applied_theme_signature = self._get_theme_signature()
 
@@ -1792,6 +1796,10 @@ class SettingsDialog(QDialog):
 
         self._auto_start_check.setChecked(self._config.get('startup.auto_start', False))
 
+        self._disable_update_check.setChecked(
+            not self._config.get('updater.enabled', True)
+        )
+
         self._reload_blacklist_ui()
 
         # 禁用滚轮事件，避免误触
@@ -2033,6 +2041,9 @@ class SettingsDialog(QDialog):
             auto_start = self._auto_start_check.isChecked()
             self._config.set('startup.auto_start', auto_start)
             setup_auto_start(auto_start)
+
+            disable_update = self._disable_update_check.isChecked()
+            self._config.set('updater.enabled', not disable_update)
 
             self._config.save()
 

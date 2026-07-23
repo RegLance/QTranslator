@@ -853,6 +853,20 @@ class TranslatorWindow(QWidget):
         title_layout.addWidget(self._title_label)
         title_layout.addStretch()
 
+        # 更新提示文字（初始隐藏，检测到新版本时显示）
+        self._update_label = QLabel("新版本可用，请点击 →")
+        self._update_label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._update_label.setStyleSheet(f"""
+            QLabel {{
+                color: {theme['accent_color']};
+                font-size: 11px;
+                font-weight: bold;
+            }}
+        """)
+        self._update_label.hide()
+        self._update_label.mousePressEvent = lambda e: self._on_update_clicked()
+        title_layout.addWidget(self._update_label)
+
         # 更新按钮（初始隐藏，检测到新版本时显示）
         self._update_btn = QPushButton("⬆️")
         self._update_btn.setObjectName("updateBtn")
@@ -1501,6 +1515,8 @@ class TranslatorWindow(QWidget):
 
     def _check_for_update(self):
         """启动版本更新检查（在后台线程中执行）"""
+        if not get_config().get('updater.enabled', True):
+            return
         if self._update_check_worker and self._update_check_worker.isRunning():
             return
 
@@ -1538,12 +1554,73 @@ class TranslatorWindow(QWidget):
         """检测到新版本可用"""
         self._update_available = True
         self._update_btn.show()
+        self._update_label.show()
         self._update_btn.setToolTip(f"新版本 {new_version} 可用，点击更新")
+        self._start_update_pulse()
 
     def _on_no_update(self):
         """无新版本"""
         self._update_available = False
         self._update_btn.hide()
+        self._update_label.hide()
+        self._stop_update_pulse()
+
+    def _start_update_pulse(self):
+        """启动更新按钮呼吸动画"""
+        if not hasattr(self, '_update_pulse_timer'):
+            self._update_pulse_timer = QTimer(self)
+            self._update_pulse_timer.setInterval(40)  # ~25fps
+            self._update_pulse_phase = 0.0
+            self._update_pulse_timer.timeout.connect(self._on_update_pulse)
+        self._update_pulse_timer.start()
+
+    def _stop_update_pulse(self):
+        """停止更新按钮呼吸动画"""
+        if hasattr(self, '_update_pulse_timer'):
+            self._update_pulse_timer.stop()
+            # 恢复默认样式
+            self._update_btn.setStyleSheet(self._update_btn.styleSheet())
+            self._update_label.setStyleSheet(self._update_label.styleSheet())
+
+    def _on_update_pulse(self):
+        """呼吸动画帧：按钮和文字同步缩放 + 透明度变化"""
+        import math
+        self._update_pulse_phase += 0.08
+        if self._update_pulse_phase > 2 * math.pi:
+            self._update_pulse_phase -= 2 * math.pi
+
+        intensity = math.sin(self._update_pulse_phase)
+        scale = 1.0 + intensity * 0.25
+        opacity = 0.5 + (intensity + 1.0) / 2.0 * 0.5
+
+        theme = get_theme(self._theme_style)
+        accent = QColor(theme.get('accent_color', '#4a9eff'))
+
+        btn_size = max(10, int(11 * scale + 0.5 * scale))
+        label_size = max(9, int(10 * scale + 0.5 * scale))
+        r, g, b = accent.red(), accent.green(), accent.blue()
+        alpha = int(255 * opacity)
+
+        self._update_btn.setStyleSheet(f"""
+            QPushButton#updateBtn {{
+                background-color: transparent;
+                border: none;
+                border-radius: 11px;
+                font-size: {btn_size}px;
+                padding-bottom: 2px;
+            }}
+            QPushButton#updateBtn:hover {{
+                background-color: rgba({r}, {g}, {b}, 0.3);
+            }}
+        """)
+
+        self._update_label.setStyleSheet(f"""
+            QLabel {{
+                color: rgba({r}, {g}, {b}, {alpha});
+                font-size: {label_size}px;
+                font-weight: bold;
+            }}
+        """)
 
     def _on_update_check_error(self):
         """更新检查失败"""
@@ -1778,6 +1855,14 @@ class TranslatorWindow(QWidget):
             }}
             QPushButton#updateBtn:hover {{
                 background-color: {theme['button_hover']};
+            }}
+        """)
+
+        self._update_label.setStyleSheet(f"""
+            QLabel {{
+                color: {theme['accent_color']};
+                font-size: 11px;
+                font-weight: bold;
             }}
         """)
 

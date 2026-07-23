@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import time as _time
 from typing import Optional
 
@@ -71,23 +72,51 @@ class _DictLookupWorker(QThread):
                 text = result.translated_text.strip()
                 if text and text != self._word:
                     lines = [l.strip() for l in text.split('\n') if l.strip()]
+
+                    # 按段落解析：释义 / 形态变化 / 速记
                     definition_lines = []
+                    forms_line = ""
+                    mnemonic_lines = []
+                    section = "def"  # def / forms / mnemonic
+
                     for line in lines:
-                        if any(line.startswith(t) for t in ['例句', '词源', '注意', '单词']):
-                            break
-                        if line.startswith('[') or any(
-                            line.startswith(f'{pos}.') or line.startswith(f'{pos} ')
-                            for pos in ['n', 'v', 'adj', 'adv', 'prep', 'conj', 'pron',
-                                        'int', 'interj', 'det', 'art', 'num', 'aux']
-                        ):
-                            definition_lines.append(line)
+                        if line.startswith('例句') or line.startswith('词源'):
+                            continue
+                        if line.startswith('形态变化'):
+                            section = "forms"
+                            forms_line = line[len('形态变化'):].strip().lstrip('：:').strip()
+                            continue
+                        if line.startswith('速记'):
+                            section = "mnemonic"
+                            mnemonic_line = line[len('速记'):].strip().lstrip('：:').strip()
+                            if mnemonic_line:
+                                mnemonic_lines.append(mnemonic_line)
+                            continue
+
+                        if section == "def":
+                            if line.startswith('[') or any(
+                                line.startswith(f'{pos}.') or line.startswith(f'{pos} ')
+                                for pos in ['n', 'v', 'adj', 'adv', 'prep', 'conj', 'pron',
+                                            'int', 'interj', 'det', 'art', 'num', 'aux']
+                            ):
+                                definition_lines.append(line)
+                        elif section == "forms":
+                            if line.strip() and ':' in line:
+                                forms_line = line.strip()
+                        elif section == "mnemonic":
+                            mnemonic_lines.append(line)
+
                     if self._cancelled:
                         return
-                    if definition_lines:
-                        self.result_ready.emit('\n'.join(definition_lines), self._generation)
-                    else:
+
+                    definition = '\n'.join(definition_lines) if definition_lines else ""
+                    if not definition:
                         short = '\n'.join(lines[:4]) if len(lines) > 4 else '\n'.join(lines)
-                        self.result_ready.emit(short, self._generation)
+                        definition = short
+
+                    # 用 ||| 分隔三个部分传给 UI
+                    parts = [definition, forms_line, '\n'.join(mnemonic_lines).strip()]
+                    self.result_ready.emit('|||'.join(parts), self._generation)
                 else:
                     self.lookup_error.emit("未查到释义", self._generation)
             else:
@@ -271,6 +300,36 @@ class WordPopup(QFrame):
         self._definition_label.setFont(def_font)
         content_layout.addWidget(self._definition_label)
 
+        # === 形态变化 ===
+        self._forms_label = QLabel()
+        self._forms_label.setObjectName("formsLabel")
+        self._forms_label.setWordWrap(True)
+        self._forms_label.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
+        self._forms_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        forms_font = QFont()
+        forms_font.setFamilies(["Microsoft YaHei", "Noto Sans CJK SC", "sans-serif"])
+        forms_font.setPointSize(11)
+        self._forms_label.setFont(forms_font)
+        content_layout.addWidget(self._forms_label)
+        self._forms_label.hide()
+
+        # === 速记法则 ===
+        self._mnemonic_label = QLabel()
+        self._mnemonic_label.setObjectName("mnemonicLabel")
+        self._mnemonic_label.setWordWrap(True)
+        self._mnemonic_label.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
+        self._mnemonic_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        mnem_font = QFont()
+        mnem_font.setFamilies(["Microsoft YaHei", "Noto Sans CJK SC", "sans-serif"])
+        mnem_font.setPointSize(11)
+        self._mnemonic_label.setFont(mnem_font)
+        content_layout.addWidget(self._mnemonic_label)
+        self._mnemonic_label.hide()
+
         # === 加载提示（查询中显示） ===
         self._loading_label = QLabel("查询中…")
         self._loading_label.setObjectName("loadingLabel")
@@ -404,6 +463,16 @@ class WordPopup(QFrame):
                 background: transparent;
             }}
 
+            QLabel#formsLabel {{
+                color: {t['text_secondary']};
+                background: transparent;
+            }}
+
+            QLabel#mnemonicLabel {{
+                color: {t.get('success_color', '#4caf50')};
+                background: transparent;
+            }}
+
             QLabel#loadingLabel {{
                 color: {t['text_muted']};
                 background: transparent;
@@ -463,6 +532,8 @@ class WordPopup(QFrame):
         self._collect_btn.setIcon(self._create_star_icon(self._is_collected))
 
         self._definition_label.setText("")
+        self._forms_label.hide()
+        self._mnemonic_label.hide()
         self._loading_label.show()
 
         # === 第 3 步：主题 & 尺寸 & 定位 ===
@@ -548,9 +619,29 @@ class WordPopup(QFrame):
         """词典查询成功（generation 由 worker 信号携带，用于忽略过期结果）。"""
         if generation != self._lookup_generation:
             return
-        self._definition = text.strip()
+
+        # 解析三部分：释义 ||| 形态变化 ||| 速记
+        parts = text.split('|||')
+        definition = parts[0].strip() if len(parts) > 0 else ""
+        forms = parts[1].strip() if len(parts) > 1 else ""
+        mnemonic = parts[2].strip() if len(parts) > 2 else ""
+
+        self._definition = definition
         self._loading_label.hide()
         self._definition_label.setText(self._definition)
+
+        if forms:
+            self._forms_label.setText(f"📝 {forms}")
+            self._forms_label.show()
+        else:
+            self._forms_label.hide()
+
+        if mnemonic:
+            self._mnemonic_label.setText(f"💡 {mnemonic}")
+            self._mnemonic_label.show()
+        else:
+            self._mnemonic_label.hide()
+
         self.adjustSize()
         w = max(self._MIN_WIDTH, min(self.sizeHint().width(), self._MAX_WIDTH))
         self.setFixedWidth(w)

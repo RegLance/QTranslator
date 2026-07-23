@@ -855,16 +855,14 @@ class TranslatorWindow(QWidget):
 
         # 更新提示文字（初始隐藏，检测到新版本时显示）
         self._update_label = QLabel("新版本可用，请点击 →")
-        self._update_label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._update_label.setStyleSheet(f"""
             QLabel {{
-                color: {theme['accent_color']};
+                color: {theme['text_muted']};
                 font-size: 11px;
                 font-weight: bold;
             }}
         """)
         self._update_label.hide()
-        self._update_label.mousePressEvent = lambda e: self._on_update_clicked()
         title_layout.addWidget(self._update_label)
 
         # 更新按钮（初始隐藏，检测到新版本时显示）
@@ -1552,6 +1550,8 @@ class TranslatorWindow(QWidget):
 
     def _on_update_available(self, new_version: str):
         """检测到新版本可用"""
+        if not get_config().get('updater.enabled', True):
+            return
         self._update_available = True
         self._update_btn.show()
         self._update_label.show()
@@ -1569,7 +1569,7 @@ class TranslatorWindow(QWidget):
         """启动更新按钮呼吸动画"""
         if not hasattr(self, '_update_pulse_timer'):
             self._update_pulse_timer = QTimer(self)
-            self._update_pulse_timer.setInterval(40)  # ~25fps
+            self._update_pulse_timer.setInterval(16)  # ~60fps
             self._update_pulse_phase = 0.0
             self._update_pulse_timer.timeout.connect(self._on_update_pulse)
         self._update_pulse_timer.start()
@@ -1583,42 +1583,32 @@ class TranslatorWindow(QWidget):
             self._update_label.setStyleSheet(self._update_label.styleSheet())
 
     def _on_update_pulse(self):
-        """呼吸动画帧：按钮和文字同步缩放 + 透明度变化"""
+        """呼吸动画帧：仅图标缩放，文字保持静态"""
         import math
-        self._update_pulse_phase += 0.08
+        self._update_pulse_phase += 0.1
         if self._update_pulse_phase > 2 * math.pi:
             self._update_pulse_phase -= 2 * math.pi
 
         intensity = math.sin(self._update_pulse_phase)
-        scale = 1.0 + intensity * 0.25
-        opacity = 0.5 + (intensity + 1.0) / 2.0 * 0.5
+        scale = 1.0 + intensity * 0.3
+        opacity = 0.4 + (intensity + 1.0) / 2.0 * 0.6
 
         theme = get_theme(self._theme_style)
         accent = QColor(theme.get('accent_color', '#4a9eff'))
-
-        btn_size = max(10, int(11 * scale + 0.5 * scale))
-        label_size = max(9, int(10 * scale + 0.5 * scale))
         r, g, b = accent.red(), accent.green(), accent.blue()
         alpha = int(255 * opacity)
 
+        btn_size = max(10, int(12 * scale + 0.5))
         self._update_btn.setStyleSheet(f"""
             QPushButton#updateBtn {{
-                background-color: transparent;
+                background-color: rgba({r}, {g}, {b}, {alpha});
                 border: none;
-                border-radius: 11px;
+                border-radius: {btn_size // 2}px;
                 font-size: {btn_size}px;
                 padding-bottom: 2px;
             }}
             QPushButton#updateBtn:hover {{
-                background-color: rgba({r}, {g}, {b}, 0.3);
-            }}
-        """)
-
-        self._update_label.setStyleSheet(f"""
-            QLabel {{
-                color: rgba({r}, {g}, {b}, {alpha});
-                font-size: {label_size}px;
-                font-weight: bold;
+                background-color: rgba({r}, {g}, {b}, 200);
             }}
         """)
 
@@ -1768,6 +1758,13 @@ class TranslatorWindow(QWidget):
 
         # 同步始终置顶配置
         new_always_on_top = get_config().get('translator_window.always_on_top', False)
+        if not get_config().get('updater.enabled', True):
+            if self._update_available:
+                self._update_available = False
+                self._update_btn.hide()
+                self._update_label.hide()
+                self._stop_update_pulse()
+
         if new_always_on_top != self._always_on_top:
             self._always_on_top = new_always_on_top
             self._update_always_on_top()
@@ -1860,7 +1857,7 @@ class TranslatorWindow(QWidget):
 
         self._update_label.setStyleSheet(f"""
             QLabel {{
-                color: {theme['accent_color']};
+                color: {theme['text_muted']};
                 font-size: 11px;
                 font-weight: bold;
             }}

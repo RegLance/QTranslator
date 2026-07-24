@@ -763,9 +763,13 @@ class WordPopup(QFrame):
             WH_MOUSE_LL = 14  # 低级鼠标钩子
 
             # 存储钩子回调引用防止被 GC
+            # 返回类型用 LPARAM（64 位上 8 字节，32 位上 4 字节），与 LRESULT 一致
             _MouseProc = ctypes.WINFUNCTYPE(
-                ctypes.c_long, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
+                wintypes.LPARAM, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
             )
+
+            # 确保 CallNextHookEx 返回正确类型（64 位上 8 字节）
+            ctypes.windll.user32.CallNextHookEx.restype = wintypes.LPARAM
 
             def _mouse_hook_callback(nCode, wParam, lParam):
                 """低级鼠标钩子回调 — 在任何鼠标点击时检查弹窗。"""

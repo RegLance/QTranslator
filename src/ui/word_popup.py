@@ -796,11 +796,11 @@ class WordPopup(QFrame):
             # 保存回调引用防止被 GC 回收导致崩溃
             app._word_popup_mouse_proc = _MouseProc(_mouse_hook_callback)
 
-            # 安装全局低级鼠标钩子
+            # 安装全局低级鼠标钩子（WH_MOUSE_LL 要求 hMod=NULL）
             hook_id = ctypes.windll.user32.SetWindowsHookExW(
                 WH_MOUSE_LL,
                 app._word_popup_mouse_proc,
-                ctypes.windll.kernel32.GetModuleHandleW(None),
+                0,  # 低级钩子不需要模块句柄
                 0,
             )
             if hook_id:

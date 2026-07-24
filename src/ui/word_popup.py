@@ -137,9 +137,6 @@ class WordPopup(QFrame):
     _MIN_WIDTH = 220
     _MAX_WIDTH = 360
 
-    # 跨线程安全关闭信号（供 Windows 钩子回调使用）
-    _request_close = pyqtSignal()
-
     # 收藏状态变更信号（供外部窗口同步按钮状态）
     collection_changed = pyqtSignal()
 
@@ -167,9 +164,6 @@ class WordPopup(QFrame):
         # show_at 后的宽限期（秒级时间戳）：宽限期内不响应外部点击关闭
         # 防止用户划词选中新单词时的点击操作误关弹窗
         self._grace_until: float = 0.0
-
-        # 跨线程关闭信号 → 主线程安全执行 hide_popup
-        self._request_close.connect(self.hide_popup)
 
         self._setup_ui()
         self._apply_theme()
@@ -746,78 +740,6 @@ class WordPopup(QFrame):
         app.installEventFilter(f)
         app._word_popup_filter = f
 
-        # ---- Layer 2: Windows 原生消息钩子 ----
-        try:
-            import sys
-            if not sys.platform.startswith('win'):
-                return
-            import ctypes
-            from ctypes import wintypes
-
-            # 防止重复安装
-            if hasattr(app, '_word_popup_win_hook_id'):
-                ctypes.windll.user32.UnhookWindowsHookEx(app._word_popup_win_hook_id)
-
-            # 使用 Windows 原生 CBT 钩子监控窗口激活变化
-            # 这样即使点击桌面或其他非 Qt 应用也能感知
-            WH_MOUSE_LL = 14  # 低级鼠标钩子
-
-            # 存储钩子回调引用防止被 GC
-            # 返回类型用 LPARAM（64 位上 8 字节，32 位上 4 字节），与 LRESULT 一致
-            _MouseProc = ctypes.WINFUNCTYPE(
-                wintypes.LPARAM, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
-            )
-
-            # 64 位兼容：声明 Win32 API 参数和返回类型
-            user32 = ctypes.windll.user32
-            user32.SetWindowsHookExW.restype = ctypes.c_void_p
-            user32.SetWindowsHookExW.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD]
-            user32.CallNextHookEx.restype = wintypes.LPARAM
-            user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
-
-            def _mouse_hook_callback(nCode, wParam, lParam):
-                """低级鼠标钩子回调 — 在任何鼠标点击时检查弹窗。"""
-                if wParam == 0x0201:  # WM_LBUTTONDOWN
-                    popup = popup_ref[0] if popup_ref else None
-                    if popup is None or not popup.isVisible():
-                        return ctypes.windll.user32.CallNextHookEx(
-                            app._word_popup_win_hook_id, nCode, wParam, lParam
-                        )
-                    # 宽限期内不响应外部点击
-                    if _time.time() < popup._grace_until:
-                        return ctypes.windll.user32.CallNextHookEx(
-                            app._word_popup_win_hook_id, nCode, wParam, lParam
-                        )
-                    # 从 lParam 提取鼠标坐标（MSLLHOOKSTRUCT）
-                    x = ctypes.c_long.from_address(lParam).value
-                    y = ctypes.c_long.from_address(lParam + 4).value
-                    click_pos = QPoint(x, y)
-
-                    # 弹窗外部任意位置 → 跨线程安全关闭
-                    if not popup.geometry().contains(click_pos):
-                        popup._request_close.emit()
-
-                return ctypes.windll.user32.CallNextHookEx(
-                    app._word_popup_win_hook_id, nCode, wParam, lParam
-                )
-
-            # 保存回调引用防止被 GC 回收导致崩溃
-            app._word_popup_mouse_proc = _MouseProc(_mouse_hook_callback)
-
-            # 安装全局低级鼠标钩子（WH_MOUSE_LL 要求 hMod=NULL）
-            hook_id = user32.SetWindowsHookExW(
-                WH_MOUSE_LL,
-                app._word_popup_mouse_proc,
-                None,  # 低级钩子不需要模块句柄
-                0,
-            )
-            if hook_id:
-                app._word_popup_win_hook_id = hook_id
-            else:
-                print("[WordPopup] 无法安装 Windows 鼠标钩子，回退到 Qt 事件过滤", file=sys.stderr)
-        except Exception as e:
-            print(f"[WordPopup] Windows 原生钩子安装失败: {e}", file=sys.stderr)
-
     def hide_popup(self):
         """隐藏弹窗并清理资源。"""
         try:
@@ -831,26 +753,6 @@ class WordPopup(QFrame):
         self._cancel_lookup()
         self.hide()
 
-    @staticmethod
-    def uninstall_global_hooks():
-        """卸载全局钩子（应用退出时调用）。"""
-        app = QApplication.instance()
-        if app is None:
-            return
-        if hasattr(app, '_word_popup_win_hook_id'):
-            try:
-                import ctypes
-                ctypes.windll.user32.UnhookWindowsHookEx(app._word_popup_win_hook_id)
-                del app._word_popup_win_hook_id
-            except Exception:
-                pass
-        if hasattr(app, '_word_popup_mouse_proc'):
-            try:
-                del app._word_popup_mouse_proc
-            except Exception:
-                pass
-
-
 # 全局弹窗实例引用
 _word_popup_instance: Optional[WordPopup] = None
 _popup_ref: list = [None]  # 用于全局事件过滤器的可变引用
@@ -863,10 +765,6 @@ def get_word_popup() -> WordPopup:
         _word_popup_instance = WordPopup()
         _popup_ref[0] = _word_popup_instance
         WordPopup.install_global_click_filter(_popup_ref)
-        # 应用退出时卸载 Windows 钩子
-        app = QApplication.instance()
-        if app is not None:
-            app.aboutToQuit.connect(lambda: WordPopup.uninstall_global_hooks())
     return _word_popup_instance
 
 

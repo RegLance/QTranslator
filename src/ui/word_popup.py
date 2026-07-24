@@ -768,8 +768,12 @@ class WordPopup(QFrame):
                 wintypes.LPARAM, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
             )
 
-            # 确保 CallNextHookEx 返回正确类型（64 位上 8 字节）
-            ctypes.windll.user32.CallNextHookEx.restype = wintypes.LPARAM
+            # 64 位兼容：声明 Win32 API 参数和返回类型
+            user32 = ctypes.windll.user32
+            user32.SetWindowsHookExW.restype = ctypes.c_void_p
+            user32.SetWindowsHookExW.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD]
+            user32.CallNextHookEx.restype = wintypes.LPARAM
+            user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
 
             def _mouse_hook_callback(nCode, wParam, lParam):
                 """低级鼠标钩子回调 — 在任何鼠标点击时检查弹窗。"""
@@ -801,10 +805,10 @@ class WordPopup(QFrame):
             app._word_popup_mouse_proc = _MouseProc(_mouse_hook_callback)
 
             # 安装全局低级鼠标钩子（WH_MOUSE_LL 要求 hMod=NULL）
-            hook_id = ctypes.windll.user32.SetWindowsHookExW(
+            hook_id = user32.SetWindowsHookExW(
                 WH_MOUSE_LL,
                 app._word_popup_mouse_proc,
-                0,  # 低级钩子不需要模块句柄
+                None,  # 低级钩子不需要模块句柄
                 0,
             )
             if hook_id:

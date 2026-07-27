@@ -707,26 +707,37 @@ class WordPopup(QFrame):
         class _PopupClickFilter(QObject):
             def eventFilter(self, obj, event):
                 popup = popup_ref[0] if popup_ref else None
-                if popup is None or not popup.isVisible():
+                if popup is None:
+                    return False
+                try:
+                    if not popup.isVisible():
+                        return False
+                except RuntimeError:
+                    # C++ 对象已被删除
+                    popup_ref[0] = None
                     return False
 
                 if event.type() in (event.Type.MouseButtonPress, event.Type.MouseButtonRelease):
-                    # 宽限期内不响应外部点击（show_at 刚更新过弹窗）
-                    if _time.time() < popup._grace_until:
-                        return False
-
                     try:
-                        click_pos = event.globalPosition().toPoint()
-                    except AttributeError:
-                        click_pos = event.globalPos()
+                        # 宽限期内不响应外部点击（show_at 刚更新过弹窗）
+                        if _time.time() < popup._grace_until:
+                            return False
 
-                    # 弹窗内部 → 不关闭（允许点击收藏按钮等）
-                    if popup.geometry().contains(click_pos):
+                        try:
+                            click_pos = event.globalPosition().toPoint()
+                        except AttributeError:
+                            click_pos = event.globalPos()
+
+                        # 弹窗内部 → 不关闭（允许点击收藏按钮等）
+                        if popup.geometry().contains(click_pos):
+                            return False
+
+                        # 弹窗外部任意位置 → 关闭
+                        popup.hide_popup()
                         return False
-
-                    # 弹窗外部任意位置 → 关闭
-                    popup.hide_popup()
-                    return False
+                    except RuntimeError:
+                        popup_ref[0] = None
+                        return False
 
                 return False
 

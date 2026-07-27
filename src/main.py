@@ -307,63 +307,74 @@ def _flush_startup_log():
 
 def _do_imports(g):
     """重导入（延迟到 splash 显示后调用），将导入名注入模块全局空间。"""
-    _import_t0 = time.time()
+    _all_start = time.time()
+
+    def _imp(mod, names):
+        """导入模块并计时，返回 {name: value} 字典。"""
+        t0 = time.time()
+        ns = {}
+        try:
+            pkg = __import__(f'.{mod}', fromlist=names, level=1)
+        except ImportError:
+            pkg = __import__(f'src.{mod}', fromlist=names)
+        for n in names:
+            ns[n] = getattr(pkg, n)
+        dt = (time.time() - t0) * 1000
+        _startup_log(f"import {mod}: {dt:.0f}ms")
+        return ns
+
     try:
-        from .config import get_config, APP_NAME
-        from .core.text_capture import get_text_capture, capture_text_direct
-        from .core.selection_detector import get_selection_detector
-        from .core.translator import get_translator, reinitialize_translator
-        from .core.writing import get_writing_service, WritingResult
-        from .ui.translate_button import get_translate_button
-        from .ui.tray_icon import get_tray_icon
-        from .ui.translator_window import get_translator_window
-        from .ui.history_window import get_history_window
-        from .ui.vocabulary_window import get_vocabulary_window
-        from .ui.help_window import get_help_window
-        from .ui.splash_screen import SplashScreen
-        from .utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
-        from .utils.history import add_translation_history
-        from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
-        from .utils.hotkey_manager import get_hotkey_manager
-        from .utils.selection_blacklist import (
-            normalize_blacklist_entries, normalize_exe, entries_for_config, get_active_blacklist_exes,
-        )
-        from .utils.tts import (
-            EDGE_TTS_VOICE_PRESETS, EDGE_TTS_RATE_SLIDER_MIN, EDGE_TTS_RATE_SLIDER_MAX,
-            EDGE_TTS_VOLUME_SLIDER_MIN, EDGE_TTS_VOLUME_SLIDER_MAX,
-            edge_percent_from_slider, parse_edge_percent_for_slider,
-        )
+        result = {}
+        for mod, names in [
+            ('config', ['get_config', 'APP_NAME']),
+            ('core.text_capture', ['get_text_capture', 'capture_text_direct']),
+            ('core.selection_detector', ['get_selection_detector']),
+            ('core.translator', ['get_translator', 'reinitialize_translator']),
+            ('core.writing', ['get_writing_service', 'WritingResult']),
+            ('ui.translate_button', ['get_translate_button']),
+            ('ui.tray_icon', ['get_tray_icon']),
+            ('ui.translator_window', ['get_translator_window']),
+            ('ui.history_window', ['get_history_window']),
+            ('ui.vocabulary_window', ['get_vocabulary_window']),
+            ('ui.help_window', ['get_help_window']),
+            ('ui.splash_screen', ['SplashScreen']),
+            ('utils.logger', ['get_logger', 'log_info', 'log_error', 'log_debug', 'log_warning', 'log_exception']),
+            ('utils.history', ['add_translation_history']),
+            ('utils.theme', ['get_theme', 'get_scrollbar_style', 'get_lineedit_style', 'get_combobox_style', 'get_checkbox_style', 'get_spinbox_style', 'THEME_DISPLAY_NAMES']),
+            ('utils.hotkey_manager', ['get_hotkey_manager']),
+            ('utils.selection_blacklist', ['normalize_blacklist_entries', 'normalize_exe', 'entries_for_config', 'get_active_blacklist_exes']),
+            ('utils.tts', ['EDGE_TTS_VOICE_PRESETS', 'EDGE_TTS_RATE_SLIDER_MIN', 'EDGE_TTS_RATE_SLIDER_MAX', 'EDGE_TTS_VOLUME_SLIDER_MIN', 'EDGE_TTS_VOLUME_SLIDER_MAX', 'edge_percent_from_slider', 'parse_edge_percent_for_slider']),
+            ('utils.vocabulary', ['get_vocabulary']),
+        ]:
+            result.update(_imp(mod, names))
     except ImportError:
-        from src.config import get_config, APP_NAME
-        from src.core.text_capture import get_text_capture, capture_text_direct
-        from src.core.selection_detector import get_selection_detector
-        from src.core.translator import get_translator, reinitialize_translator
-        from src.core.writing import get_writing_service, WritingResult
-        from src.ui.translate_button import get_translate_button
-        from src.ui.tray_icon import get_tray_icon
-        from src.ui.translator_window import get_translator_window
-        from src.ui.history_window import get_history_window
-        from src.ui.vocabulary_window import get_vocabulary_window
-        from src.ui.help_window import get_help_window
-        from src.ui.splash_screen import SplashScreen
-        from src.utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
-        from src.utils.history import add_translation_history
-        from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
-        from src.utils.hotkey_manager import get_hotkey_manager
-        from src.utils.selection_blacklist import (
-            normalize_blacklist_entries, normalize_exe, entries_for_config, get_active_blacklist_exes,
-        )
-        from src.utils.tts import (
-            EDGE_TTS_VOICE_PRESETS, EDGE_TTS_RATE_SLIDER_MIN, EDGE_TTS_RATE_SLIDER_MAX,
-            EDGE_TTS_VOLUME_SLIDER_MIN, EDGE_TTS_VOLUME_SLIDER_MAX,
-            edge_percent_from_slider, parse_edge_percent_for_slider,
-        )
-    _dt = (time.time() - _import_t0) * 1000
+        # 回退到 src.xxx 路径
+        for mod, names in [
+            ('src.config', ['get_config', 'APP_NAME']),
+            ('src.core.text_capture', ['get_text_capture', 'capture_text_direct']),
+            ('src.core.selection_detector', ['get_selection_detector']),
+            ('src.core.translator', ['get_translator', 'reinitialize_translator']),
+            ('src.core.writing', ['get_writing_service', 'WritingResult']),
+            ('src.ui.translate_button', ['get_translate_button']),
+            ('src.ui.tray_icon', ['get_tray_icon']),
+            ('src.ui.translator_window', ['get_translator_window']),
+            ('src.ui.history_window', ['get_history_window']),
+            ('src.ui.vocabulary_window', ['get_vocabulary_window']),
+            ('src.ui.help_window', ['get_help_window']),
+            ('src.ui.splash_screen', ['SplashScreen']),
+            ('src.utils.logger', ['get_logger', 'log_info', 'log_error', 'log_debug', 'log_warning', 'log_exception']),
+            ('src.utils.history', ['add_translation_history']),
+            ('src.utils.theme', ['get_theme', 'get_scrollbar_style', 'get_lineedit_style', 'get_combobox_style', 'get_checkbox_style', 'get_spinbox_style', 'THEME_DISPLAY_NAMES']),
+            ('src.utils.hotkey_manager', ['get_hotkey_manager']),
+            ('src.utils.selection_blacklist', ['normalize_blacklist_entries', 'normalize_exe', 'entries_for_config', 'get_active_blacklist_exes']),
+            ('src.utils.tts', ['EDGE_TTS_VOICE_PRESETS', 'EDGE_TTS_RATE_SLIDER_MIN', 'EDGE_TTS_RATE_SLIDER_MAX', 'EDGE_TTS_VOLUME_SLIDER_MIN', 'EDGE_TTS_VOLUME_SLIDER_MAX', 'edge_percent_from_slider', 'parse_edge_percent_for_slider']),
+            ('src.utils.vocabulary', ['get_vocabulary']),
+        ]:
+            result.update(_imp(mod, names))
+    _dt = (time.time() - _all_start) * 1000
     _startup_log(f"模块导入总计: {_dt:.0f}ms")
     # 注入模块全局空间
-    for k, v in list(locals().items()):
-        if not k.startswith('_') and k not in ('g', '_import_t0', '_dt'):
-            g[k] = v
+    g.update(result)
 
 def setup_auto_start(enable: bool):
     """设置开机自启（Windows）"""

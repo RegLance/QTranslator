@@ -1,5 +1,20 @@
 """QTranslator - 主入口文件"""
+from __future__ import annotations
 import sys
+from pathlib import Path
+
+# 确保 src 和项目根目录在 sys.path 中（直接运行 main.py 时）
+_src_dir = Path(__file__).parent
+_project_dir = _src_dir.parent
+for _d in (str(_src_dir), str(_project_dir)):
+    if _d not in sys.path:
+        sys.path.insert(0, _d)
+
+# SplashScreen 提前导入（main() 中在 _do_imports 之前就需要）
+try:
+    from .ui.splash_screen import SplashScreen
+except ImportError:
+    from src.ui.splash_screen import SplashScreen
 import os
 import time
 import traceback
@@ -271,73 +286,84 @@ def log_exception_safe(message: str, exc: Exception):
 # 在导入模块前初始化闪退处理器
 CrashHandler.initialize()
 
-# 支持两种导入方式
-try:
-    from .config import get_config, APP_NAME
-    from .core.text_capture import get_text_capture, capture_text_direct
-    from .core.selection_detector import get_selection_detector
-    from .core.translator import get_translator, reinitialize_translator
-    from .core.writing import get_writing_service, WritingResult
-    from .ui.translate_button import get_translate_button
-    from .ui.tray_icon import get_tray_icon
-    from .ui.translator_window import get_translator_window
-    from .ui.history_window import get_history_window
-    from .ui.vocabulary_window import get_vocabulary_window
-    from .ui.help_window import get_help_window
-    from .ui.splash_screen import SplashScreen
-    from .utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
-    from .utils.history import add_translation_history
-    from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
-    from .utils.hotkey_manager import get_hotkey_manager
-    from .utils.selection_blacklist import (
-        normalize_blacklist_entries,
-        normalize_exe,
-        entries_for_config,
-        get_active_blacklist_exes,
-    )
-    from .utils.tts import (
-        EDGE_TTS_VOICE_PRESETS,
-        EDGE_TTS_RATE_SLIDER_MIN,
-        EDGE_TTS_RATE_SLIDER_MAX,
-        EDGE_TTS_VOLUME_SLIDER_MIN,
-        EDGE_TTS_VOLUME_SLIDER_MAX,
-        edge_percent_from_slider,
-        parse_edge_percent_for_slider,
-    )
-except ImportError:
-    # 打包后的导入路径
-    from src.config import get_config, APP_NAME
-    from src.core.text_capture import get_text_capture, capture_text_direct
-    from src.core.selection_detector import get_selection_detector
-    from src.core.translator import get_translator, reinitialize_translator
-    from src.core.writing import get_writing_service, WritingResult
-    from src.ui.translate_button import get_translate_button
-    from src.ui.tray_icon import get_tray_icon
-    from src.ui.translator_window import get_translator_window
-    from src.ui.history_window import get_history_window
-    from src.ui.vocabulary_window import get_vocabulary_window
-    from src.ui.help_window import get_help_window
-    from src.ui.splash_screen import SplashScreen
-    from src.utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
-    from src.utils.history import add_translation_history
-    from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
-    from src.utils.hotkey_manager import get_hotkey_manager
-    from src.utils.selection_blacklist import (
-        normalize_blacklist_entries,
-        normalize_exe,
-        entries_for_config,
-        get_active_blacklist_exes,
-    )
-    from src.utils.tts import (
-        EDGE_TTS_VOICE_PRESETS,
-        EDGE_TTS_RATE_SLIDER_MIN,
-        EDGE_TTS_RATE_SLIDER_MAX,
-        EDGE_TTS_VOLUME_SLIDER_MIN,
-        EDGE_TTS_VOLUME_SLIDER_MAX,
-        edge_percent_from_slider,
-        parse_edge_percent_for_slider,
-    )
+# 启动阶段计时缓存（logger 就绪前暂存，就绪后批量写入）
+_startup_timings = []
 
+def _startup_log(msg: str):
+    """启动计时：同时写 stderr 和内存缓存（logger 就绪后写入日志文件）。"""
+    now = time.time()
+    _startup_timings.append((now, msg))
+    print(f"[Startup] {msg}", file=sys.stderr, flush=True)
+
+def _flush_startup_log():
+    """将启动计时写入日志文件。"""
+    try:
+        logger = get_logger()
+        for _ts, _msg in _startup_timings:
+            logger.info(f"[Startup] {_msg}")
+    except Exception:
+        pass
+    _startup_timings.clear()
+
+def _do_imports(g):
+    """重导入（延迟到 splash 显示后调用），将导入名注入模块全局空间。"""
+    _import_t0 = time.time()
+    try:
+        from .config import get_config, APP_NAME
+        from .core.text_capture import get_text_capture, capture_text_direct
+        from .core.selection_detector import get_selection_detector
+        from .core.translator import get_translator, reinitialize_translator
+        from .core.writing import get_writing_service, WritingResult
+        from .ui.translate_button import get_translate_button
+        from .ui.tray_icon import get_tray_icon
+        from .ui.translator_window import get_translator_window
+        from .ui.history_window import get_history_window
+        from .ui.vocabulary_window import get_vocabulary_window
+        from .ui.help_window import get_help_window
+        from .ui.splash_screen import SplashScreen
+        from .utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
+        from .utils.history import add_translation_history
+        from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
+        from .utils.hotkey_manager import get_hotkey_manager
+        from .utils.selection_blacklist import (
+            normalize_blacklist_entries, normalize_exe, entries_for_config, get_active_blacklist_exes,
+        )
+        from .utils.tts import (
+            EDGE_TTS_VOICE_PRESETS, EDGE_TTS_RATE_SLIDER_MIN, EDGE_TTS_RATE_SLIDER_MAX,
+            EDGE_TTS_VOLUME_SLIDER_MIN, EDGE_TTS_VOLUME_SLIDER_MAX,
+            edge_percent_from_slider, parse_edge_percent_for_slider,
+        )
+    except ImportError:
+        from src.config import get_config, APP_NAME
+        from src.core.text_capture import get_text_capture, capture_text_direct
+        from src.core.selection_detector import get_selection_detector
+        from src.core.translator import get_translator, reinitialize_translator
+        from src.core.writing import get_writing_service, WritingResult
+        from src.ui.translate_button import get_translate_button
+        from src.ui.tray_icon import get_tray_icon
+        from src.ui.translator_window import get_translator_window
+        from src.ui.history_window import get_history_window
+        from src.ui.vocabulary_window import get_vocabulary_window
+        from src.ui.help_window import get_help_window
+        from src.ui.splash_screen import SplashScreen
+        from src.utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
+        from src.utils.history import add_translation_history
+        from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
+        from src.utils.hotkey_manager import get_hotkey_manager
+        from src.utils.selection_blacklist import (
+            normalize_blacklist_entries, normalize_exe, entries_for_config, get_active_blacklist_exes,
+        )
+        from src.utils.tts import (
+            EDGE_TTS_VOICE_PRESETS, EDGE_TTS_RATE_SLIDER_MIN, EDGE_TTS_RATE_SLIDER_MAX,
+            EDGE_TTS_VOLUME_SLIDER_MIN, EDGE_TTS_VOLUME_SLIDER_MAX,
+            edge_percent_from_slider, parse_edge_percent_for_slider,
+        )
+    _dt = (time.time() - _import_t0) * 1000
+    _startup_log(f"模块导入总计: {_dt:.0f}ms")
+    # 注入模块全局空间
+    for k, v in list(locals().items()):
+        if not k.startswith('_') and k not in ('g', '_import_t0', '_dt'):
+            g[k] = v
 
 def setup_auto_start(enable: bool):
     """设置开机自启（Windows）"""
@@ -2381,15 +2407,20 @@ class MainController(QObject):
 
     def __init__(self):
         super().__init__()
+        import time as _t; _start = _t.time()
+        def _lap(label):
+            nonlocal _start
+            now = _t.time(); dt = now - _start; _start = now
+            _startup_log(f"{label}: {dt*1000:.0f}ms")
 
-        self._config = get_config()
-        self._selection_detector = get_selection_detector()
-        self._translate_button = get_translate_button()
-        self._tray_icon = get_tray_icon()
-        self._translator = get_translator()
-        self._text_capture = get_text_capture()
-        self._hotkey_manager = get_hotkey_manager()
-        self._writing_service = get_writing_service()
+        self._config = get_config(); _lap("get_config")
+        self._selection_detector = get_selection_detector(); _lap("selection_detector")
+        self._translate_button = get_translate_button(); _lap("translate_button")
+        self._tray_icon = get_tray_icon(); _lap("tray_icon")
+        self._translator = get_translator(); _lap("translator")
+        self._text_capture = get_text_capture(); _lap("text_capture")
+        self._hotkey_manager = get_hotkey_manager(); _lap("hotkey_manager")
+        self._writing_service = get_writing_service(); _lap("writing_service")
 
         # TextCapture 初始化时会自动启动 selection-hook；若用户上次关闭了划词，立即停掉
         if not self._config.get('selection.enabled', True):
@@ -2401,22 +2432,25 @@ class MainController(QObject):
         self._current_worker = None
         self._last_text: str = ""
 
-        # 系统恢复检测 - 用于在休眠/锁屏恢复后重新注册热键
+        # 系统恢复检测
         self._last_health_check_time = time.time()
-        self._session_was_locked = False  # Windows 锁屏状态跟踪
+        self._session_was_locked = False
         self._system_health_timer = QTimer()
         self._system_health_timer.timeout.connect(self._on_system_health_check)
-        self._system_health_timer.start(10000)  # 每 10 秒检查一次（需要快速检测解锁）
+        self._system_health_timer.start(10000)
 
-        self._connect_signals()
-        self._check_config()
-        self._setup_hotkey()
+        self._connect_signals(); _lap("connect_signals")
+        self._check_config(); _lap("check_config")
+        self._setup_hotkey(); _lap("setup_hotkey")
+        _flush_startup_log()  # 将缓存计时写入日志文件
         try:
             try:
                 from .utils.tts_media import ensure_tts_media_bridge
             except ImportError:
                 from src.utils.tts_media import ensure_tts_media_bridge
-            ensure_tts_media_bridge()
+            ensure_tts_media_bridge(); _lap("tts_media_bridge")
+        except Exception:
+            pass
         except Exception:
             pass
 
@@ -2554,6 +2588,13 @@ class MainController(QObject):
     def _pre_render_windows(self):
         """预创建并预渲染所有窗口，消除首次显示延迟"""
         import threading
+        import sys as _sys
+
+        _all_start = time.time()
+        def _lap(label):
+            nonlocal _all_start
+            now = time.time(); dt = now - _all_start; _all_start = now
+            _startup_log(f"pre_render:{label}: {dt*1000:.0f}ms")
 
         # 两阶段完成标记：pre_render / warmup
         self._ready_flags = {'pre_render': False, 'warmup': False}
@@ -2573,6 +2614,7 @@ class MainController(QObject):
                 windows_to_prerender.append(get_history_window())
             except Exception as e:
                 log_error(f"预创建历史窗口失败: {e}")
+            _lap("history_window")
 
             # 帮助窗口（懒加载单例，此处触发创建）
             try:
@@ -2583,24 +2625,26 @@ class MainController(QObject):
                 windows_to_prerender.append(get_help_window())
             except Exception as e:
                 log_error(f"预创建帮助窗口失败: {e}")
+            _lap("help_window")
 
-            # 设置对话框（新增单例，此处触发创建）
+            # 设置对话框
             try:
                 windows_to_prerender.append(get_settings_dialog())
             except Exception as e:
                 log_error(f"预创建设置对话框失败: {e}")
+            _lap("settings_dialog")
 
             try:
                 windows_to_prerender.append(get_vocabulary_window())
             except Exception as e:
                 log_error(f"预创建单词收藏窗口失败: {e}")
+            _lap("vocabulary_window")
 
-            # 离屏预渲染：移至屏幕外 → show → 处理渲染事件 → hide
+            # 离屏预渲染
             offscreen_pos = QPoint(-9999, -9999)
             for widget in windows_to_prerender:
                 try:
                     original_pos = widget.pos()
-                    # 对翻译窗口，预渲染前先设置好 splitter 状态，避免首次打开时分隔条跳动
                     if widget is self._translator_window:
                         try:
                             widget._splitter.setStretchFactor(0, 0)
@@ -2618,35 +2662,38 @@ class MainController(QObject):
                     widget.move(original_pos)
                 except Exception as e:
                     log_error(f"预渲染窗口失败: {type(widget).__name__}: {e}")
+            _lap(f"offscreen_render ({len(windows_to_prerender)} windows)")
 
             log_info("窗口预渲染完成")
 
-            # 预热翻译器（后台线程，不阻塞 UI）
+            # 预热翻译器（后台线程，不阻塞启动）
             threading.Thread(target=self._warmup_translator_in_thread, daemon=True).start()
+            _lap("start_warmup_thread")
         finally:
             self._ready_flags['pre_render'] = True
 
-        # 启动轮询定时器，等待所有预热完成
-        self._check_ready_timer = QTimer()
-        self._check_ready_timer.timeout.connect(self._check_all_ready)
-        self._check_ready_timer.start(150)
+        # pre_render 完成即发射 initialized（warmup 后台继续）
+        print("[Startup] pre_render done, emitting initialized", file=sys.stderr, flush=True)
+        self.initialized.emit()
 
     def _warmup_translator_in_thread(self):
         """后台线程：预热语言检测 + API 连接"""
+        _w = time.time()
         try:
-            # 预热语言检测模型
             try:
                 try:
                     from .utils.language_detector import detect_language
                 except ImportError:
                     from src.utils.language_detector import detect_language
                 detect_language("Hello")
+                _dt = (time.time() - _w) * 1000
+                _startup_log(f"warmup:lang_detect: {_dt:.0f}ms")
                 log_info("语言检测预热完成")
             except Exception as e:
-                log_info(f"语言检测预热失败: {e}")
+                _startup_log(f"warmup:lang_detect failed: {e}")
             try:
-                # 预热 API 连接
                 if self._translator and self._translator._client:
+                    _w2 = time.time()
                     self._translator._client.chat.completions.create(
                         model=self._translator._model,
                         messages=[
@@ -2655,11 +2702,13 @@ class MainController(QObject):
                         ],
                         temperature=0,
                         max_tokens=1,
-                        timeout=5,
+                        timeout=2,
                     )
+                    _dt2 = (time.time() - _w2) * 1000
+                    _startup_log(f"warmup:api_ping: {_dt2:.0f}ms")
                     log_info("API连接预热完成")
                 else:
-                    log_info("API连接预热失败: 翻译客户端未初始化")
+                    _startup_log("warmup:api_ping skipped (no client)")
             except Exception as e:
                 log_info(f"API连接预热失败: {e}")
         finally:
@@ -3437,66 +3486,60 @@ class SingleInstance:
 
 
 def main():
-    # 单实例检查
-    try:
-        from .config import APP_ID
-    except ImportError:
-        from src.config import APP_ID
-    single_instance = SingleInstance(APP_ID)
-
-    if not single_instance.try_lock():
-        # 已有实例在运行，显示提示
-        app = QApplication(sys.argv)
-        QMessageBox.warning(
-            None,
-            APP_NAME,
-            f"{APP_NAME} 已经在运行中！\n\n请在系统托盘查找已有实例。",
-            QMessageBox.StandardButton.Ok
-        )
-        sys.exit(0)
+    """主入口。"""
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+
+    splash = SplashScreen()
+    splash.show_splash()
+    app.processEvents()
+
+    # ── 重导入（splash 可见后，动画掩盖加载时间）──
+    _do_imports(globals())
+
+    try:
+        from .config import APP_ID, APP_NAME
+    except ImportError:
+        from src.config import APP_ID, APP_NAME
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)
 
-    # 设置应用图标（任务栏图标）
     icon_path = Path(__file__).parent.parent / "assets" / "icon.png"
     if icon_path.exists():
         from PyQt6.QtGui import QIcon
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    # 1. 立即显示 splash（带呼吸动画，事件驱动，不自定消失）
-    splash = SplashScreen()
-    splash.show_splash()
-    app.processEvents()  # 确保 splash 立即渲染
+    # ── 单实例检查 ──
+    single_instance = SingleInstance(APP_ID)
+    if not single_instance.try_lock():
+        splash.close()
+        QMessageBox.warning(None, APP_NAME,
+            f"{APP_NAME} 已经在运行中！\n\n请在系统托盘查找已有实例。",
+            QMessageBox.StandardButton.Ok)
+        sys.exit(0)
 
-    # 2. 在 splash 可见期间创建 MainController（splash 持续动画）
+    # ── 创建主控制器（splash 持续动画）──
     controller = MainController()
 
-    # 3. 初始化完成 → 淡出 splash → 显示翻译窗口
+    # ── 初始化完成 → 直接关闭 splash 显示翻译窗口 ──
     def on_initialized():
-        splash.set_status("启动完成")
-        def on_fade_done():
-            controller._on_translator_window_requested()
-        splash.start_fade_out(on_fade_done)
+        print("[Startup] initialized, closing splash", file=sys.stderr, flush=True)
+        splash.close()
+        splash.deleteLater()
+        controller._on_translator_window_requested()
 
     controller.initialized.connect(on_initialized)
-
-    # 4. start() 内部调度预渲染，完成后发射 initialized 信号
     controller.start()
 
-    # 启动时清理旧日志（超过 7 天的日志文件）
     try:
         get_logger().clear_old_logs(days=7)
     except Exception:
         pass
 
     exit_code = app.exec()
-
     if controller:
         controller.stop()
-    # 释放单实例锁
     single_instance.release()
     sys.exit(exit_code)
 

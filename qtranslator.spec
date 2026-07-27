@@ -10,7 +10,7 @@ block_cipher = None
 project_root = Path(SPECPATH)
 
 a = Analysis(
-    ["run.py"],
+    ["src/main.py"],
     pathex=[str(project_root)],
     binaries=[],
     datas=[

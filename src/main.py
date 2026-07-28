@@ -10,7 +10,7 @@ for _d in (str(_src_dir), str(_project_dir)):
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
-# SplashScreen 提前导入（main() 中在 _do_imports 之前就需要）
+# SplashScreen 提前导入（已在下方 import 块中导入，此处备选）
 try:
     from .ui.splash_screen import SplashScreen
 except ImportError:
@@ -286,17 +286,16 @@ def log_exception_safe(message: str, exc: Exception):
 # 在导入模块前初始化闪退处理器
 CrashHandler.initialize()
 
-# 启动阶段计时缓存（logger 就绪前暂存，就绪后批量写入）
+# ── 启动计时 ──
+_import_t0 = time.time()
 _startup_timings = []
 
 def _startup_log(msg: str):
-    """启动计时：同时写 stderr 和内存缓存（logger 就绪后写入日志文件）。"""
     now = time.time()
     _startup_timings.append((now, msg))
     print(f"[Startup] {msg}", file=sys.stderr, flush=True)
 
 def _flush_startup_log():
-    """将启动计时写入日志文件。"""
     try:
         logger = get_logger()
         for _ts, _msg in _startup_timings:
@@ -305,54 +304,59 @@ def _flush_startup_log():
         pass
     _startup_timings.clear()
 
-def _do_imports(g):
-    """重导入（延迟到 splash 显示后调用），将导入名注入模块全局空间。"""
-    import importlib
-    _all_start = time.time()
-    _pkg = g.get('__name__', 'src.main')
+# ── 模块导入 ──
+try:
+    from .config import get_config, APP_NAME
+    from .core.text_capture import get_text_capture, capture_text_direct
+    from .core.selection_detector import get_selection_detector
+    from .core.translator import get_translator, reinitialize_translator
+    from .core.writing import get_writing_service, WritingResult
+    from .ui.translate_button import get_translate_button
+    from .ui.tray_icon import get_tray_icon
+    from .ui.translator_window import get_translator_window
+    from .ui.history_window import get_history_window
+    from .ui.vocabulary_window import get_vocabulary_window
+    from .ui.help_window import get_help_window
+    from .ui.splash_screen import SplashScreen
+    from .utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
+    from .utils.history import add_translation_history
+    from .utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
+    from .utils.hotkey_manager import get_hotkey_manager
+    from .utils.selection_blacklist import (
+        normalize_blacklist_entries, normalize_exe, entries_for_config, get_active_blacklist_exes,
+    )
+    from .utils.tts import (
+        EDGE_TTS_VOICE_PRESETS, EDGE_TTS_RATE_SLIDER_MIN, EDGE_TTS_RATE_SLIDER_MAX,
+        EDGE_TTS_VOLUME_SLIDER_MIN, EDGE_TTS_VOLUME_SLIDER_MAX,
+        edge_percent_from_slider, parse_edge_percent_for_slider,
+    )
+except ImportError:
+    from src.config import get_config, APP_NAME
+    from src.core.text_capture import get_text_capture, capture_text_direct
+    from src.core.selection_detector import get_selection_detector
+    from src.core.translator import get_translator, reinitialize_translator
+    from src.core.writing import get_writing_service, WritingResult
+    from src.ui.translate_button import get_translate_button
+    from src.ui.tray_icon import get_tray_icon
+    from src.ui.translator_window import get_translator_window
+    from src.ui.history_window import get_history_window
+    from src.ui.vocabulary_window import get_vocabulary_window
+    from src.ui.help_window import get_help_window
+    from src.ui.splash_screen import SplashScreen
+    from src.utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
+    from src.utils.history import add_translation_history
+    from src.utils.theme import get_theme, get_scrollbar_style, get_lineedit_style, get_combobox_style, get_checkbox_style, get_spinbox_style, THEME_DISPLAY_NAMES
+    from src.utils.hotkey_manager import get_hotkey_manager
+    from src.utils.selection_blacklist import (
+        normalize_blacklist_entries, normalize_exe, entries_for_config, get_active_blacklist_exes,
+    )
+    from src.utils.tts import (
+        EDGE_TTS_VOICE_PRESETS, EDGE_TTS_RATE_SLIDER_MIN, EDGE_TTS_RATE_SLIDER_MAX,
+        EDGE_TTS_VOLUME_SLIDER_MIN, EDGE_TTS_VOLUME_SLIDER_MAX,
+        edge_percent_from_slider, parse_edge_percent_for_slider,
+    )
 
-    def _imp(mod, names):
-        """导入模块并计时，返回 {name: value} 字典。"""
-        t0 = time.time()
-        ns = {}
-        # 先尝试相对路径，失败回退到绝对路径
-        try:
-            pkg = importlib.import_module(f'.{mod}', package=_pkg)
-        except (ImportError, ValueError):
-            pkg = importlib.import_module(mod)
-        for n in names:
-            ns[n] = getattr(pkg, n)
-        dt = (time.time() - t0) * 1000
-        _startup_log(f"import {mod}: {dt:.0f}ms")
-        return ns
-
-    mods = [
-        ('config', ['get_config', 'APP_NAME']),
-        ('core.text_capture', ['get_text_capture', 'capture_text_direct']),
-        ('core.selection_detector', ['get_selection_detector']),
-        ('core.translator', ['get_translator', 'reinitialize_translator']),
-        ('core.writing', ['get_writing_service', 'WritingResult']),
-        ('ui.translate_button', ['get_translate_button']),
-        ('ui.tray_icon', ['get_tray_icon']),
-        ('ui.translator_window', ['get_translator_window']),
-        ('ui.history_window', ['get_history_window']),
-        ('ui.vocabulary_window', ['get_vocabulary_window']),
-        ('ui.help_window', ['get_help_window']),
-        ('ui.splash_screen', ['SplashScreen']),
-        ('utils.logger', ['get_logger', 'log_info', 'log_error', 'log_debug', 'log_warning', 'log_exception']),
-        ('utils.history', ['add_translation_history']),
-        ('utils.theme', ['get_theme', 'get_scrollbar_style', 'get_lineedit_style', 'get_combobox_style', 'get_checkbox_style', 'get_spinbox_style', 'THEME_DISPLAY_NAMES']),
-        ('utils.hotkey_manager', ['get_hotkey_manager']),
-        ('utils.selection_blacklist', ['normalize_blacklist_entries', 'normalize_exe', 'entries_for_config', 'get_active_blacklist_exes']),
-        ('utils.tts', ['EDGE_TTS_VOICE_PRESETS', 'EDGE_TTS_RATE_SLIDER_MIN', 'EDGE_TTS_RATE_SLIDER_MAX', 'EDGE_TTS_VOLUME_SLIDER_MIN', 'EDGE_TTS_VOLUME_SLIDER_MAX', 'edge_percent_from_slider', 'parse_edge_percent_for_slider']),
-        ('utils.vocabulary', ['get_vocabulary']),
-    ]
-    result = {}
-    for mod, names in mods:
-        result.update(_imp(mod, names))
-    _dt = (time.time() - _all_start) * 1000
-    _startup_log(f"模块导入总计: {_dt:.0f}ms")
-    g.update(result)
+_startup_log(f"模块导入总计: {(time.time() - _import_t0) * 1000:.0f}ms")
 
 def setup_auto_start(enable: bool):
     """设置开机自启（Windows）"""
@@ -3483,9 +3487,6 @@ def main():
     splash = SplashScreen()
     splash.show_splash()
     app.processEvents()
-
-    # ── 重导入（splash 可见后，动画掩盖加载时间）──
-    _do_imports(globals())
 
     try:
         from .config import APP_ID, APP_NAME

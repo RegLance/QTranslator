@@ -33,6 +33,10 @@ edge-tts==7.2.8
 # Windows API (用于 TTS SAPI)
 pywin32==311
 
+# MCP 能力：官方 MCP Python SDK（github.com/modelcontextprotocol/python-sdk）
+# AI 对话窗口通过它连接 MCP 服务器并调用工具（传递依赖由 pip 自动解析）
+mcp==1.29.0
+
 # 间接依赖
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.5

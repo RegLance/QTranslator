@@ -311,7 +311,11 @@ try:
     from .core.selection_detector import get_selection_detector
     from .core.translator import get_translator, reinitialize_translator
     from .core.writing import get_writing_service, WritingResult
+    from .core.custom_actions import get_custom_action_manager
+    from .core.mcp_client import get_mcp_manager
     from .ui.translate_button import get_translate_button
+    from .ui.selection_toolbar import get_selection_toolbar
+    from .ui.chat_window import get_chat_window
     from .ui.tray_icon import get_tray_icon
     from .ui.translator_window import get_translator_window
     from .ui.history_window import get_history_window
@@ -336,7 +340,11 @@ except ImportError:
     from src.core.selection_detector import get_selection_detector
     from src.core.translator import get_translator, reinitialize_translator
     from src.core.writing import get_writing_service, WritingResult
+    from src.core.custom_actions import get_custom_action_manager
+    from src.core.mcp_client import get_mcp_manager
     from src.ui.translate_button import get_translate_button
+    from src.ui.selection_toolbar import get_selection_toolbar
+    from src.ui.chat_window import get_chat_window
     from src.ui.tray_icon import get_tray_icon
     from src.ui.translator_window import get_translator_window
     from src.ui.history_window import get_history_window
@@ -773,6 +781,75 @@ class SettingsDialog(QDialog):
 
         self._blacklist_entries = []
         scroll_layout.addWidget(self._blacklist_group)
+
+        # 划词工具栏设置组
+        self._toolbar_group = QGroupBox("划词工具栏")
+        toolbar_layout = QFormLayout(self._toolbar_group)
+        toolbar_layout.setSpacing(10)
+        toolbar_layout.setContentsMargins(12, 20, 12, 12)
+        toolbar_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self._trigger_mode_combo = QComboBox()
+        self._trigger_mode_combo.setMinimumHeight(32)
+        self._trigger_mode_combo.addItem("悬浮工具栏（翻译/润色/总结/AI对话/自定义）", "toolbar")
+        self._trigger_mode_combo.addItem("翻译图标按钮（经典模式）", "button")
+        self._trigger_mode_label = QLabel("划词触发方式:")
+        toolbar_layout.addRow(self._trigger_mode_label, self._trigger_mode_combo)
+
+        ext_btn_row = QHBoxLayout()
+        ext_btn_row.setSpacing(8)
+        self._open_actions_dir_btn = QPushButton("打开自定义功能目录")
+        self._open_actions_dir_btn.setMinimumHeight(30)
+        self._open_actions_dir_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._open_actions_dir_btn.clicked.connect(self._on_open_actions_dir)
+        ext_btn_row.addWidget(self._open_actions_dir_btn)
+
+        self._open_skills_dir_btn = QPushButton("打开技能目录")
+        self._open_skills_dir_btn.setMinimumHeight(30)
+        self._open_skills_dir_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._open_skills_dir_btn.clicked.connect(self._on_open_skills_dir)
+        ext_btn_row.addWidget(self._open_skills_dir_btn)
+
+        self._open_mcp_cfg_btn = QPushButton("打开 MCP 配置")
+        self._open_mcp_cfg_btn.setMinimumHeight(30)
+        self._open_mcp_cfg_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._open_mcp_cfg_btn.clicked.connect(self._on_open_mcp_config)
+        ext_btn_row.addWidget(self._open_mcp_cfg_btn)
+        ext_btn_row.addStretch()
+        toolbar_layout.addRow("", ext_btn_row)
+
+        # 高级：actions/ 目录 .py 扩展勾选区（_load_settings 中根据目录动态重建）
+        self._action_checks_box = QWidget()
+        self._action_checks_layout = QVBoxLayout(self._action_checks_box)
+        self._action_checks_layout.setContentsMargins(0, 0, 0, 0)
+        self._action_checks_layout.setSpacing(4)
+        toolbar_layout.addRow("", self._action_checks_box)
+
+        scroll_layout.addWidget(self._toolbar_group)
+
+        # AI 对话设置组
+        self._chat_group = QGroupBox("AI 对话")
+        chat_layout = QFormLayout(self._chat_group)
+        chat_layout.setSpacing(10)
+        chat_layout.setContentsMargins(12, 20, 12, 12)
+        chat_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self._ctx_limit_spin = QSpinBox()
+        self._ctx_limit_spin.setMinimumHeight(32)
+        self._ctx_limit_spin.setRange(4096, 1048576)
+        self._ctx_limit_spin.setSingleStep(1024)
+        self._ctx_limit_spin.setSuffix(" tokens")
+        chat_layout.addRow("模型上下文长度:", self._ctx_limit_spin)
+
+        self._chat_hint_label = QLabel(
+            "对话历史不限条数；超过约 70% 上下文窗口时，自动按开源摘要缓冲策略\n"
+            "（LangChain ConversationSummaryBufferMemory 模式）压缩较早对话为摘要，最近消息原文保留。"
+        )
+        self._chat_hint_label.setProperty("class", "hint")
+        self._chat_hint_label.setWordWrap(True)
+        chat_layout.addRow("", self._chat_hint_label)
+
+        scroll_layout.addWidget(self._chat_group)
 
         # 写作设置组
         self._writing_group = QGroupBox("写作设置")
@@ -1751,6 +1828,39 @@ class SettingsDialog(QDialog):
         self._selection_translate_hotkey_value = sel_tr_hotkey
         self._set_hotkey_btn_text(self._selection_translate_hotkey_btn, sel_tr_hotkey)
 
+        # 划词触发方式（悬浮工具栏 / 图标按钮）
+        trigger_mode = self._config.get('selection.trigger_mode', 'toolbar') or 'toolbar'
+        _tmi = self._trigger_mode_combo.findData(trigger_mode)
+        self._trigger_mode_combo.setCurrentIndex(_tmi if _tmi >= 0 else 0)
+
+        # AI 对话模型上下文长度
+        try:
+            ctx_limit = int(self._config.get('chat.model_context_limit', 32768))
+        except (TypeError, ValueError):
+            ctx_limit = 32768
+        self._ctx_limit_spin.setValue(min(max(ctx_limit, 4096), 1048576))
+
+        # actions/ 目录 .py 扩展勾选列表
+        _enabled_actions = self._config.get('selection.custom_actions', {}) or {}
+        while self._action_checks_layout.count():
+            item = self._action_checks_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        self._action_check_items = []
+        try:
+            _all_actions = get_custom_action_manager().load_actions()
+        except Exception:
+            _all_actions = []
+        for _action in _all_actions:
+            _fname = os.path.basename(_action.file_path)
+            _cb = QCheckBox(f"显示 {(_action.icon + ' ' + _action.name).strip()}")
+            _cb.setToolTip(_action.file_path)
+            _cb.setChecked(bool(_enabled_actions.get(_fname)))
+            _cb.toggled.connect(self._on_checkbox_toggled)
+            self._action_checks_layout.addWidget(_cb)
+            self._action_check_items.append((_fname, _cb))
+
         # 保留原文选项
         keep_original = self._config.get('writing.keep_original', False)
         self._keep_original_check.setChecked(keep_original)
@@ -2020,6 +2130,20 @@ class SettingsDialog(QDialog):
             self._config.set('hotkey.selection_translate', new_sel_tr_hotkey)
             self._config.set('selection.blacklist', new_blacklist_entries)
 
+            # 划词触发方式（悬浮工具栏 / 图标按钮）
+            _trigger_mode = str(self._trigger_mode_combo.currentData() or 'toolbar')
+            self._config.set('selection.trigger_mode', _trigger_mode)
+
+            # AI 对话模型上下文长度
+            self._config.set('chat.model_context_limit', int(self._ctx_limit_spin.value()))
+
+            # 工具栏按钮自定义：actions/ 目录 .py 扩展显示开关
+            _action_map = {
+                _fname: bool(_cb.isChecked())
+                for _fname, _cb in getattr(self, '_action_check_items', [])
+            }
+            self._config.set('selection.custom_actions', _action_map)
+
             # 写作设置
             keep_original = self._keep_original_check.isChecked()
             self._config.set('writing.keep_original', keep_original)
@@ -2142,6 +2266,40 @@ class SettingsDialog(QDialog):
         self.accept()
         # 延迟显示简洁 Toast
         QTimer.singleShot(100, lambda: SimpleToastWidget.show_message("保存成功"))
+
+    # ── 扩展目录快捷入口 ──
+    def _open_dir_safe(self, path):
+        try:
+            from pathlib import Path
+            Path(path).mkdir(parents=True, exist_ok=True)
+            os.startfile(str(path))
+        except Exception as e:
+            log_error(f"打开目录失败: {e}")
+
+    def _on_open_actions_dir(self):
+        try:
+            self._open_dir_safe(get_custom_action_manager().actions_dir)
+        except Exception as e:
+            log_error(f"打开 actions 目录失败: {e}")
+
+    def _on_open_skills_dir(self):
+        try:
+            from .core.skills import get_skill_manager
+        except ImportError:
+            from src.core.skills import get_skill_manager
+        try:
+            self._open_dir_safe(get_skill_manager().skills_dir)
+        except Exception as e:
+            log_error(f"打开 skills 目录失败: {e}")
+
+    def _on_open_mcp_config(self):
+        try:
+            cfg_path = get_mcp_manager().config_path
+            os.startfile(str(cfg_path))
+            # 修改配置后需要重连，这里顺便触发一次延迟重连
+            QTimer.singleShot(2000, lambda: get_mcp_manager().reconnect())
+        except Exception as e:
+            log_error(f"打开 MCP 配置失败: {e}")
 
     def show_window(self):
         """显示设置窗口；如果已打开则复用并唤醒。"""
@@ -2392,6 +2550,25 @@ class ToastWidget(FadeableToastBase):
         toast.show()
 
 
+class CustomActionWorker(QThread):
+    """自定义工具栏功能的后台执行线程（用户扩展 run(text) 可能耗时）"""
+
+    done = pyqtSignal(object, str, str)   # (action, 选中文本, 结果)
+    failed = pyqtSignal(object, str)      # (action, 错误信息)
+
+    def __init__(self, action, text: str):
+        super().__init__()
+        self._action = action
+        self._text = text
+
+    def run(self):
+        try:
+            result = self._action.run(self._text)
+            self.done.emit(self._action, self._text, str(result or ""))
+        except Exception as e:
+            self.failed.emit(self._action, str(e))
+
+
 class MainController(QObject):
     """主控制器"""
 
@@ -2414,6 +2591,13 @@ class MainController(QObject):
         self._text_capture = get_text_capture(); _lap("text_capture")
         self._hotkey_manager = get_hotkey_manager(); _lap("hotkey_manager")
         self._writing_service = get_writing_service(); _lap("writing_service")
+
+        # 划词悬浮工具栏（toolbar 模式下划词时弹出）
+        self._selection_toolbar = get_selection_toolbar()
+        self._action_worker: Optional[CustomActionWorker] = None
+
+        # MCP 客户端管理器：延迟启动，避免拖慢启动速度
+        QTimer.singleShot(3000, self._start_mcp_manager)
 
         # TextCapture 初始化时会自动启动 selection-hook；若用户上次关闭了划词，立即停掉
         if not self._config.get('selection.enabled', True):
@@ -2450,6 +2634,11 @@ class MainController(QObject):
     def _connect_signals(self):
         self._selection_detector.selection_finished.connect(self._on_selection_finished)
         self._translate_button.clicked.connect(self._on_translate_button_clicked)
+        self._selection_toolbar.translate_requested.connect(self._on_toolbar_translate)
+        self._selection_toolbar.polish_requested.connect(self._on_toolbar_polish)
+        self._selection_toolbar.summarize_requested.connect(self._on_toolbar_summarize)
+        self._selection_toolbar.chat_requested.connect(self._on_toolbar_chat)
+        self._selection_toolbar.action_requested.connect(self._on_toolbar_action)
         self._tray_icon.enabled_changed.connect(self._on_enabled_changed)
         self._tray_icon.settings_requested.connect(self._on_settings_requested)
         self._tray_icon.exit_requested.connect(self._on_exit_requested)
@@ -2467,6 +2656,13 @@ class MainController(QObject):
         )
         self.writing_completed.connect(self._on_writing_completed)
         get_vocabulary_window().open_in_translator.connect(self._on_vocabulary_open_in_translator)
+
+    def _start_mcp_manager(self):
+        """延迟启动 MCP 客户端管理器（后台线程连接已配置的 MCP 服务器）"""
+        try:
+            get_mcp_manager().start()
+        except Exception as e:
+            log_error(f"启动 MCP 管理器失败: {e}")
 
     def _check_config(self):
         """检查配置（API 配置已硬编码，无需检查）"""
@@ -2744,11 +2940,18 @@ class MainController(QObject):
             self._current_worker = None
 
         self._translate_button.hide()
+        self._selection_toolbar.hide_toolbar()
         # 隐藏翻译窗口
         self._translator_window.hide()
         self._tray_icon.hide()
         self._tray_icon.cleanup()
         self._text_capture.cleanup()
+
+        # 关闭 MCP 客户端（断开子进程连接）
+        try:
+            get_mcp_manager().shutdown()
+        except Exception:
+            pass
 
         # 确保历史记录保存到磁盘
         try:
@@ -2851,6 +3054,7 @@ class MainController(QObject):
                 ).strip()
 
             self._translate_button.hide()
+            self._selection_toolbar.hide_toolbar()
 
             if not text:
                 self._tray_icon.show_message(
@@ -3321,7 +3525,7 @@ class MainController(QObject):
             log_info(f"写作完成: {result.source_language} -> {result.target_language}")
 
     def _on_selection_finished(self):
-        """划词选择完成 - 显示翻译图标按钮"""
+        """划词选择完成 - 根据设置显示悬浮工具栏或翻译图标按钮"""
         if not self._tray_icon._is_enabled:
             return
 
@@ -3333,8 +3537,11 @@ class MainController(QObject):
             from src.core.text_capture import get_last_program_name
             program_name = get_last_program_name()
 
+        trigger_mode = self._config.get('selection.trigger_mode', 'toolbar')
+
         if not text or not text.strip():
             self._translate_button.hide()
+            self._selection_toolbar.hide_toolbar()
             return
 
         # 获取鼠标位置
@@ -3345,8 +3552,18 @@ class MainController(QObject):
             cursor = QCursor.pos()
             mouse_pos = (cursor.x(), cursor.y())
 
-        # 保存选中文本到翻译按钮（不更新 _last_text，它只记录最后一次发起翻译的文本）
         selected_text = text.strip()
+
+        if trigger_mode == 'toolbar':
+            # 悬浮工具栏模式（豆包 / Cherry Studio 风格）
+            self._translate_button.hide()
+            self._selection_toolbar.set_selected_text(selected_text)
+            self._selection_toolbar.show_at_position(mouse_pos, selected_text)
+            return
+
+        # 图标按钮模式（原有行为）
+        self._selection_toolbar.hide_toolbar()
+        # 保存选中文本到翻译按钮（不更新 _last_text，它只记录最后一次发起翻译的文本）
         self._translate_button.set_selected_text(selected_text)
 
         # 显示翻译图标按钮（统一方式）
@@ -3371,6 +3588,64 @@ class MainController(QObject):
         # 使用 translator_window 的自动翻译功能
         self._translator_window.show_at_mouse(mouse_pos, self._last_text)
 
+    # ── 划词悬浮工具栏信号处理 ──
+    def _toolbar_current_text(self) -> str:
+        return (self._selection_toolbar.get_selected_text() or "").strip()
+
+    def _on_toolbar_translate(self):
+        """工具栏「翻译」- 与图标按钮点击行为一致"""
+        text = self._toolbar_current_text()
+        if not text:
+            return
+        if text == self._last_text and self._translator_window.isVisible() and self._translator_window.is_auto_mode():
+            return
+        self._last_text = text
+        cursor_pos = QCursor.pos()
+        self._translator_window.show_at_mouse((cursor_pos.x(), cursor_pos.y()), text)
+
+    def _on_toolbar_polish(self):
+        """工具栏「润色」- 翻译窗口润色模式"""
+        self._toolbar_run_function('polishing')
+
+    def _on_toolbar_summarize(self):
+        """工具栏「总结」- 翻译窗口总结模式"""
+        self._toolbar_run_function('summarize')
+
+    def _toolbar_run_function(self, function: str):
+        text = self._toolbar_current_text()
+        if not text:
+            return
+        self._last_text = text
+        cursor_pos = QCursor.pos()
+        self._translator_window.show_at_mouse_with_function(
+            (cursor_pos.x(), cursor_pos.y()), text, function
+        )
+
+    def _on_toolbar_chat(self, text: str):
+        """工具栏「AI对话」- 打开独立对话窗口并预填选中文本"""
+        self._translate_button.hide()
+        get_chat_window().show_with_text(text or self._toolbar_current_text())
+
+    def _on_toolbar_action(self, action):
+        """工具栏自定义功能 - 后台执行用户扩展 run(text)，结果展示在 AI 对话窗口"""
+        if self._action_worker and self._action_worker.isRunning():
+            ToastWidget.show_message("自定义功能", "上一个功能还在执行中", "info")
+            return
+        text = self._toolbar_current_text()
+        self._action_worker = CustomActionWorker(action, text)
+        self._action_worker.done.connect(self._on_action_done)
+        self._action_worker.failed.connect(self._on_action_failed)
+        self._action_worker.start()
+
+    def _on_action_done(self, action, selected_text: str, result: str):
+        get_chat_window().append_action_result(action.name, selected_text, result)
+        if not result:
+            SimpleToastWidget.show_message(f"{action.name} 已执行")
+
+    def _on_action_failed(self, action, error: str):
+        log_error(f"自定义功能 {action.name} 执行失败: {error}")
+        ToastWidget.show_message("执行失败", f"{action.name}: {error}", "error")
+
     def _on_translator_window_closed(self):
         """翻译窗口关闭"""
         self._last_text = ""
@@ -3384,6 +3659,7 @@ class MainController(QObject):
         else:
             self._selection_detector.set_enabled(False)
             self._translate_button.hide()
+            self._selection_toolbar.hide_toolbar()
             self._text_capture.stop_selection_hook()
             self._tray_icon.show_message(APP_NAME, "划词监听已禁用", "info")
 
@@ -3395,6 +3671,7 @@ class MainController(QObject):
         """双击托盘或点击菜单显示翻译窗口"""
         # 先隐藏划词翻译相关窗口
         self._translate_button.hide()
+        self._selection_toolbar.hide_toolbar()
         self._last_text = ""
 
         # 如果窗口已可见，唤醒到前台
@@ -3407,6 +3684,7 @@ class MainController(QObject):
     def _on_history_requested(self):
         """显示翻译历史窗口"""
         self._translate_button.hide()
+        self._selection_toolbar.hide_toolbar()
         self._last_text = ""
 
         # 显示历史窗口
@@ -3415,16 +3693,19 @@ class MainController(QObject):
 
     def _on_vocabulary_requested(self):
         self._translate_button.hide()
+        self._selection_toolbar.hide_toolbar()
         get_vocabulary_window().show_window()
 
     def _on_vocabulary_open_in_translator(self, word: str, translation: str):
         self._translate_button.hide()
+        self._selection_toolbar.hide_toolbar()
         self._translator_window.load_translation_pair(word, translation)
         self._translator_window.show_window()
 
     def _on_help_requested(self):
         """显示帮助窗口"""
         self._translate_button.hide()
+        self._selection_toolbar.hide_toolbar()
 
         # 显示帮助窗口
         help_window = get_help_window()

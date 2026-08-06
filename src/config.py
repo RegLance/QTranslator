@@ -169,6 +169,8 @@ class Config:
             'selection': {
                 'enabled': True,  # 托盘右键「启用划词」开关
                 'blacklist': None,  # 划词黑名单，None 表示使用内置默认列表
+                'trigger_mode': 'toolbar',  # 划词触发方式：toolbar=悬浮工具栏 / button=翻译图标按钮
+                'custom_actions': {},  # actions/ 目录 .py 扩展的显示开关 {文件名.py: bool}
             },
             'writing': {
                 'keep_original': False,  # 保留原文
@@ -194,6 +196,13 @@ class Config:
             'phonetic': {
                 'enabled': True,  # 用本地开源词典(ipa-dict)替换大模型生成的英文音标，
                                   # 同时显示英式/美式音标（谷歌/Oxford 风格，相同则合并显示一个）
+            },
+            'chat': {
+                'model_context_limit': 32768,  # 模型上下文窗口（tokens）；上下文不限条数，
+                                               # 超过约 70% 窗口时按摘要缓冲策略自动压缩历史
+            },
+            'mcp': {
+                'enabled': True,  # AI 对话中是否启用 MCP 工具调用
             },
         }
 

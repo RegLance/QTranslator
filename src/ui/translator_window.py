@@ -3640,6 +3640,29 @@ class TranslatorWindow(QWidget):
         self._streaming_text = ""
         self._start_translation()
 
+    def show_at_mouse_with_function(self, mouse_pos=None, text=None, function: str = 'translate'):
+        """在鼠标位置显示窗口并按指定功能执行（划词工具栏入口）
+
+        Args:
+            mouse_pos: 鼠标位置元组 (x, y)，如果为 None 则使用当前鼠标位置
+            text: 要处理的文本
+            function: 'translate' / 'polishing' / 'summarize'
+        """
+        if function == 'translate':
+            self.show_at_mouse(mouse_pos, text)
+            return
+
+        if not text or not text.strip():
+            return
+
+        self._prepare_show_at_mouse(mouse_pos)
+        self._input_text.setPlainText(text.strip())
+
+        if function == 'polishing':
+            self._start_polishing()
+        elif function == 'summarize':
+            self._start_summarize()
+
     def show_loading(self, original_text: str = None):
         """显示加载状态
 

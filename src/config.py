@@ -159,6 +159,7 @@ class Config:
                 'translator_window': 'Ctrl+O',  # 唤醒翻译窗口的快捷键
                 'writing': 'Ctrl+I',  # 写作快捷键
                 'selection_translate': 'Ctrl+`',  # 当前窗口选中内容翻译（Esc 下方 ` 键）
+                'ai_chat': 'Ctrl+Shift+A',  # 唤起 AI 对话窗口的快捷键
             },
             'startup': {
                 'auto_start': False,  # 开机自启

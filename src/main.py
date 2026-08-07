@@ -673,6 +673,19 @@ class SettingsDialog(QDialog):
         )
         hotkey_layout.addRow(self._selection_translate_hotkey_label, self._selection_translate_hotkey_row)
 
+        self._ai_chat_hotkey_btn = QPushButton("Ctrl+Shift+A")
+        self._ai_chat_hotkey_btn.setObjectName("hotkeyBtn4")
+        self._ai_chat_hotkey_btn.setMinimumHeight(32)
+        self._ai_chat_hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._ai_chat_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._ai_chat_hotkey_btn.setAutoDefault(False)
+        self._ai_chat_hotkey_btn.setDefault(False)
+        self._ai_chat_hotkey_label = QLabel("AI 对话:")
+        self._ai_chat_hotkey_row, self._ai_chat_hotkey_clear_btn = (
+            self._create_hotkey_row(self._ai_chat_hotkey_btn)
+        )
+        hotkey_layout.addRow(self._ai_chat_hotkey_label, self._ai_chat_hotkey_row)
+
         # 快捷键提示文字
         self._hotkey_hint_label = QLabel("点击按钮后按下新的快捷键组合，点击 × 可清除")
         self._hotkey_hint_label.setProperty("class", "hint")
@@ -683,6 +696,7 @@ class SettingsDialog(QDialog):
         self._hotkey_value = "Ctrl+O"
         self._writing_hotkey_value = "Ctrl+I"
         self._selection_translate_hotkey_value = "Ctrl+`"
+        self._ai_chat_hotkey_value = "Ctrl+Shift+A"
 
         # 监听按钮点击
         self._hotkey_btn.clicked.connect(lambda: self._start_hotkey_capture("translator"))
@@ -690,10 +704,16 @@ class SettingsDialog(QDialog):
         self._selection_translate_hotkey_btn.clicked.connect(
             lambda: self._start_hotkey_capture("selection_translate")
         )
+        self._ai_chat_hotkey_btn.clicked.connect(
+            lambda: self._start_hotkey_capture("ai_chat")
+        )
         self._hotkey_clear_btn.clicked.connect(lambda: self._clear_hotkey("translator"))
         self._writing_hotkey_clear_btn.clicked.connect(lambda: self._clear_hotkey("writing"))
         self._selection_translate_hotkey_clear_btn.clicked.connect(
             lambda: self._clear_hotkey("selection_translate")
+        )
+        self._ai_chat_hotkey_clear_btn.clicked.connect(
+            lambda: self._clear_hotkey("ai_chat")
         )
 
         scroll_layout.addWidget(self._hotkey_group)
@@ -1614,6 +1634,7 @@ class SettingsDialog(QDialog):
             self._hotkey_btn,
             self._writing_hotkey_btn,
             self._selection_translate_hotkey_btn,
+            self._ai_chat_hotkey_btn,
         ):
             btn.clearFocus()
         self.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -1632,6 +1653,9 @@ class SettingsDialog(QDialog):
         elif target == "selection_translate":
             self._selection_translate_hotkey_value = ""
             self._set_hotkey_btn_text(self._selection_translate_hotkey_btn, "")
+        elif target == "ai_chat":
+            self._ai_chat_hotkey_value = ""
+            self._set_hotkey_btn_text(self._ai_chat_hotkey_btn, "")
 
         # 延迟到事件处理结束后再释放焦点，避免点击 × 后左侧按钮残留高亮
         QTimer.singleShot(0, self._release_hotkey_focus)
@@ -1647,6 +1671,9 @@ class SettingsDialog(QDialog):
         elif target == "selection_translate":
             self._selection_translate_hotkey_btn.setText("请按下快捷键...")
             self._capturing_hotkey_target = "selection_translate"
+        elif target == "ai_chat":
+            self._ai_chat_hotkey_btn.setText("请按下快捷键...")
+            self._capturing_hotkey_target = "ai_chat"
         # 焦点放在对话框上接收按键，避免快捷键按钮出现主题色边框
         self.setFocus(Qt.FocusReason.OtherFocusReason)
 
@@ -1687,6 +1714,9 @@ class SettingsDialog(QDialog):
             elif self._capturing_hotkey_target == "selection_translate":
                 self._selection_translate_hotkey_value = hotkey
                 self._set_hotkey_btn_text(self._selection_translate_hotkey_btn, hotkey)
+            elif self._capturing_hotkey_target == "ai_chat":
+                self._ai_chat_hotkey_value = hotkey
+                self._set_hotkey_btn_text(self._ai_chat_hotkey_btn, hotkey)
 
             self._capturing_hotkey_target = None
             QTimer.singleShot(0, self._release_hotkey_focus)
@@ -1827,6 +1857,10 @@ class SettingsDialog(QDialog):
         sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+`') or ''
         self._selection_translate_hotkey_value = sel_tr_hotkey
         self._set_hotkey_btn_text(self._selection_translate_hotkey_btn, sel_tr_hotkey)
+
+        ai_chat_hotkey = self._config.get('hotkey.ai_chat', 'Ctrl+Shift+A') or ''
+        self._ai_chat_hotkey_value = ai_chat_hotkey
+        self._set_hotkey_btn_text(self._ai_chat_hotkey_btn, ai_chat_hotkey)
 
         # 划词触发方式（悬浮工具栏 / 图标按钮）
         trigger_mode = self._config.get('selection.trigger_mode', 'toolbar') or 'toolbar'
@@ -2103,6 +2137,9 @@ class SettingsDialog(QDialog):
             old_sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+`')
             new_sel_tr_hotkey = self._selection_translate_hotkey_value
 
+            old_ai_chat_hotkey = self._config.get('hotkey.ai_chat', 'Ctrl+Shift+A')
+            new_ai_chat_hotkey = self._ai_chat_hotkey_value
+
             old_blacklist_exes = get_active_blacklist_exes(self._config.get('selection.blacklist'))
             new_blacklist_entries = self._collect_blacklist_entries_from_ui()
             new_blacklist_exes = get_active_blacklist_exes(new_blacklist_entries)
@@ -2128,6 +2165,7 @@ class SettingsDialog(QDialog):
             self._config.set('hotkey.translator_window', new_hotkey)
             self._config.set('hotkey.writing', new_writing_hotkey)
             self._config.set('hotkey.selection_translate', new_sel_tr_hotkey)
+            self._config.set('hotkey.ai_chat', new_ai_chat_hotkey)
             self._config.set('selection.blacklist', new_blacklist_entries)
 
             # 划词触发方式（悬浮工具栏 / 图标按钮）
@@ -2223,6 +2261,13 @@ class SettingsDialog(QDialog):
                     log_info(f"选中翻译热键已更新: {old_sel_tr_hotkey} -> {new_sel_tr_hotkey}")
                 except Exception as e:
                     log_error(f"更新选中翻译热键失败: {e}")
+
+            if old_ai_chat_hotkey != new_ai_chat_hotkey:
+                try:
+                    hotkey_manager.update_hotkey(new_ai_chat_hotkey, "ai_chat")
+                    log_info(f"AI 对话热键已更新: {old_ai_chat_hotkey} -> {new_ai_chat_hotkey}")
+                except Exception as e:
+                    log_error(f"更新 AI 对话热键失败: {e}")
 
             if old_blacklist_exes != new_blacklist_exes:
                 try:
@@ -2645,6 +2690,7 @@ class MainController(QObject):
         self._tray_icon.translator_window_requested.connect(self._on_translator_window_requested)
         self._tray_icon.history_requested.connect(self._on_history_requested)
         self._tray_icon.vocabulary_requested.connect(self._on_vocabulary_requested)
+        self._tray_icon.chat_requested.connect(self._on_chat_requested)
         self._tray_icon.help_requested.connect(self._on_help_requested)
         # 翻译窗口关闭信号
         self._translator_window.closed.connect(self._on_translator_window_closed)
@@ -2654,6 +2700,7 @@ class MainController(QObject):
         self._hotkey_manager.selection_translate_hotkey_triggered.connect(
             self._on_selection_translate_hotkey_triggered
         )
+        self._hotkey_manager.ai_chat_hotkey_triggered.connect(self._on_ai_chat_hotkey_triggered)
         self.writing_completed.connect(self._on_writing_completed)
         get_vocabulary_window().open_in_translator.connect(self._on_vocabulary_open_in_translator)
 
@@ -2709,7 +2756,16 @@ class MainController(QObject):
             success3 = True
             log_debug("选中翻译热键未设置，已跳过注册")
 
-        if not success1 or not success2 or not success3:
+        ai_chat_hotkey = self._config.get('hotkey.ai_chat', 'Ctrl+Shift+A') or ''
+        if ai_chat_hotkey.strip():
+            success4 = self._hotkey_manager.register_hotkey(ai_chat_hotkey, name="ai_chat")
+            log_debug(f"注册 AI 对话热键: {ai_chat_hotkey}, 结果: {success4}")
+        else:
+            self._hotkey_manager.unregister_hotkey("ai_chat")
+            success4 = True
+            log_debug("AI 对话热键未设置，已跳过注册")
+
+        if not success1 or not success2 or not success3 or not success4:
             self._hotkey_retry_count += 1
             if self._hotkey_retry_count <= 3:
                 delay = self._hotkey_retry_count * 5000  # 5s, 10s, 15s
@@ -3695,6 +3751,18 @@ class MainController(QObject):
         self._translate_button.hide()
         self._selection_toolbar.hide_toolbar()
         get_vocabulary_window().show_window()
+
+    def _on_chat_requested(self):
+        """托盘菜单打开 AI 对话窗口"""
+        self._translate_button.hide()
+        self._selection_toolbar.hide_toolbar()
+        get_chat_window().show_window()
+
+    def _on_ai_chat_hotkey_triggered(self):
+        """AI 对话快捷键：唤起/置顶 AI 对话窗口"""
+        self._translate_button.hide()
+        self._selection_toolbar.hide_toolbar()
+        get_chat_window().show_window()
 
     def _on_vocabulary_open_in_translator(self, word: str, translation: str):
         self._translate_button.hide()

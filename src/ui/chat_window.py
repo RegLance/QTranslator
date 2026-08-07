@@ -18,8 +18,8 @@ from PyQt6.QtCore import Qt, QPoint, QRect, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QListWidget, QListWidgetItem, QTextBrowser, QTextEdit, QMenu, QFrame,
-    QToolButton, QInputDialog, QSplitter, QSplitterHandle,
+    QListWidget, QListWidgetItem, QTextEdit, QMenu, QFrame,
+    QToolButton, QInputDialog, QSplitter, QSplitterHandle, QScrollArea,
 )
 
 try:
@@ -328,11 +328,18 @@ class ChatWindow(QWidget):
         self.setWindowTitle(f"{APP_NAME} - AI 对话")
 
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
+            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window |
+            Qt.WindowType.WindowMinimizeButtonHint |
+            Qt.WindowType.WindowMaximizeButtonHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(720, 480)
         self.resize(920, 640)
+
+        # 窗口状态（最大化/最小化，与翻译窗口一致）
+        self._is_maximized = False
+        self._is_minimized = False
+        self._normal_geometry: Optional[QRect] = None
 
         self._config = get_config()
         self._store = get_chat_store()
@@ -356,6 +363,9 @@ class ChatWindow(QWidget):
         self._setup_ui()
         self._apply_theme()
         self._applied_theme_signature = self._theme_signature()
+
+        # 在 Windows 上启用任务栏最小化和 Win+方向键贴靠/最大化
+        self._enable_windows_window_management()
 
         # 鼠标追踪：未按键时也响应移动，及时切换边缘缩放光标
         self.setMouseTracking(True)
@@ -392,6 +402,22 @@ class ChatWindow(QWidget):
         self._title_label.setObjectName("chatTitleLabel")
         title_layout.addWidget(self._title_label)
         title_layout.addStretch()
+
+        self._minimize_btn = QPushButton("─")
+        self._minimize_btn.setObjectName("chatMinimizeBtn")
+        self._minimize_btn.setFixedSize(26, 26)
+        self._minimize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._minimize_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._minimize_btn.clicked.connect(self._on_minimize)
+        title_layout.addWidget(self._minimize_btn)
+
+        self._maximize_btn = QPushButton("□")
+        self._maximize_btn.setObjectName("chatMaximizeBtn")
+        self._maximize_btn.setFixedSize(26, 26)
+        self._maximize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._maximize_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._maximize_btn.clicked.connect(self._on_maximize)
+        title_layout.addWidget(self._maximize_btn)
 
         self._close_btn = QPushButton("×")
         self._close_btn.setObjectName("chatCloseBtn")
@@ -476,11 +502,19 @@ class ChatWindow(QWidget):
 
         right.addLayout(top_bar)
 
-        # 消息区
-        self._message_view = QTextBrowser()
-        self._message_view.setObjectName("messageView")
-        self._message_view.setOpenExternalLinks(True)
-        right.addWidget(self._message_view, 1)
+        # 消息区（控件式气泡：QSS 支持圆角，Qt 富文本不支持 border-radius）
+        self._message_scroll = QScrollArea()
+        self._message_scroll.setObjectName("messageView")
+        self._message_scroll.setWidgetResizable(True)
+        self._message_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._message_container = QWidget()
+        self._message_container.setObjectName("messageContainer")
+        self._message_layout = QVBoxLayout(self._message_container)
+        self._message_layout.setContentsMargins(4, 10, 10, 10)
+        self._message_layout.setSpacing(10)
+        self._message_scroll.setWidget(self._message_container)
+        self._stream_label: Optional[QLabel] = None  # 流式输出中的气泡
+        right.addWidget(self._message_scroll, 1)
 
         # 输入区
         input_bar = QHBoxLayout()
@@ -540,6 +574,11 @@ class ChatWindow(QWidget):
         self._title_bar.setStyleSheet(f"""
             #chatTitleBar {{ background-color: {bg2}; border-top-left-radius: 10px; border-top-right-radius: 10px; }}
             #chatTitleLabel {{ color: {text1}; font-size: 13px; font-weight: 600; background: transparent; }}
+            #chatMinimizeBtn, #chatMaximizeBtn {{
+                background: transparent; color: {text2}; border: none;
+                font-size: 12px; font-weight: bold; border-radius: 5px;
+            }}
+            #chatMinimizeBtn:hover, #chatMaximizeBtn:hover {{ background-color: {border}; color: {text1}; }}
             #chatCloseBtn {{
                 background: transparent; color: {text2}; border: none;
                 font-size: 16px; border-radius: 5px;
@@ -611,11 +650,11 @@ class ChatWindow(QWidget):
             }}
             #clearCtxBtn:hover {{ color: {text1}; border-color: {accent}; }}
         """)
-        self._message_view.setStyleSheet(f"""
+        self._message_scroll.setStyleSheet(f"""
             #messageView {{
-                background-color: {bg}; color: {text1}; border: none;
-                font-size: {font_size}px;
+                background-color: {bg}; border: none;
             }}
+            #messageContainer {{ background: transparent; }}
             #messageView QScrollBar:vertical {{
                 background: transparent; width: 8px; margin: 2px;
             }}
@@ -625,26 +664,27 @@ class ChatWindow(QWidget):
             #messageView QScrollBar::handle:vertical:hover {{ background: {text2}; }}
             #messageView QScrollBar::add-line:vertical, #messageView QScrollBar::sub-line:vertical {{ height: 0; }}
             #messageView QScrollBar::add-page:vertical, #messageView QScrollBar::sub-page:vertical {{ background: transparent; }}
-        """)
-        self._message_view.document().setDefaultStyleSheet(f"""
-            body {{ color: {text1}; font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
-                    background-color: {bg}; }}
-            td.user {{ background-color: {accent}; color: #ffffff;
-                       border-radius: 12px; padding: 8px 12px; margin: 6px 0;
-                       text-align: left; }}
-            .row-assistant {{ text-align: left; margin: 8px 0; }}
-            .role-tag {{ color: {accent}; font-size: 11px; font-weight: 700;
-                         letter-spacing: 1px; }}
-            .assistant {{ background-color: {bg2}; color: {text1};
-                          border: 1px solid {border};
-                          border-radius: 12px; padding: 8px 12px; margin-top: 2px; }}
-            .info {{ color: {text2}; font-size: 12px; margin: 4px 0; }}
-            .empty-wrap {{ text-align: center; margin-top: 90px; }}
-            .empty-title {{ color: {text1}; font-size: 20px; font-weight: 700;
-                            margin-bottom: 8px; }}
-            .empty-hint {{ color: {text2}; font-size: 13px; }}
-            pre {{ background-color: {border}; padding: 8px; border-radius: 6px;
-                   white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; }}
+            #bubbleUser {{
+                background-color: {accent}; color: #ffffff;
+                border-radius: 12px; padding: 8px 12px;
+                font-size: {font_size}px;
+            }}
+            #bubbleAssistant {{
+                background-color: {bg2}; color: {text1};
+                border: 1px solid {border};
+                border-radius: 12px; padding: 8px 12px;
+                font-size: {font_size}px;
+            }}
+            #bubbleUser pre, #bubbleAssistant pre {{
+                background-color: {border}; padding: 6px;
+                font-family: Consolas, monospace;
+            }}
+            #emptyHint {{
+                color: {text2}; font-size: 13px; background: transparent;
+            }}
+            #emptyTitle {{
+                color: {text1}; font-size: 20px; font-weight: 700; background: transparent;
+            }}
         """)
         self._input_edit.setStyleSheet(f"""
             #chatInput {{
@@ -687,6 +727,10 @@ class ChatWindow(QWidget):
         self._reload_session_list()
         if self._current_session_id is None:
             self._ensure_session()
+        if self.isMinimized():
+            # 从最小化恢复（任务栏/快捷键再次唤起）
+            self._is_minimized = False
+            self.showNormal()
         self.show()
         self.raise_()
         self.activateWindow()
@@ -717,6 +761,92 @@ class ChatWindow(QWidget):
         self.hide()
         self.closed.emit()
 
+    def _on_minimize(self):
+        """最小化窗口"""
+        self._is_minimized = True
+        self.showMinimized()  # 使用系统最小化
+
+    def _on_maximize(self):
+        """最大化/还原窗口"""
+        if self._is_maximized or self.isMaximized():
+            # 还原
+            if self.isMaximized():
+                # 系统最大化（Win+↑）：由系统还原到原尺寸
+                self.showNormal()
+            elif self._normal_geometry:
+                self.setGeometry(self._normal_geometry)
+            self._is_maximized = False
+            self._maximize_btn.setText("□")
+        else:
+            # 最大化
+            self._normal_geometry = self.geometry()
+            # 获取窗口当前所在的屏幕（而不是主屏幕）
+            screen = QApplication.screenAt(self.geometry().center())
+            if screen is None:
+                screen = QApplication.primaryScreen()
+            if screen:
+                self.setGeometry(screen.availableGeometry())
+            self._is_maximized = True
+            self._maximize_btn.setText("❐")
+
+    def changeEvent(self, event):
+        """同步系统窗口状态（Win+↑ 最大化 / Win+↓ 还原）与按钮图标"""
+        if event.type() == event.Type.WindowStateChange:
+            if self.isMaximized():
+                self._is_maximized = True
+                self._maximize_btn.setText("❐")
+            elif self.isMinimized():
+                pass
+            elif self._is_maximized:
+                self._is_maximized = False
+                self._maximize_btn.setText("□")
+            if not self.isMinimized():
+                self._is_minimized = False
+        super().changeEvent(event)
+
+    def _enable_windows_window_management(self):
+        """在 Windows 上启用系统窗口管理快捷键和任务栏最小化。"""
+        try:
+            if not sys.platform.startswith("win"):
+                return
+
+            import ctypes
+            # 获取窗口句柄
+            hwnd = int(self.winId())
+
+            # 获取当前窗口样式
+            GWL_STYLE = -16
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+
+            # WS_THICKFRAME/WS_MAXIMIZEBOX 让 Windows 识别该无边框窗口可贴靠/最大化，
+            # 因而支持 Win+方向键等系统窗口管理快捷键。
+            WS_THICKFRAME = 0x00040000
+            WS_MINIMIZEBOX = 0x00020000
+            WS_MAXIMIZEBOX = 0x00010000
+            WS_SYSMENU = 0x00080000
+            new_style = style | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU
+
+            # 设置新样式
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, new_style)
+
+            # 通知 Windows 重新计算非客户区样式，否则快捷键/贴靠状态可能不立即生效。
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            ctypes.windll.user32.SetWindowPos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+            )
+        except Exception:
+            pass
+
     def closeEvent(self, event):
         """点系统关闭也仅隐藏，保留会话状态"""
         event.ignore()
@@ -731,6 +861,9 @@ class ChatWindow(QWidget):
 
     def _edge_at(self, pos) -> int:
         """返回鼠标位置命中的边缘位组合（可为角）"""
+        # 最大化状态下不允许边缘缩放（与系统最大化窗口一致）
+        if self._is_maximized or self.isMaximized():
+            return 0
         r = self.rect()
         b = self._RESIZE_BORDER
         edge = 0
@@ -813,6 +946,16 @@ class ChatWindow(QWidget):
             self._resize_cursor_child = None
         self.setCursor(self._resize_cursor(self._edge_at(event.position().toPoint())))
         super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        """鼠标双击事件 - 双击标题栏切换最大化状态"""
+        if event.button() == Qt.MouseButton.LeftButton and not self._resize_edge:
+            pos = event.position().toPoint()
+            # 双击标题栏任意位置切换最大化（按钮自身消费点击，不会到这里）
+            if self._title_bar.geometry().contains(pos):
+                self._on_maximize()
+                return
+        super().mouseDoubleClickEvent(event)
 
     def eventFilter(self, obj, event):
         is_child = (
@@ -1037,42 +1180,82 @@ class ChatWindow(QWidget):
     # ------------------------------------------------------------------
     # 消息渲染与发送
     # ------------------------------------------------------------------
-    def _render_messages(self, streaming_extra: str = ""):
+    def _render_messages(self, streaming_extra: str = "", force_scroll: bool = False):
         session = self._store.get_session(self._current_session_id) if self._current_session_id else None
         messages = (session or {}).get('messages', [])
 
-        parts = []
+        # 只有用户停留在底部附近时才自动跟随滚动（修复生成时向上滚动导致的闪烁）
+        bar = self._message_scroll.verticalScrollBar()
+        stick = force_scroll or bar.value() >= bar.maximum() - 30
+
+        # 清空旧气泡
+        self._stream_label = None
+        while self._message_layout.count():
+            item = self._message_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
         if not messages and not streaming_extra:
-            parts.append(
-                '<div class="empty-wrap"><div class="empty-title">👋 开始对话</div>'
-                '<div class="empty-hint">直接输入问题，或划词后从工具栏选择「AI 对话」，'
-                '选中的内容会自动带入这里。</div></div>'
-            )
+            wrap = QWidget()
+            wl = QVBoxLayout(wrap)
+            wl.setContentsMargins(0, 90, 0, 0)
+            wl.setSpacing(8)
+            title = QLabel("👋 开始对话")
+            title.setObjectName("emptyTitle")
+            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            hint = QLabel("直接输入问题，或划词后从工具栏选择「AI 对话」，\n选中的内容会自动带入这里。")
+            hint.setObjectName("emptyHint")
+            hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            wl.addWidget(title)
+            wl.addWidget(hint)
+            self._message_layout.addWidget(wrap)
 
         for m in messages:
             role = m.get('role')
             content = m.get('content', '')
-            if role == 'user':
-                parts.append(
-                    '<table width="100%"><tr><td width="20%"></td>'
-                    f'<td class="user">{_format_content(content)}</td></tr></table>'
-                )
-            elif role == 'assistant':
-                parts.append(
-                    f'<div class="row-assistant"><span class="role-tag">AI</span>'
-                    f'<div class="assistant">{_format_content(content)}</div></div>'
-                )
+            if role in ('user', 'assistant'):
+                row, _ = self._make_bubble(role, content)
+                self._message_layout.addWidget(row)
 
         if streaming_extra:
-            parts.append(
-                f'<div class="row-assistant"><span class="role-tag">AI</span>'
-                f'<div class="assistant">{_format_content(streaming_extra)}<br>▍</div></div>'
-            )
+            row, label = self._make_bubble(
+                'assistant', _format_content(streaming_extra) + "<br>▍", html_ready=True)
+            self._stream_label = label
+            self._message_layout.addWidget(row)
 
-        self._message_view.setHtml(''.join(parts))
-        # 滚动到底部
-        bar = self._message_view.verticalScrollBar()
+        self._message_layout.addStretch()
+        if stick:
+            QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def _make_bubble(self, role: str, content: str, html_ready: bool = False):
+        """创建单条消息气泡（返回行容器与气泡 QLabel，用户右对齐/AI 左对齐）"""
+        label = QLabel(content if html_ready else _format_content(content))
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        label.setMinimumWidth(40)
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        if role == 'user':
+            label.setObjectName("bubbleUser")
+            lay.addStretch(2)
+            lay.addWidget(label, 6)
+        else:
+            label.setObjectName("bubbleAssistant")
+            lay.addWidget(label, 6)
+            lay.addStretch(2)
+        return row, label
+
+    def _scroll_to_bottom(self):
+        bar = self._message_scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
+
+    def _near_bottom(self) -> bool:
+        bar = self._message_scroll.verticalScrollBar()
+        return bar.value() >= bar.maximum() - 30
 
     def send_message(self, text: Optional[str] = None):
         if self._worker and self._worker.isRunning():
@@ -1123,7 +1306,7 @@ class ChatWindow(QWidget):
 
         self._stream_buffer = ""
         self._send_btn.setEnabled(False)
-        self._render_messages(streaming_extra="…")
+        self._render_messages(streaming_extra="…", force_scroll=True)
 
         self._worker = ChatWorker(sid, system_prompt, history, summary, summary_count,
                                   model, client_kwargs, context_limit, tools)
@@ -1140,11 +1323,25 @@ class ChatWindow(QWidget):
 
     def _on_chunk(self, chunk: str):
         self._stream_buffer += chunk
-        self._render_messages(streaming_extra=self._stream_buffer)
+        if self._stream_label is not None:
+            # 只更新流式气泡，不重建全部消息（减少重绘与滚动跳动）
+            stick = self._near_bottom()
+            self._stream_label.setText(_format_content(self._stream_buffer) + "<br>▍")
+            if stick:
+                QTimer.singleShot(0, self._scroll_to_bottom)
+        else:
+            self._render_messages(streaming_extra=self._stream_buffer)
 
     def _on_tool_info(self, info: str):
         log_info(info)
-        self._render_messages(streaming_extra=(self._stream_buffer + f"\n\n*{info}*" if self._stream_buffer else f"*{info}*"))
+        extra = f"{self._stream_buffer}\n\n*{info}*" if self._stream_buffer else f"*{info}*"
+        if self._stream_label is not None:
+            stick = self._near_bottom()
+            self._stream_label.setText(_format_content(extra) + "<br>▍")
+            if stick:
+                QTimer.singleShot(0, self._scroll_to_bottom)
+        else:
+            self._render_messages(streaming_extra=extra)
 
     def _on_finished(self, full_text: str):
         if self._current_session_id and full_text:

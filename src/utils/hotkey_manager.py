@@ -155,6 +155,7 @@ class HotkeyManager(QObject):
     hotkey_triggered = pyqtSignal()  # 翻译窗口热键触发信号
     writing_hotkey_triggered = pyqtSignal()  # 写作热键触发信号
     selection_translate_hotkey_triggered = pyqtSignal()  # 选中内容翻译热键（主动取词）
+    ai_chat_hotkey_triggered = pyqtSignal()  # AI 对话窗口热键触发信号
 
     def __init__(self):
         super().__init__()
@@ -247,6 +248,8 @@ class HotkeyManager(QObject):
                     pynput_hotkeys[pynput_format] = self._on_writing_hotkey_pressed
                 elif name == "selection_translate":
                     pynput_hotkeys[pynput_format] = self._on_selection_translate_pressed
+                elif name == "ai_chat":
+                    pynput_hotkeys[pynput_format] = self._on_ai_chat_pressed
                 else:
                     pynput_hotkeys[pynput_format] = self._on_hotkey_pressed
 
@@ -304,6 +307,17 @@ class HotkeyManager(QObject):
         except Exception:
             pass
 
+    def _on_ai_chat_pressed(self):
+        """AI 对话热键按下（pynput 线程回调 -> 切到 Qt 主线程）"""
+        log_debug("AI 对话热键触发")
+        try:
+            QMetaObject.invokeMethod(
+                self, "_emit_ai_chat_hotkey_triggered",
+                Qt.ConnectionType.QueuedConnection
+            )
+        except Exception:
+            pass
+
     @pyqtSlot()
     def _emit_hotkey_triggered(self):
         """主线程执行：发射翻译窗口热键信号"""
@@ -317,6 +331,11 @@ class HotkeyManager(QObject):
     @pyqtSlot()
     def _emit_selection_translate_hotkey_triggered(self):
         self.selection_translate_hotkey_triggered.emit()
+
+    @pyqtSlot()
+    def _emit_ai_chat_hotkey_triggered(self):
+        """主线程执行：发射 AI 对话热键信号"""
+        self.ai_chat_hotkey_triggered.emit()
 
     def update_hotkey(self, new_hotkey: str, name: str = "translator_window") -> bool:
         """更新热键

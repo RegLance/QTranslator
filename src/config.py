@@ -159,7 +159,7 @@ class Config:
                 'translator_window': 'Ctrl+O',  # 唤醒翻译窗口的快捷键
                 'writing': 'Ctrl+I',  # 写作快捷键
                 'selection_translate': 'Ctrl+`',  # 当前窗口选中内容翻译（Esc 下方 ` 键）
-                'ai_chat': 'Ctrl+Shift+A',  # 唤起 AI 对话窗口的快捷键
+                'ai_chat': 'Ctrl+Shift+P',  # 唤起 AI 对话窗口的快捷键
             },
             'startup': {
                 'auto_start': False,  # 开机自启
@@ -199,6 +199,11 @@ class Config:
                                   # 同时显示英式/美式音标（谷歌/Oxford 风格，相同则合并显示一个）
             },
             'chat': {
+                'use_shared_api': True,  # 勾选则与翻译共用 API Key 与模型配置
+                'api_key': '',           # AI 对话专用 API Key（use_shared_api=False 时生效）
+                'base_url': '',          # AI 对话专用 Base URL
+                'model': '',             # AI 对话专用模型
+                'timeout': 60,           # AI 对话超时（秒）
                 'model_context_limit': 32768,  # 模型上下文窗口（tokens）；上下文不限条数，
                                                # 超过约 70% 窗口时按摘要缓冲策略自动压缩历史
             },

@@ -139,17 +139,37 @@ class ChatStore:
             s['title'] = title[:24] + ('…' if len(title) > 24 else '')
         self._save()
 
-    def update_last_assistant_message(self, session_id: str, content: str):
-        """流式输出完成后，覆盖写入最后一条 assistant 消息"""
+    def update_last_assistant_message(self, session_id: str, content: str,
+                                      reasoning: str = ""):
+        """流式输出完成后，覆盖写入最后一条 assistant 消息（可附带思考过程）"""
         s = self.get_session(session_id)
         if not s:
             return
         if s['messages'] and s['messages'][-1].get('role') == 'assistant':
-            s['messages'][-1]['content'] = content
+            msg = s['messages'][-1]
+            msg['content'] = content
         else:
-            s['messages'].append({'role': 'assistant', 'content': content})
+            msg = {'role': 'assistant', 'content': content}
+            s['messages'].append(msg)
+        # 思考模型的思考过程随消息保存（仅展示用，不参与上下文）
+        if reasoning:
+            msg['reasoning'] = reasoning
+        else:
+            msg.pop('reasoning', None)
         s['updated_at'] = _now_ms()
         self._save()
+
+    def remove_trailing_empty_assistant(self, session_id: str):
+        """移除末尾的空 assistant 占位消息（请求失败/取消后不残留空消息）"""
+        s = self.get_session(session_id)
+        if not s or not s['messages']:
+            return
+        last = s['messages'][-1]
+        if (last.get('role') == 'assistant' and not last.get('content')
+                and not last.get('reasoning')):
+            s['messages'].pop()
+            s['updated_at'] = _now_ms()
+            self._save()
 
     def get_context_messages(self, session_id: str) -> List[Dict[str, str]]:
         """获取会话的全部上下文消息（不限制条数，超窗口由摘要压缩处理）"""

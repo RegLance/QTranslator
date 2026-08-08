@@ -7,6 +7,7 @@
 窗口为无边框置顶工具窗口，不抢占焦点（WA_ShowWithoutActivating），
 鼠标移出后自动隐藏。
 """
+import math
 import os
 import sys
 from typing import List, Optional, Tuple
@@ -22,14 +23,22 @@ try:
     from ..utils.logger import log_debug
     from ..utils.theme import get_theme
     from ..core.custom_actions import get_custom_action_manager, CustomAction
+    from .translate_button import BUTTON_SIZE, HIDE_DISTANCE_THRESHOLD
 except ImportError:
     from src.config import get_config, APP_NAME
     from src.utils.logger import log_debug
     from src.utils.theme import get_theme
     from src.core.custom_actions import get_custom_action_manager, CustomAction
+    from src.ui.translate_button import BUTTON_SIZE, HIDE_DISTANCE_THRESHOLD
 
 TOOLBAR_HEIGHT = 34          # 工具栏高度（逻辑像素）
-LEAVE_HIDE_DELAY_MS = 350    # 鼠标移出后延迟隐藏（防止误触抖动）
+MOUSE_CHECK_INTERVAL_MS = 100   # 鼠标距离检测间隔，与翻译图标按钮一致
+JUST_SHOWN_GRACE_MS = 500    # 刚弹出时的保护期，不做距离检测
+
+# 翻译图标按钮的消失规则：距中心超 HIDE_DISTANCE_THRESHOLD(50) 逻辑像素隐藏，
+# 按钮半径 BUTTON_SIZE/2 = 12，等效于边缘外 38px。工具栏是宽矩形，改用
+# 鼠标到矩形（实时宽高决定）边缘的距离计算，取同样的 38px 边缘余量，手感一致。
+HIDE_EDGE_THRESHOLD = HIDE_DISTANCE_THRESHOLD - BUTTON_SIZE // 2
 
 
 class SelectionToolbar(QWidget):
@@ -70,10 +79,11 @@ class SelectionToolbar(QWidget):
         self._row.setContentsMargins(6, 4, 6, 4)
         self._row.setSpacing(2)
 
-        # 延迟隐藏定时器
-        self._hide_timer = QTimer(self)
-        self._hide_timer.setSingleShot(True)
-        self._hide_timer.timeout.connect(self._hide_now)
+        # 鼠标距离检测定时器：离工具栏边缘超过余量自动隐藏（与翻译按钮一致）
+        self._mouse_check_timer = QTimer(self)
+        self._mouse_check_timer.setInterval(MOUSE_CHECK_INTERVAL_MS)
+        self._mouse_check_timer.timeout.connect(self._check_mouse_distance)
+        self._is_just_shown = False
 
         # 全局点击检测：点击工具栏以外的地方即隐藏
         self._click_check_timer = QTimer(self)
@@ -205,9 +215,11 @@ class SelectionToolbar(QWidget):
             new_x, new_y = x + 10, y + 8
 
         self.move(new_x, new_y)
-        self._hide_timer.stop()
         self.show()
         self.raise_()
+        self._is_just_shown = True
+        QTimer.singleShot(JUST_SHOWN_GRACE_MS, self._reset_just_shown)
+        self._mouse_check_timer.start()
         log_debug(f"划词工具栏弹出于 ({new_x}, {new_y})")
 
     def set_selected_text(self, text: str):
@@ -217,25 +229,36 @@ class SelectionToolbar(QWidget):
         return self._selected_text
 
     def hide_toolbar(self):
-        self._hide_timer.stop()
         self._hide_now()
 
     def _hide_now(self):
         if self.isVisible():
+            self._mouse_check_timer.stop()
             self.hide()
 
     # ------------------------------------------------------------------
     # 自动隐藏
     # ------------------------------------------------------------------
-    def enterEvent(self, event):
-        self._hide_timer.stop()
-        super().enterEvent(event)
+    def _reset_just_shown(self):
+        self._is_just_shown = False
 
-    def leaveEvent(self, event):
-        # 有弹出菜单（技能菜单）打开时不隐藏
-        if QApplication.activePopupWidget() is None:
-            self._hide_timer.start(LEAVE_HIDE_DELAY_MS)
-        super().leaveEvent(event)
+    def _check_mouse_distance(self):
+        """鼠标离工具栏边缘超 HIDE_EDGE_THRESHOLD 自动隐藏（与翻译按钮同手感）
+
+        翻译按钮以「距中心 > 50 逻辑像素」为隐藏阈值；工具栏是宽矩形，
+        改为计算鼠标到矩形（实时宽高）的直线距离：矩形内为 0，
+        矩形外为到最近边/角的距离。
+        """
+        if self._is_just_shown or not self.isVisible():
+            return
+        if QApplication.activePopupWidget() is not None:
+            return  # 弹出菜单打开时不隐藏
+        rect = self.frameGeometry()
+        pos = QCursor.pos()
+        dx = max(rect.left() - pos.x(), 0, pos.x() - rect.right())
+        dy = max(rect.top() - pos.y(), 0, pos.y() - rect.bottom())
+        if math.hypot(dx, dy) > HIDE_EDGE_THRESHOLD:
+            self._hide_now()
 
     def _check_outside_click(self):
         """鼠标在工具栏之外按下左键 → 隐藏（点别处即消失）"""

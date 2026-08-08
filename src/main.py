@@ -35,12 +35,22 @@ from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPi
 from PyQt6.QtCore import QPointF
 from PyQt6.QtSvg import QSvgRenderer
 
+try:
+    from .utils.context_probe import probe_context_limit, guess_context_limit
+except ImportError:
+    from src.utils.context_probe import probe_context_limit, guess_context_limit
+
 # 设置 Windows 高 DPI 支持
 import ctypes
 try:
     ctypes.windll.user32.SetProcessDpiAwareness(2)
 except Exception:
     pass
+
+
+class _CtxProbeEmitter(QObject):
+    """上下文探测后台线程 -> 主线程信号桥"""
+    done = pyqtSignal(int, int, str)  # (序号, tokens, 来源 api/guess)
 
 
 # ============================================================================
@@ -495,6 +505,9 @@ class SettingsDialog(QDialog):
         self._scroll_area = QScrollArea()
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # 垂直滚动条常显：避免内容高度变化时滚动条出现/消失导致视口宽度变化
+        # → 所有控件横向重排 → 界面闪烁
+        self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
 
         # 滚动内容容器
         self._scroll_content = QWidget()
@@ -673,7 +686,7 @@ class SettingsDialog(QDialog):
         )
         hotkey_layout.addRow(self._selection_translate_hotkey_label, self._selection_translate_hotkey_row)
 
-        self._ai_chat_hotkey_btn = QPushButton("Ctrl+Shift+A")
+        self._ai_chat_hotkey_btn = QPushButton("Ctrl+Shift+P")
         self._ai_chat_hotkey_btn.setObjectName("hotkeyBtn4")
         self._ai_chat_hotkey_btn.setMinimumHeight(32)
         self._ai_chat_hotkey_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -696,7 +709,7 @@ class SettingsDialog(QDialog):
         self._hotkey_value = "Ctrl+O"
         self._writing_hotkey_value = "Ctrl+I"
         self._selection_translate_hotkey_value = "Ctrl+`"
-        self._ai_chat_hotkey_value = "Ctrl+Shift+A"
+        self._ai_chat_hotkey_value = "Ctrl+Shift+P"
 
         # 监听按钮点击
         self._hotkey_btn.clicked.connect(lambda: self._start_hotkey_capture("translator"))
@@ -849,25 +862,86 @@ class SettingsDialog(QDialog):
 
         # AI 对话设置组
         self._chat_group = QGroupBox("AI 对话")
-        chat_layout = QFormLayout(self._chat_group)
-        chat_layout.setSpacing(10)
+        chat_layout = QVBoxLayout(self._chat_group)
+        chat_layout.setSpacing(8)
         chat_layout.setContentsMargins(12, 20, 12, 12)
-        chat_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        self._ctx_limit_spin = QSpinBox()
+        # 共用 API 勾选框（全宽，与其他设置组风格一致）
+        self._chat_shared_api_check = QCheckBox("与翻译共用 API 配置")
+        self._chat_shared_api_check.setChecked(True)
+        self._chat_shared_api_check.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._chat_shared_api_check.toggled.connect(self._on_chat_shared_api_toggled)
+        chat_layout.addWidget(self._chat_shared_api_check)
+
+        self._chat_shared_api_hint_label = QLabel(
+            "取消后可使用独立于翻译功能的 API Key、Base URL、Model 和 Timeout"
+        )
+        self._chat_shared_api_hint_label.setProperty("class", "checkbox-hint")
+        self._chat_shared_api_hint_label.setWordWrap(True)
+        chat_layout.addWidget(self._chat_shared_api_hint_label)
+
+        # 模型上下文长度（行内标签 + 输入框）
+        ctx_row = QHBoxLayout()
+        ctx_row.setSpacing(8)
+        ctx_label = QLabel("模型上下文长度:")
+        self._ctx_limit_spin = StyledSpinBox()
         self._ctx_limit_spin.setMinimumHeight(32)
         self._ctx_limit_spin.setRange(4096, 1048576)
         self._ctx_limit_spin.setSingleStep(1024)
         self._ctx_limit_spin.setSuffix(" tokens")
-        chat_layout.addRow("模型上下文长度:", self._ctx_limit_spin)
+        ctx_row.addWidget(ctx_label)
+        ctx_row.addWidget(self._ctx_limit_spin, 1)
+        ctx_row.addStretch(3)
+        chat_layout.addLayout(ctx_row)
 
+        # 上下文长度说明
         self._chat_hint_label = QLabel(
             "对话历史不限条数；超过约 70% 上下文窗口时，自动按开源摘要缓冲策略\n"
             "（LangChain ConversationSummaryBufferMemory 模式）压缩较早对话为摘要，最近消息原文保留。"
         )
         self._chat_hint_label.setProperty("class", "hint")
         self._chat_hint_label.setWordWrap(True)
-        chat_layout.addRow("", self._chat_hint_label)
+        chat_layout.addWidget(self._chat_hint_label)
+
+        # --- AI 对话独立 API 字段（勾选"共用"时隐藏） ---
+        self._chat_api_form_widget = QWidget()
+        self._chat_api_form_widget.setAutoFillBackground(False)
+        self._chat_api_form_widget.setStyleSheet("background: transparent;")
+        chat_api_form = QFormLayout(self._chat_api_form_widget)
+        chat_api_form.setSpacing(10)
+        chat_api_form.setContentsMargins(0, 4, 0, 0)
+        chat_api_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self._chat_api_key_edit = QLineEdit()
+        self._chat_api_key_edit.setMinimumHeight(32)
+        self._chat_api_key_edit.setPlaceholderText("sk-...")
+        self._chat_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._chat_api_key_edit.setTextMargins(0, 0, 32, 0)
+        self._chat_api_key_label = QLabel("API Key:")
+        chat_api_form.addRow(self._chat_api_key_label, self._chat_api_key_edit)
+
+        self._chat_api_url_edit = QLineEdit()
+        self._chat_api_url_edit.setMinimumHeight(32)
+        self._chat_api_url_edit.setPlaceholderText("https://api.openai.com/v1")
+        self._chat_api_url_label = QLabel("Base URL:")
+        chat_api_form.addRow(self._chat_api_url_label, self._chat_api_url_edit)
+
+        self._chat_model_edit = QLineEdit()
+        self._chat_model_edit.setMinimumHeight(32)
+        self._chat_model_edit.setPlaceholderText("gpt-4o-mini")
+        self._chat_model_label = QLabel("Model:")
+        chat_api_form.addRow(self._chat_model_label, self._chat_model_edit)
+
+        self._chat_timeout_spin = StyledSpinBox()
+        self._chat_timeout_spin.setMinimumHeight(32)
+        self._chat_timeout_spin.setRange(10, 600)
+        self._chat_timeout_spin.setValue(60)
+        self._chat_timeout_spin.setSuffix(" 秒")
+        self._chat_timeout_label = QLabel("Timeout:")
+        chat_api_form.addRow(self._chat_timeout_label, self._chat_timeout_spin)
+
+        chat_layout.addWidget(self._chat_api_form_widget)
+        self._on_chat_shared_api_toggled(True)
 
         scroll_layout.addWidget(self._chat_group)
 
@@ -1137,6 +1211,10 @@ class SettingsDialog(QDialog):
         """应用主题样式 - 使用单一合并样式表，避免逐控件 setStyleSheet 的性能开销"""
         t = self._theme
 
+        # 计算 disabled 输入框背景色（比 input_bg 略暗，用于置灰态）
+        _disabled_c = QColor(t['input_bg'])
+        t['input_disabled_bg'] = _disabled_c.darker(108).name()
+
         # 构建合并样式表，一次性应用到 contentFrame 及其所有子控件
         consolidated_style = f"""
             /* 内容容器 */
@@ -1238,6 +1316,10 @@ class SettingsDialog(QDialog):
             QLineEdit:focus {{
                 border-color: {t['input_focus']};
             }}
+            QLineEdit:disabled {{
+                color: {t['text_muted']};
+                background-color: {t['input_disabled_bg']};
+            }}
 
             /* 下拉框 */
             QComboBox {{
@@ -1289,6 +1371,10 @@ class SettingsDialog(QDialog):
             }}
             QSpinBox:focus {{
                 border-color: {t['accent_color']};
+            }}
+            QSpinBox:disabled {{
+                color: {t['text_muted']};
+                background-color: {t['input_disabled_bg']};
             }}
             QSpinBox::up-button {{
                 subcontrol-origin: border;
@@ -1463,6 +1549,8 @@ class SettingsDialog(QDialog):
 
         # SpinBox 自定义箭头颜色
         self._font_size_spin.set_arrow_color(t['text_secondary'])
+        self._ctx_limit_spin.set_arrow_color(t['text_secondary'])
+        self._chat_timeout_spin.set_arrow_color(t['text_secondary'])
 
         # 缓存复选框图标并应用
         self._cached_check_icon = self._create_check_icon()
@@ -1471,7 +1559,8 @@ class SettingsDialog(QDialog):
                    self._fixed_height_check, self._remember_size_check,
                    self._remember_position_check, self._always_on_top_check,
                    self._polishing_show_diff_check, self._animation_check,
-                   self._word_popup_check, self._disable_update_check):
+                   self._word_popup_check, self._disable_update_check,
+                   self._chat_shared_api_check):
             cb.setIcon(self._cached_check_icon if cb.isChecked() else self._cached_uncheck_icon)
         self._applied_theme_signature = self._get_theme_signature()
 
@@ -1704,6 +1793,31 @@ class SettingsDialog(QDialog):
 
             hotkey = "+".join(key_sequence_parts)
 
+            # 冲突检测：与其他功能的快捷键重复时拒绝。
+            # 重复组合在 pynput 注册字典中会同 key 覆盖，先设置的功能会静默失效
+            _target = self._capturing_hotkey_target
+            _all_hotkeys = {
+                "translator": (self._hotkey_value, self._hotkey_btn, "唤醒翻译窗口"),
+                "writing": (self._writing_hotkey_value, self._writing_hotkey_btn, "划词写作"),
+                "selection_translate": (self._selection_translate_hotkey_value,
+                                        self._selection_translate_hotkey_btn, "选中翻译"),
+                "ai_chat": (self._ai_chat_hotkey_value, self._ai_chat_hotkey_btn, "AI 对话"),
+            }
+            _dup_label = next(
+                (label for name, (val, _b, label) in _all_hotkeys.items()
+                 if name != _target and val and val == hotkey),
+                None,
+            )
+            if _dup_label:
+                QMessageBox.warning(
+                    self, "快捷键冲突",
+                    f"「{hotkey}」已被「{_dup_label}」使用，请换一个组合。")
+                _orig_value, _orig_btn, _ = _all_hotkeys[_target]
+                self._set_hotkey_btn_text(_orig_btn, _orig_value)
+                self._capturing_hotkey_target = None
+                QTimer.singleShot(0, self._release_hotkey_focus)
+                return
+
             # 更新对应的快捷键
             if self._capturing_hotkey_target == "translator":
                 self._hotkey_value = hotkey
@@ -1858,7 +1972,10 @@ class SettingsDialog(QDialog):
         self._selection_translate_hotkey_value = sel_tr_hotkey
         self._set_hotkey_btn_text(self._selection_translate_hotkey_btn, sel_tr_hotkey)
 
-        ai_chat_hotkey = self._config.get('hotkey.ai_chat', 'Ctrl+Shift+A') or ''
+        # AI 对话默认快捷键改为 Ctrl+Shift+P：配置仍是旧默认值视为未自定义，自动迁移
+        if (self._config.get('hotkey.ai_chat', 'Ctrl+Shift+P') or '') in ('Ctrl+Shift+A', 'Ctrl+U'):
+            self._config.set('hotkey.ai_chat', 'Ctrl+Shift+P')
+        ai_chat_hotkey = self._config.get('hotkey.ai_chat', 'Ctrl+Shift+P') or ''
         self._ai_chat_hotkey_value = ai_chat_hotkey
         self._set_hotkey_btn_text(self._ai_chat_hotkey_btn, ai_chat_hotkey)
 
@@ -1873,6 +1990,19 @@ class SettingsDialog(QDialog):
         except (TypeError, ValueError):
             ctx_limit = 32768
         self._ctx_limit_spin.setValue(min(max(ctx_limit, 4096), 1048576))
+
+        # AI 对话独立 API 配置
+        use_shared = self._config.get('chat.use_shared_api', True)
+        self._chat_shared_api_check.setChecked(use_shared)
+        self._chat_api_key_edit.setText(self._config.get('chat.api_key', ''))
+        self._chat_api_url_edit.setText(self._config.get('chat.base_url', ''))
+        self._chat_model_edit.setText(self._config.get('chat.model', ''))
+        try:
+            chat_timeout = int(self._config.get('chat.timeout', 60))
+        except (TypeError, ValueError):
+            chat_timeout = 60
+        self._chat_timeout_spin.setValue(max(10, min(chat_timeout, 600)))
+        self._on_chat_shared_api_toggled(use_shared)
 
         # actions/ 目录 .py 扩展勾选列表
         _enabled_actions = self._config.get('selection.custom_actions', {}) or {}
@@ -1967,8 +2097,26 @@ class SettingsDialog(QDialog):
 
         # 禁用滚轮事件，避免误触
         self._disable_wheel_event(self._popup_style_combo)
+        self._disable_wheel_event(self._trigger_mode_combo)
         self._disable_wheel_event(self._lang_detect_combo)
         self._disable_wheel_event(self._font_size_spin)
+        self._disable_wheel_event(self._ctx_limit_spin)
+        self._disable_wheel_event(self._chat_timeout_spin)
+
+        # 用户填写 API 后自动探测模型上下文窗口并回填（防抖 800ms，后台线程）
+        self._ctx_probe_seq = 0
+        self._ctx_probe_emitter = _CtxProbeEmitter()
+        self._ctx_probe_emitter.done.connect(self._on_context_probed)
+        self._ctx_probe_timer = QTimer(self)
+        self._ctx_probe_timer.setSingleShot(True)
+        self._ctx_probe_timer.setInterval(800)
+        self._ctx_probe_timer.timeout.connect(self._probe_context_limit)
+        for _ed in (self._api_url_edit, self._api_key_edit, self._model_edit,
+                    self._chat_api_url_edit, self._chat_api_key_edit,
+                    self._chat_model_edit):
+            _ed.textChanged.connect(self._schedule_context_probe)
+        self._chat_shared_api_check.toggled.connect(self._schedule_context_probe)
+        QTimer.singleShot(600, self._probe_context_limit)  # 按现有配置先探测一次
         self._disable_wheel_event(self._newline_hotkey_combo)
         self._disable_wheel_event(self._tts_provider_combo)
         self._disable_wheel_event(self._tts_edge_voice_combo)
@@ -1983,6 +2131,44 @@ class SettingsDialog(QDialog):
         self._tts_edge_voice_combo.view()
 
         self._update_tts_edge_controls_enabled()
+
+    def _schedule_context_probe(self, *_args):
+        """API 相关输入变化后防抖，避免每次按键都发请求"""
+        self._ctx_probe_timer.start()
+
+    def _probe_context_limit(self):
+        """探测模型最大上下文：优先 /models 端点，查不到退回内置表，回填"""
+        if self._chat_shared_api_check.isChecked():
+            base = self._api_url_edit.text().strip()
+            key = self._api_key_edit.text().strip()
+            model = self._model_edit.text().strip()
+        else:
+            base = self._chat_api_url_edit.text().strip()
+            key = self._chat_api_key_edit.text().strip()
+            model = self._chat_model_edit.text().strip()
+        if not model:
+            return
+        self._ctx_probe_seq += 1
+        seq = self._ctx_probe_seq
+
+        def _work():
+            val = probe_context_limit(base, key, model) if base else None
+            source = 'api'
+            if not val:
+                val = guess_context_limit(model)
+                source = 'guess'
+            self._ctx_probe_emitter.done.emit(seq, int(val or 0), source)
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _on_context_probed(self, seq: int, tokens: int, source: str):
+        """探测结果回填上下文长度输入框（过期序号丢弃）"""
+        if seq != self._ctx_probe_seq or tokens < 4096:
+            return
+        self._ctx_limit_spin.setValue(min(max(tokens, 4096), 1048576))
+        self._ctx_limit_spin.setToolTip(
+            "自动回填: " + ("查询 /models 端点获得" if source == 'api'
+                                else "端点无上下文字段，按内置已知模型表推断"))
 
     def _disable_wheel_event(self, widget):
         """禁用控件的鼠标滚轮事件，防止误触"""
@@ -2037,6 +2223,17 @@ class SettingsDialog(QDialog):
         self._tts_volume_slider.setEnabled(edge)
         self._tts_rate_value_label.setEnabled(edge)
         self._tts_volume_value_label.setEnabled(edge)
+
+    def _on_chat_shared_api_toggled(self, checked: bool):
+        """勾选'与翻译共用 API'时置灰 AI 对话独立 API 字段"""
+        if hasattr(self, '_cached_check_icon'):
+            cb = self._chat_shared_api_check
+            cb.setIcon(self._cached_check_icon if checked else self._cached_uncheck_icon)
+        enabled = not checked
+        self._chat_api_key_edit.setEnabled(enabled)
+        self._chat_api_url_edit.setEnabled(enabled)
+        self._chat_model_edit.setEnabled(enabled)
+        self._chat_timeout_spin.setEnabled(enabled)
 
     def _on_theme_combo_changed(self, index):
         """主题下拉框选项变更时，控制自定义颜色选择器的可见性"""
@@ -2137,7 +2334,7 @@ class SettingsDialog(QDialog):
             old_sel_tr_hotkey = self._config.get('hotkey.selection_translate', 'Ctrl+`')
             new_sel_tr_hotkey = self._selection_translate_hotkey_value
 
-            old_ai_chat_hotkey = self._config.get('hotkey.ai_chat', 'Ctrl+Shift+A')
+            old_ai_chat_hotkey = self._config.get('hotkey.ai_chat', 'Ctrl+Shift+P')
             new_ai_chat_hotkey = self._ai_chat_hotkey_value
 
             old_blacklist_exes = get_active_blacklist_exes(self._config.get('selection.blacklist'))
@@ -2174,6 +2371,13 @@ class SettingsDialog(QDialog):
 
             # AI 对话模型上下文长度
             self._config.set('chat.model_context_limit', int(self._ctx_limit_spin.value()))
+
+            # AI 对话独立 API 配置
+            self._config.set('chat.use_shared_api', bool(self._chat_shared_api_check.isChecked()))
+            self._config.set('chat.api_key', self._chat_api_key_edit.text().strip())
+            self._config.set('chat.base_url', self._chat_api_url_edit.text().strip())
+            self._config.set('chat.model', self._chat_model_edit.text().strip())
+            self._config.set('chat.timeout', int(self._chat_timeout_spin.value()))
 
             # 工具栏按钮自定义：actions/ 目录 .py 扩展显示开关
             _action_map = {
@@ -2729,6 +2933,9 @@ class MainController(QObject):
 
     def _register_all_hotkeys(self):
         """注册所有热键（支持重试）"""
+        # AI 对话默认快捷键改为 Ctrl+Shift+P：配置仍是旧默认值视为未自定义，自动迁移
+        if (self._config.get('hotkey.ai_chat', 'Ctrl+Shift+P') or '') in ('Ctrl+Shift+A', 'Ctrl+U'):
+            self._config.set('hotkey.ai_chat', 'Ctrl+Shift+P')
         hotkey = self._config.get('hotkey.translator_window', 'Ctrl+O') or ''
         if hotkey.strip():
             success1 = self._hotkey_manager.register_hotkey(hotkey, name="translator_window")
@@ -2756,7 +2963,7 @@ class MainController(QObject):
             success3 = True
             log_debug("选中翻译热键未设置，已跳过注册")
 
-        ai_chat_hotkey = self._config.get('hotkey.ai_chat', 'Ctrl+Shift+A') or ''
+        ai_chat_hotkey = self._config.get('hotkey.ai_chat', 'Ctrl+Shift+P') or ''
         if ai_chat_hotkey.strip():
             success4 = self._hotkey_manager.register_hotkey(ai_chat_hotkey, name="ai_chat")
             log_debug(f"注册 AI 对话热键: {ai_chat_hotkey}, 结果: {success4}")

@@ -887,6 +887,30 @@ class TranslatorWindow(QWidget):
         self._update_btn.hide()  # 默认隐藏
         title_layout.addWidget(self._update_btn)
 
+        # AI 按钮（打开 AI 对话窗口）
+        self._ai_btn = QPushButton("AI")
+        self._ai_btn.setObjectName("aiBtn")
+        self._ai_btn.setFixedSize(22, 22)
+        self._ai_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._ai_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._ai_btn.setToolTip("AI 对话")
+        self._ai_btn.setStyleSheet(f"""
+            QPushButton#aiBtn {{
+                background-color: transparent;
+                color: {theme['text_muted']};
+                border: none;
+                border-radius: 11px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+            QPushButton#aiBtn:hover {{
+                background-color: {theme['button_hover']};
+                color: {theme['text_primary']};
+            }}
+        """)
+        self._ai_btn.clicked.connect(self._on_ai_clicked)
+        title_layout.addWidget(self._ai_btn)
+
         # 帮助按钮
         self._help_btn = QPushButton("?")
         self._help_btn.setObjectName("helpBtn")
@@ -1502,6 +1526,49 @@ class TranslatorWindow(QWidget):
         history_window = get_history_window()
         history_window.show_window()
 
+    def _on_ai_clicked(self):
+        """点击 AI 按钮，打开 AI 对话窗口"""
+        try:
+            from ..ui.chat_window import get_chat_window
+        except ImportError:
+            from src.ui.chat_window import get_chat_window
+        chat = get_chat_window()
+        chat.show_window()
+        if sys.platform == 'win32':
+            # 置前策略：show 之后先把 AI 窗口设为置顶，压过任何窗口（翻译
+            # 窗口开「始终置顶」时非置顶窗口永远盖不过它；设置对话框能显示
+            # 在前正是因为它常驻置顶）；未开置顶时 400ms 后释放——
+            # NOTOPMOST 落在非置顶带最顶端，天然压过翻译窗口，
+            # 且不依赖与「点击收尾重新激活翻译窗口」的时序竞争
+            import ctypes
+            user32 = ctypes.windll.user32
+            # 必须声明 argtypes：否则 64 位句柄按 32 位 C int 截断，
+            # SetWindowPos 静默失效
+            user32.SetWindowPos.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+            hwnd = int(chat.winId())
+            SWP_NOMOVE, SWP_NOSIZE = 0x0002, 0x0001
+            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE)  # HWND_TOPMOST
+            if not self._always_on_top:
+                def _release_topmost():
+                    try:
+                        user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0,
+                                            SWP_NOMOVE | SWP_NOSIZE)
+                    except Exception:
+                        pass
+                # 持有引用防止单次定时器被 GC
+                self._ai_release_timer = QTimer.singleShot(
+                    400, _release_topmost)
+        # 兜底：按钮点击事件收尾（mouse release）会重新激活翻译窗口，
+        # 等点击处理完再补一次置前
+        def _raise_chat():
+            if chat.isVisible():
+                chat.raise_()
+                chat.activateWindow()
+        self._ai_raise_timer = QTimer.singleShot(50, _raise_chat)
+
     def _on_help_clicked(self):
         """点击帮助按钮，打开帮助窗口"""
         try:
@@ -1646,6 +1713,25 @@ class TranslatorWindow(QWidget):
             self.activateWindow()
         # 重新设置 Windows 窗口管理支持（setWindowFlags 会重置 Win32 样式）
         self._enable_windows_window_management()
+        # 同步 AI 窗口的置顶状态：与翻译窗口一致，避免两者互相盖住
+        if sys.platform == 'win32':
+            try:
+                from ..ui import chat_window as _cw
+            except ImportError:
+                from src.ui import chat_window as _cw
+            chat = _cw._chat_window_instance
+            if chat is not None:
+                import ctypes
+                user32 = ctypes.windll.user32
+                # 同上：声明 argtypes 防止 64 位句柄被截断
+                user32.SetWindowPos.argtypes = [
+                    ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
+                    ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                    ctypes.c_uint]
+                insert_after = -1 if self._always_on_top else -2
+                user32.SetWindowPos(
+                    int(chat.winId()), insert_after, 0, 0, 0, 0,
+                    0x0001 | 0x0002 | 0x0010)  # NOSIZE|NOMOVE|NOACTIVATE
 
     @property
     def is_foreground(self) -> bool:
@@ -1860,6 +1946,22 @@ class TranslatorWindow(QWidget):
                 color: {theme['text_muted']};
                 font-size: 11px;
                 font-weight: bold;
+            }}
+        """)
+
+        # 更新 AI 按钮样式
+        self._ai_btn.setStyleSheet(f"""
+            QPushButton#aiBtn {{
+                background-color: transparent;
+                color: {theme['text_muted']};
+                border: none;
+                border-radius: 11px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+            QPushButton#aiBtn:hover {{
+                background-color: {theme['button_hover']};
+                color: {theme['text_primary']};
             }}
         """)
 

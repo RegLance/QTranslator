@@ -48,6 +48,62 @@ except Exception:
     pass
 
 
+# ── 启动耗时打点：定位慢启动（bootloader/DLL 加载 vs Python 导入 vs 初始化）──
+import time as _boot_time
+_MODULE_ENTER = _boot_time.time()
+
+
+def _process_create_ts():
+    """进程创建时间戳（含 PyInstaller bootloader 启动前的时刻）"""
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+
+        class _FILETIME(ctypes.Structure):
+            _fields_ = [("dwLowDateTime", ctypes.c_uint32),
+                        ("dwHighDateTime", ctypes.c_uint32)]
+
+        # 必须显式声明原型：GetCurrentProcess 返回的伪句柄高位全 1，
+        # 默认按 32 位 int 处理会丢失信息导致 GetProcessTimes 失败
+        k32.GetCurrentProcess.restype = ctypes.c_void_p
+        k32.GetProcessTimes.argtypes = [ctypes.c_void_p] + [
+            ctypes.POINTER(_FILETIME)] * 4
+        create = _FILETIME()
+        dummy = _FILETIME()
+        if k32.GetProcessTimes(k32.GetCurrentProcess(),
+                               ctypes.byref(create), ctypes.byref(dummy),
+                               ctypes.byref(dummy), ctypes.byref(dummy)):
+            ft100ns = create.dwLowDateTime | (create.dwHighDateTime << 32)
+            return ft100ns / 1e7 - 11644473600  # FILETIME → Unix 时间戳
+    except Exception:
+        pass
+    return None
+
+
+_PROCESS_CREATE = _process_create_ts()
+
+
+def _startup_log(label):
+    """启动阶段耗时打点 → logs/startup_timing.log（排查企业版慢启动用）"""
+    try:
+        now = time.time()
+        parts = [datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3], label]
+        if _PROCESS_CREATE is not None:
+            parts.append(f"进程创建至今={now - _PROCESS_CREATE:.2f}s")
+        parts.append(f"模块导入至今={now - _MODULE_ENTER:.2f}s")
+        parts.append(f"frozen={getattr(sys, 'frozen', False)}")
+        log_dir = Path(os.environ.get(
+            "LOCALAPPDATA", str(Path.home()))) / "QTranslator" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "startup_timing.log", "a", encoding="utf-8") as f:
+            f.write(" | ".join(parts) + "\n")
+    except Exception:
+        pass
+
+
+_startup_log('main 模块导入完成（含 PyQt6/全部依赖加载）')
+
+
 class _CtxProbeEmitter(QObject):
     """上下文探测后台线程 -> 主线程信号桥"""
     done = pyqtSignal(int, int, str)  # (序号, tokens, 来源 api/guess)
@@ -4036,6 +4092,7 @@ class SingleInstance:
 
 def main():
     """主入口。"""
+    _startup_log('main() 入口')
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
@@ -4071,6 +4128,7 @@ def main():
     # ── 初始化完成 → 直接关闭 splash 显示翻译窗口 ──
     def on_initialized():
         print("[Startup] initialized, closing splash", file=sys.stderr, flush=True)
+        _startup_log('初始化完成，翻译窗口即将显示')
         splash.close()
         splash.deleteLater()
         controller._on_translator_window_requested()

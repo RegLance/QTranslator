@@ -123,7 +123,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,  # 关闭 UPX：压缩 DLL 加载需解压且易被杀软深扫，拖慢启动
     console=False,  # 不显示控制台窗口
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -139,7 +139,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,  # 同上
     upx_exclude=[],
     name="QTranslator",
 )

@@ -83,7 +83,7 @@ def _process_create_ts():
 _PROCESS_CREATE = _process_create_ts()
 
 
-def _startup_log(label):
+def _startup_timing(label):
     """启动阶段耗时打点 → logs/startup_timing.log（排查企业版慢启动用）"""
     try:
         now = time.time()
@@ -101,7 +101,7 @@ def _startup_log(label):
         pass
 
 
-_startup_log('main 模块导入完成（含 PyQt6/全部依赖加载）')
+_startup_timing('main 模块导入完成（含 PyQt6/全部依赖加载）')
 
 
 class _CtxProbeEmitter(QObject):
@@ -4092,7 +4092,7 @@ class SingleInstance:
 
 def main():
     """主入口。"""
-    _startup_log('main() 入口')
+    _startup_timing('main() 入口')
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
@@ -4128,7 +4128,7 @@ def main():
     # ── 初始化完成 → 直接关闭 splash 显示翻译窗口 ──
     def on_initialized():
         print("[Startup] initialized, closing splash", file=sys.stderr, flush=True)
-        _startup_log('初始化完成，翻译窗口即将显示')
+        _startup_timing('初始化完成，翻译窗口即将显示')
         splash.close()
         splash.deleteLater()
         controller._on_translator_window_requested()

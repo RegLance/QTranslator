@@ -163,7 +163,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,  # 关闭 UPX：压缩 DLL 加载需解压且易被杀软深扫，拖慢启动
+    upx=True,
     console=False,  # 不显示控制台窗口
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -179,7 +179,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=False,  # 同上
+    upx=True,
     upx_exclude=[],
     name="{APP_NAME}",
 )

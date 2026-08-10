@@ -1215,6 +1215,36 @@ class TranslatorWindow(QWidget):
         ic_layout.setContentsMargins(4, 2, 4, 2)
         ic_layout.setSpacing(2)
 
+        # 朗读按钮（朗读原文）- 与译文朗读按钮同款图标与行为
+        self._speak_input_btn = QPushButton()
+        self._speak_input_btn.setObjectName("speakInputBtn")
+        self._speak_input_btn.setFixedSize(28, 28)
+        self._speak_input_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._speak_input_btn.setToolTip("朗读原文")
+        self._speak_input_btn.setIcon(self._create_speak_icon(theme))
+        self._speak_input_btn.setStyleSheet(f"""
+            QPushButton#speakInputBtn {{
+                background-color: transparent;
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton#speakInputBtn:hover {{
+                background-color: rgba(0, 0, 0, 0.1);
+            }}
+            QPushButton#speakInputBtn:pressed {{
+                background-color: rgba(0, 0, 0, 0.2);
+            }}
+        """)
+        self._speak_input_btn.clicked.connect(self._speak_input)
+        ic_layout.addWidget(self._speak_input_btn)
+
+        self._tts_speak_input_prep = TtsSpeakPrepareIndicator(
+            self,
+            self._speak_input_btn,
+            lambda: get_theme(self._theme_style),
+            self._create_speak_icon,
+        )
+
         self._collect_output_btn = QPushButton()
         self._collect_output_btn.setObjectName("collectOutputBtn")
         self._collect_output_btn.setFixedSize(28, 28)
@@ -1241,7 +1271,7 @@ class TranslatorWindow(QWidget):
         self._collect_output_btn.clicked.connect(self._on_collect_output_clicked)
         ic_layout.addWidget(self._collect_output_btn)
 
-        self._input_collect_frame.setFixedSize(36, 34)
+        self._input_collect_frame.setFixedSize(66, 34)
         self._input_collect_frame.raise_()
 
         self._splitter.addWidget(self._input_container)
@@ -2218,6 +2248,22 @@ class TranslatorWindow(QWidget):
             }}
         """)
 
+        # 更新原文朗读按钮样式和图标
+        self._tts_speak_input_prep.sync_theme_icons()
+        self._speak_input_btn.setStyleSheet(f"""
+            QPushButton#speakInputBtn {{
+                background-color: transparent;
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton#speakInputBtn:hover {{
+                background-color: {hover_bg};
+            }}
+            QPushButton#speakInputBtn:pressed {{
+                background-color: {pressed_bg};
+            }}
+        """)
+
         # 更新朗读按钮样式和图标
         self._tts_speak_output_prep.sync_theme_icons()
         self._speak_output_btn.setStyleSheet(f"""
@@ -2316,8 +2362,32 @@ class TranslatorWindow(QWidget):
             get_tts().stop()
             if hasattr(self, "_tts_speak_output_prep"):
                 self._tts_speak_output_prep.end_prepare()
+            if hasattr(self, "_tts_speak_input_prep"):
+                self._tts_speak_input_prep.end_prepare()
         except Exception:
             pass
+
+    def _speak_input(self):
+        """朗读原文（行为与朗读译文一致：再点一次停止，两者互斥）"""
+        text = self._input_text.toPlainText().strip()
+        if not text:
+            return
+        tts = get_tts()
+        # 任一朗读/准备中：点击即停止（TTS 引擎全局单例，两个按钮互斥）
+        if (tts.is_speaking() or self._tts_speak_input_prep.is_preparing()
+                or self._tts_speak_output_prep.is_preparing()):
+            tts.stop()
+            self._tts_speak_input_prep.end_prepare()
+            self._tts_speak_output_prep.end_prepare()
+            return
+
+        # 原文语言无下拉提示可用，交给 TTS 引擎自动检测
+        self._tts_speak_input_prep.attach_to_tts_engine(tts)
+        ok = tts.speak(text, lang_hint=None)
+        if ok:
+            self._tts_speak_input_prep.start_prepare()
+        else:
+            self._tts_speak_input_prep.end_prepare()
 
     def _speak_output(self):
         """朗读译文"""
@@ -2327,9 +2397,11 @@ class TranslatorWindow(QWidget):
             text = self._output_text.toPlainText()
         if text:
             tts = get_tts()
-            if tts.is_speaking() or self._tts_speak_output_prep.is_preparing():
+            if (tts.is_speaking() or self._tts_speak_output_prep.is_preparing()
+                    or self._tts_speak_input_prep.is_preparing()):
                 tts.stop()
                 self._tts_speak_output_prep.end_prepare()
+                self._tts_speak_input_prep.end_prepare()
                 return
 
             hint = self._lang_combo.currentText()

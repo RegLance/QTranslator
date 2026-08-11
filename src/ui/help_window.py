@@ -46,7 +46,14 @@ class HelpWindow(QWidget):
         self._drag_window_start_pos = None
 
         # 窗口属性
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        # 不常驻置顶：「始终置顶」设置只控制翻译窗口
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        # 用时置顶、切走降级：「始终置顶」设置只控制翻译窗口
+        try:
+            from ..utils.window_front import install_activation_topmost
+        except ImportError:
+            from src.utils.window_front import install_activation_topmost
+        install_activation_topmost(self)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(500, 450)
         self.resize(560, 520)
@@ -404,8 +411,12 @@ class HelpWindow(QWidget):
             y = (screen_geo.height() - self.height()) // 2 + screen_geo.y()
             self.move(x, y)
         self.show()
-        self.raise_()
-        self.activateWindow()
+        # 唤醒时刻短暂置前一次
+        try:
+            from ..utils.window_front import bring_to_front_once
+        except ImportError:
+            from src.utils.window_front import bring_to_front_once
+        bring_to_front_once(self)
 
     def update_theme(self):
         """更新主题"""

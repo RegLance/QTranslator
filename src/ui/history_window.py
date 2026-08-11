@@ -56,10 +56,16 @@ class HistoryWindow(QWidget):
         self._applied_theme_signature = None
 
         # 设置无边框窗口属性
+        # 不常驻置顶：「始终置顶」设置只控制翻译窗口
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.FramelessWindowHint
         )
+        # 用时置顶、切走降级：「始终置顶」设置只控制翻译窗口
+        try:
+            from ..utils.window_front import install_activation_topmost
+        except ImportError:
+            from src.utils.window_front import install_activation_topmost
+        install_activation_topmost(self)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(550, 450)
         self.resize(700, 600)
@@ -1087,7 +1093,7 @@ class HistoryWindow(QWidget):
         # 使用无边框确认框
         dialog = QDialog()
         dialog.setObjectName("ConfirmDialog")
-        dialog.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        dialog.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         dialog.setMinimumSize(320, 180)
         dialog.setModal(True)
@@ -1337,8 +1343,12 @@ class HistoryWindow(QWidget):
 
         self._load_history()  # 刷新历史
         self.show()
-        self.raise_()
-        self.activateWindow()
+        # 唤醒时刻短暂置前一次
+        try:
+            from ..utils.window_front import bring_to_front_once
+        except ImportError:
+            from src.utils.window_front import bring_to_front_once
+        bring_to_front_once(self)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         """鼠标双击事件 - 双击标题栏切换最大化状态"""

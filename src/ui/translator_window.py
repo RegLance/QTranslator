@@ -1563,34 +1563,9 @@ class TranslatorWindow(QWidget):
         except ImportError:
             from src.ui.chat_window import get_chat_window
         chat = get_chat_window()
+        # show_window 内部已做「唤醒时刻短暂置前」（TOPMOST 一次后延时释放），
+        # 不再受「始终置顶」设置影响——该设置现在只控制翻译窗口
         chat.show_window()
-        if sys.platform == 'win32':
-            # 置前策略：show 之后先把 AI 窗口设为置顶，压过任何窗口（翻译
-            # 窗口开「始终置顶」时非置顶窗口永远盖不过它；设置对话框能显示
-            # 在前正是因为它常驻置顶）；未开置顶时 400ms 后释放——
-            # NOTOPMOST 落在非置顶带最顶端，天然压过翻译窗口，
-            # 且不依赖与「点击收尾重新激活翻译窗口」的时序竞争
-            import ctypes
-            user32 = ctypes.windll.user32
-            # 必须声明 argtypes：否则 64 位句柄按 32 位 C int 截断，
-            # SetWindowPos 静默失效
-            user32.SetWindowPos.argtypes = [
-                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
-                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
-            hwnd = int(chat.winId())
-            SWP_NOMOVE, SWP_NOSIZE = 0x0002, 0x0001
-            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0,
-                                SWP_NOMOVE | SWP_NOSIZE)  # HWND_TOPMOST
-            if not self._always_on_top:
-                def _release_topmost():
-                    try:
-                        user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0,
-                                            SWP_NOMOVE | SWP_NOSIZE)
-                    except Exception:
-                        pass
-                # 持有引用防止单次定时器被 GC
-                self._ai_release_timer = QTimer.singleShot(
-                    400, _release_topmost)
         # 兜底：按钮点击事件收尾（mouse release）会重新激活翻译窗口，
         # 等点击处理完再补一次置前
         def _raise_chat():
@@ -1743,7 +1718,8 @@ class TranslatorWindow(QWidget):
             self.activateWindow()
         # 重新设置 Windows 窗口管理支持（setWindowFlags 会重置 Win32 样式）
         self._enable_windows_window_management()
-        # 同步 AI 窗口的置顶状态：与翻译窗口一致，避免两者互相盖住
+        # 「始终置顶」只控制翻译窗口：AI 窗口一律退出置顶带，
+        # 顺带把旧版本「AI 窗口被同步为常驻置顶」的残留状态降级
         if sys.platform == 'win32':
             try:
                 from ..ui import chat_window as _cw
@@ -1758,10 +1734,12 @@ class TranslatorWindow(QWidget):
                     ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
                     ctypes.c_int, ctypes.c_int, ctypes.c_int,
                     ctypes.c_uint]
-                insert_after = -1 if self._always_on_top else -2
-                user32.SetWindowPos(
-                    int(chat.winId()), insert_after, 0, 0, 0, 0,
-                    0x0001 | 0x0002 | 0x0010)  # NOSIZE|NOMOVE|NOACTIVATE
+                # AI 窗口采用「用时置顶、切走降级」策略，这里仅清理
+                # 旧版本常驻置顶的残留状态；正在使用时不打扰
+                if not chat.isActiveWindow():
+                    user32.SetWindowPos(
+                        int(chat.winId()), -2, 0, 0, 0, 0,
+                        0x0001 | 0x0002 | 0x0010)  # NOSIZE|NOMOVE|NOACTIVATE
 
     @property
     def is_foreground(self) -> bool:
@@ -3273,12 +3251,14 @@ class TranslatorWindow(QWidget):
                 self._resize_edge = edge
                 self._resize_start_pos = event.globalPosition().toPoint()
                 self._resize_start_geometry = self.geometry()
+                self.grabMouse()  # 拖出窗口外仍能收到移动与释放
             else:
                 # 不是边缘区域，检测标题栏拖动
                 if self._title_bar_rect_in_window().contains(pos) and not self._is_over_title_bar_buttons(pos):
                     self._is_dragging = True
                     self._drag_start_pos = event.globalPosition().toPoint()
                     self._drag_window_start_pos = self.pos()
+                    self.grabMouse()  # 拖出窗口外仍能收到移动与释放
 
         super().mousePressEvent(event)
 
@@ -3337,6 +3317,8 @@ class TranslatorWindow(QWidget):
             self._drag_start_pos = None
             self._is_resizing = False
             self._resize_edge = None
+            # 与 grabMouse 配对：漏掉会永久窃取全应用鼠标输入
+            self.releaseMouse()
 
             # 如果刚刚结束了窗口大小调整，且正在流式翻译中，
             # 停止自动高度增长并立即显示滚动条，让用户可以滚动查看内容
@@ -3355,6 +3337,16 @@ class TranslatorWindow(QWidget):
         # 鼠标离开窗口时恢复默认光标
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         super().leaveEvent(event)
+
+    def hideEvent(self, event):
+        """窗口隐藏时清理拖拽/缩放状态与残留鼠标抓取，避免全应用输入被锁"""
+        if hasattr(self, "_is_resizing"):
+            self._is_dragging = False
+            self._drag_start_pos = None
+            self._is_resizing = False
+            self._resize_edge = None
+            self.releaseMouse()
+        super().hideEvent(event)
 
     def eventFilter(self, obj, event):
         """事件过滤器 - 处理子控件的鼠标事件和输入框的键盘事件"""

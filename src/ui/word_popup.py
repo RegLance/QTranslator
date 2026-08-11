@@ -192,11 +192,17 @@ class WordPopup(QFrame):
         # 关键：不使用 WA_ShowWithoutActivating，让窗口可以接收焦点。
         # 这样当用户点击弹窗外部时，系统会发送 ActivationChange 事件，
         # 弹窗在 changeEvent 中检测到失活后自动关闭。
+        # 不常驻置顶：「始终置顶」设置只控制翻译窗口
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.Tool
         )
+        # 用时置顶、切走降级：「始终置顶」设置只控制翻译窗口
+        try:
+            from ..utils.window_front import install_activation_topmost
+        except ImportError:
+            from src.utils.window_front import install_activation_topmost
+        install_activation_topmost(self)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_MouseTracking)
         # 允许接收焦点（确保 ActivationChange 能正常触发）
@@ -544,7 +550,12 @@ class WordPopup(QFrame):
             self.show()
         else:
             self.repaint()  # 已可见时强制重绘，确保新单词立即可见
-        self.raise_()
+        # 弹出时刻短暂置前一次（bring_to_front_once 含 raise/激活）
+        try:
+            from ..utils.window_front import bring_to_front_once
+        except ImportError:
+            from src.utils.window_front import bring_to_front_once
+        bring_to_front_once(self)
 
         # 开启 500ms 宽限期：其间不响应外部点击关闭
         # 防止用户划词选中新单词时，第一步（点击文本框）误关弹窗

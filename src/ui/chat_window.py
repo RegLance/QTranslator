@@ -11,16 +11,20 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QPoint, QRect, QRectF, QPointF, QSize, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QCursor, QIcon, QPixmap, QPainter, QPen, QColor
+from PyQt6.QtCore import Qt, QPoint, QRect, QThread, pyqtSignal, QTimer, QEvent
+from PyQt6.QtGui import QCursor, QIcon, QPainter, QPen, QColor
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QListWidget, QListWidgetItem, QTextEdit, QMenu, QFrame,
-    QToolButton, QInputDialog, QSplitter, QSplitterHandle, QScrollArea,
-    QAbstractButton, QAbstractSlider, QAbstractScrollArea,
+    QListWidget, QListWidgetItem, QTextBrowser, QTextEdit, QMenu, QFrame,
+    QToolButton, QInputDialog, QSplitter, QSplitterHandle, QStyle,
+    QStyledItemDelegate, QStyleOptionViewItem, QMessageBox, QCheckBox,
+    QScrollBar,
 )
 
 try:
@@ -29,6 +33,7 @@ try:
     from ..utils.theme import get_theme
     from ..core.chat_store import get_chat_store
     from ..core.skills import get_skill_manager
+    from ..core.skill_tools import get_skill_local_tools
     from ..core.mcp_client import get_mcp_manager, MCPToolInfo
 except ImportError:
     from src.config import get_config, APP_NAME
@@ -36,6 +41,7 @@ except ImportError:
     from src.utils.theme import get_theme
     from src.core.chat_store import get_chat_store
     from src.core.skills import get_skill_manager
+    from src.core.skill_tools import get_skill_local_tools
     from src.core.mcp_client import get_mcp_manager, MCPToolInfo
 
 BASE_SYSTEM_PROMPT = (
@@ -46,218 +52,21 @@ BASE_SYSTEM_PROMPT = (
 MAX_TOOL_ROUNDS = 5  # MCP 工具调用最大轮数，防止死循环
 
 
-# ── Markdown -> Qt 富文本（Qt 仅支持 HTML 子集：
-# https://doc.qt.io/qt-6/richtext-html-subset.html）──
-_RE_HEADING = re.compile(r'^(#{1,4})\s+(.+)$')
-_RE_HR = re.compile(r'^(-{3,}|\*{3,}|_{3,})$')
-_RE_QUOTE = re.compile(r'^>\s?(.*)$')
-_RE_UL = re.compile(r'^[-*+]\s+(.+)$')
-_RE_OL = re.compile(r'^\d+[.)]\s+(.+)$')
-_RE_TABLE_SEP_CELL = re.compile(r'^:?-+:?$')
-_RE_INLINE_CODE = re.compile(r'`([^`\n]+)`')
-_RE_LINK = re.compile(r'\[([^\]]+)\]\(([^)\s]+)\)')
-_RE_BOLD = re.compile(r'\*\*(.+?)\*\*')
-_RE_ITALIC = re.compile(r'\*([^\s*](?:[^*\n]*?[^\s*])?)\*')
-_RE_STRIKE = re.compile(r'~~(.+?)~~')
-
-
-def _inline_md(text: str) -> str:
-    """行内 Markdown：链接/加粗/斜体/删除线/行内代码（入参须已 html 转义）"""
-    codes: List[str] = []
-
-    def _keep_code(m):
-        codes.append(m.group(1))
-        return f"\x00{len(codes) - 1}\x00"
-
-    text = _RE_INLINE_CODE.sub(_keep_code, text)
-    text = _RE_LINK.sub(lambda m: f'<a href="{m.group(2)}">{m.group(1)}</a>', text)
-    text = _RE_BOLD.sub(r'<b>\1</b>', text)
-    text = _RE_ITALIC.sub(r'<i>\1</i>', text)
-    text = _RE_STRIKE.sub(r'<s>\1</s>', text)
-    for i, code in enumerate(codes):
-        text = text.replace(
-            f"\x00{i}\x00",
-            f'<span style="font-family: Consolas, monospace; '
-            f'background-color: rgba(128, 128, 128, 0.22);">{code}</span>')
-    return text
-
-
-def _blocks_to_html(text: str) -> str:
-    """块级 Markdown：标题/列表/引用/表格/分隔线，其余按段落（行间 <br>）"""
-    parts: List[str] = []
-    para: List[str] = []
-    list_tag = ''
-
-    def flush_para():
-        if para:
-            parts.append('<br>'.join(para))
-            para.clear()
-
-    def close_list():
-        nonlocal list_tag
-        if list_tag:
-            parts.append(f'</{list_tag}>')
-            list_tag = ''
-
-    lines = text.split('\n')
-    i = 0
-    while i < len(lines):
-        stripped = lines[i].strip()
-
-        if not stripped:
-            flush_para()
-            close_list()
-            parts.append('<br>')
-            i += 1
-            continue
-
-        m = _RE_HEADING.match(stripped)
-        if m:
-            flush_para()
-            close_list()
-            lv = len(m.group(1))
-            parts.append(f'<h{lv}>{_inline_md(html.escape(m.group(2)))}</h{lv}>')
-            i += 1
-            continue
-
-        if _RE_HR.match(stripped):
-            flush_para()
-            close_list()
-            parts.append('<hr>')
-            i += 1
-            continue
-
-        m = _RE_QUOTE.match(stripped)
-        if m:
-            flush_para()
-            close_list()
-            parts.append(f'<blockquote>{_inline_md(html.escape(m.group(1)))}</blockquote>')
-            i += 1
-            continue
-
-        # 表格：连续以 | 开头的行（首行为表头，|---| 分隔行跳过）
-        if stripped.startswith('|') and i + 1 < len(lines) \
-                and lines[i + 1].strip().startswith('|'):
-            flush_para()
-            close_list()
-            rows = []
-            while i < len(lines) and lines[i].strip().startswith('|'):
-                rows.append(lines[i].strip())
-                i += 1
-            tbl = ['<table border="1" cellspacing="0" cellpadding="4">']
-            for r_i, r in enumerate(rows):
-                cells = [c.strip() for c in r.strip('|').split('|')]
-                if all(_RE_TABLE_SEP_CELL.match(c) for c in cells if c):
-                    continue
-                tag = 'th' if r_i == 0 else 'td'
-                tbl.append('<tr>' + ''.join(
-                    f'<{tag}>{_inline_md(html.escape(c))}</{tag}>' for c in cells
-                ) + '</tr>')
-            tbl.append('</table>')
-            parts.append(''.join(tbl))
-            continue
-
-        m = _RE_UL.match(stripped)
-        if m:
-            flush_para()
-            if list_tag != 'ul':
-                close_list()
-                parts.append('<ul>')
-                list_tag = 'ul'
-            parts.append(f'<li>{_inline_md(html.escape(m.group(1)))}</li>')
-            i += 1
-            continue
-
-        m = _RE_OL.match(stripped)
-        if m:
-            flush_para()
-            if list_tag != 'ol':
-                close_list()
-                parts.append('<ol>')
-                list_tag = 'ol'
-            parts.append(f'<li>{_inline_md(html.escape(m.group(1)))}</li>')
-            i += 1
-            continue
-
-        if list_tag:
-            close_list()
-        para.append(_inline_md(html.escape(lines[i])))
-        i += 1
-
-    flush_para()
-    close_list()
-    return ''.join(parts)
-
-
 def _format_content(text: str) -> str:
-    """Markdown → Qt 富文本 HTML：代码块 / 标题 / 列表 / 引用 / 表格 / 行内样式"""
+    """极简 Markdown → HTML：转义 + ```代码块 + 换行"""
     segments = text.split('```')
     parts = []
     for idx, seg in enumerate(segments):
         if idx % 2 == 0:
-            parts.append(_blocks_to_html(seg))
+            parts.append(html.escape(seg).replace('\n', '<br>'))
         else:
             seg2 = seg.strip('\n')
             lines = seg2.split('\n')
             # 去掉首行语言标记（如 ```python）
             if len(lines) > 1 and len(lines[0]) <= 20 and ' ' not in lines[0].strip():
                 lines = lines[1:]
-            # white-space: pre-wrap 保留代码换行缩进，超宽行在气泡内自动折行；
-            # 裸 <pre> 按单行布局，超出气泡宽度的部分会在右缘被裁掉（回复被截断）
-            parts.append(
-                f'<pre style="white-space: pre-wrap;">{html.escape(chr(10).join(lines))}</pre>'
-            )
+            parts.append(f'<pre>{html.escape(chr(10).join(lines))}</pre>')
     return ''.join(parts)
-
-
-def _hex_to_rgba(hex_color: str, alpha: int) -> str:
-    """#RRGGBB -> rgba()（用于半透明气泡底色），解析失败退回透明灰"""
-    h = (hex_color or '').lstrip('#')
-    try:
-        if len(h) == 3:
-            h = ''.join(ch * 2 for ch in h)
-        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-        return f"rgba({r}, {g}, {b}, {alpha})"
-    except Exception:
-        return f"rgba(128, 128, 128, {alpha})"
-
-
-def _contrast_color(bg_hex: str) -> str:
-    """按背景亮度返回对比文字色：深色背景→白字，浅色背景→黑字"""
-    h = (bg_hex or '').lstrip('#')
-    try:
-        if len(h) == 3:
-            h = ''.join(ch * 2 for ch in h)
-        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    except Exception:
-        return '#ffffff'
-    # ITU-R BT.601 亮度，>150 视为浅色背景
-    return '#000000' if 0.299 * r + 0.587 * g + 0.114 * b > 150 else '#ffffff'
-
-
-def _trash_icon(color: str) -> QIcon:
-    """绘制垃圾桶图标（emoji 字体渲染不一致，绘制图标颜色可控）；
-    Active 模式（悬停/按下）使用红色"""
-    def _draw(c: str) -> QPixmap:
-        pix = QPixmap(20, 20)
-        pix.fill(Qt.GlobalColor.transparent)
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor(c))
-        pen.setWidth(2)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        p.setPen(pen)
-        p.drawLine(QPointF(8.5, 4), QPointF(11.5, 4))   # 提手
-        p.drawLine(QPointF(3.5, 6.5), QPointF(16.5, 6.5))  # 盖沿
-        p.drawRoundedRect(QRectF(5.5, 6.5, 9, 10.5), 1.5, 1.5)  # 桶身
-        p.drawLine(QPointF(8.6, 9.5), QPointF(8.6, 14))   # 内纹
-        p.drawLine(QPointF(11.4, 9.5), QPointF(11.4, 14))
-        p.end()
-        return pix
-    icon = QIcon()
-    icon.addPixmap(_draw(color), QIcon.Mode.Normal)
-    icon.addPixmap(_draw('#e81123'), QIcon.Mode.Active)
-    return icon
 
 
 # ── 上下文压缩策略 ──
@@ -308,16 +117,18 @@ class ChatWorker(QThread):
     """对话请求后台线程（上下文压缩 / 流式输出 / MCP 工具调用循环）"""
 
     chunk = pyqtSignal(str)          # 流式文本片段
-    reasoning = pyqtSignal(str)      # 思考模型的思考过程片段（reasoning_content）
+    reasoning_chunk = pyqtSignal(str)  # 思考模型的思考内容片段（reasoning_content）
     tool_info = pyqtSignal(str)      # MCP 工具调用过程提示
-    finished_ok = pyqtSignal(str)    # 完成，完整文本
+    confirm_request = pyqtSignal(str, str)  # 技能脚本执行确认请求（技能名, 描述）
+    finished_ok = pyqtSignal(str, str)  # 完成，(完整文本, 完整思考内容)
     failed = pyqtSignal(str)         # 失败，错误信息
     context_compressed = pyqtSignal(str, str, int)  # (session_id, 新摘要, 覆盖条数)
 
     def __init__(self, session_id: str, system_prompt: str,
                  history: List[Dict[str, str]], summary: str, summary_count: int,
                  model: str, client_kwargs: Dict[str, Any], context_limit: int,
-                 tools: Optional[List[MCPToolInfo]] = None):
+                 tools: Optional[List[MCPToolInfo]] = None,
+                 skill_tools=None):
         super().__init__()
         self._session_id = session_id
         self._system_prompt = system_prompt
@@ -328,11 +139,30 @@ class ChatWorker(QThread):
         self._client_kwargs = client_kwargs
         self._context_limit = max(4096, int(context_limit or 32768))
         self._tools = tools or []
+        self._skill_tools = skill_tools
         self._cancelled = False
         self._messages: List[Dict[str, Any]] = []
+        self._reasoning_full = ""  # 思考模型累积的完整思考内容
 
     def cancel(self):
         self._cancelled = True
+
+    # ---------------- 技能脚本执行确认（阻塞等待主窗口弹窗结果） ----------------
+    def ask_user_confirm(self, skill_name: str, desc: str) -> bool:
+        self._confirm_ok = False
+        self._confirm_event = threading.Event()
+        log_info(f"[Confirm] 后台线程等待用户确认: {skill_name}")
+        self.confirm_request.emit(skill_name, desc)
+        if not self._confirm_event.wait(120):
+            log_info(f"[Confirm] 等待确认超时(120s)按拒绝处理: {skill_name}")
+            return False  # 超时按拒绝处理
+        log_info(f"[Confirm] 收到确认结果: {skill_name} ok={self._confirm_ok}")
+        return self._confirm_ok
+
+    def deliver_confirm(self, ok: bool):
+        self._confirm_ok = bool(ok)
+        if getattr(self, "_confirm_event", None):
+            self._confirm_event.set()
 
     def run(self):
         try:
@@ -342,7 +172,7 @@ class ChatWorker(QThread):
             # 按模型上下文窗口做摘要缓冲压缩（不限消息条数）
             self._messages = self._build_context(client)
 
-            if self._tools:
+            if self._tools or self._skill_tools:
                 self._run_with_tools(client)
             else:
                 self._run_stream(client)
@@ -433,14 +263,15 @@ class ChatWorker(QThread):
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
-            # 思考模型（DeepSeek-R1 / QwQ 等）的思考过程走 reasoning_content 字段
-            rc = getattr(delta, 'reasoning_content', None)
-            if rc:
-                self.reasoning.emit(rc)
+            # 思考模型的思考过程（reasoning_content），与正文分开流式输出
+            reasoning = getattr(delta, 'reasoning_content', None)
+            if reasoning:
+                self._reasoning_full += reasoning
+                self.reasoning_chunk.emit(reasoning)
             if delta.content:
                 full_text += delta.content
                 self.chunk.emit(delta.content)
-        self.finished_ok.emit(full_text)
+        self.finished_ok.emit(full_text, self._reasoning_full)
 
     # ---------------- 带 MCP 工具调用（非流式循环） ----------------
     def _run_with_tools(self, client):
@@ -455,6 +286,13 @@ class ChatWorker(QThread):
             tool_def['function']['name'] = fn_name
             openai_tools.append(tool_def)
 
+        # 技能本地执行工具（read_skill_file / run_skill_script）
+        local_tools = set()
+        if self._skill_tools is not None:
+            for tool_def in self._skill_tools.openai_tools():
+                local_tools.add(tool_def['function']['name'])
+                openai_tools.append(tool_def)
+
         msgs = list(self._messages)
         manager = get_mcp_manager()
         answer = ""
@@ -468,9 +306,6 @@ class ChatWorker(QThread):
                 tools=openai_tools,
             )
             msg = resp.choices[0].message
-            rc = getattr(msg, 'reasoning_content', None)
-            if rc:
-                self.reasoning.emit(rc)
             tool_calls = getattr(msg, 'tool_calls', None)
             if not tool_calls:
                 answer = msg.content or ""
@@ -503,7 +338,10 @@ class ChatWorker(QThread):
                         args = {}
                 except Exception:
                     args = {}
-                if not tool_info:
+                if tc.function.name in local_tools:
+                    self.tool_info.emit(f"调用技能本地工具 {tc.function.name} ...")
+                    result = self._skill_tools.call(tc.function.name, args)
+                elif not tool_info:
                     result = f"[未知工具 {tc.function.name}]"
                 else:
                     self.tool_info.emit(f"调用 MCP 工具 {tool_info.server}/{tool_info.name} ...")
@@ -522,13 +360,65 @@ class ChatWorker(QThread):
         if not answer:
             answer = "[模型未返回内容]"
         self.chunk.emit(answer)
-        self.finished_ok.emit(answer)
+        self.finished_ok.emit(answer, self._reasoning_full)
+
+
+class SessionItemDelegate(QStyledItemDelegate):
+    """会话条目绘制：QSS 负责底色/边框/文字，这里只在条目右侧叠加垃圾桶删除图标（垂直居中）"""
+
+    #: 垃圾桶图标 + 两侧留白的总占位宽度（_reload_session_list 计算标题省略宽度时同步使用）
+    DELETE_ZONE_WIDTH = 26
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        # QPalette.text 是方法（返回 QBrush），必须 text() 调用，
+        # 直接 .text 拿到的是绑定方法对象，运行期 AttributeError 崩溃
+        color = QColor(option.palette.text().color())
+        # 条目底色较深时（选中态等）跟随文字色，保证图标可见
+        r = option.rect
+        icon_w = 14
+        x = r.right() - 8 - icon_w
+        y = r.top() + max(0, (r.height() - 16) // 2)  # 垂直居中
+        pixmap = ChatWindow._create_trash_icon(color)
+        painter.drawPixmap(x, y, 14, 14, pixmap)
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(max(size.height(), 44))
+        return size
+
+
+class StayOpenMenu(QMenu):
+    """勾选类条目点击后菜单留在原地不收起，方便连续切换多个工具。
+
+    Qt 菜单默认触发任何条目即关闭，且没有开关可留；这里拦截
+    勾选条目（checkable）的鼠标/回车激活：手动翻转勾选态、不下传基类，
+    菜单便不会收起。普通条目仍按常规行为点击后关闭。
+    """
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            act = self.actionAt(event.position().toPoint())
+            if act is not None and act.isEnabled() and act.isCheckable():
+                act.toggle()
+                return
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            act = self.activeAction()
+            if act is not None and act.isEnabled() and act.isCheckable():
+                act.toggle()
+                return
+        super().keyPressEvent(event)
 
 
 class ChatWindow(QWidget):
     """AI 对话独立窗口"""
 
     closed = pyqtSignal()
+    # MCP 连接状态事件（后台线程经此信号转发回主线程刷新菜单）
+    _mcp_status_sig = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -536,50 +426,55 @@ class ChatWindow(QWidget):
         self.setWindowTitle(f"{APP_NAME} - AI 对话")
 
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window |
-            Qt.WindowType.WindowMinimizeButtonHint |
-            Qt.WindowType.WindowMaximizeButtonHint
+            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
         )
+        # 用时置顶、切走降级：「始终置顶」设置只控制翻译窗口
+        try:
+            from ..utils.window_front import install_activation_topmost
+        except ImportError:
+            from src.utils.window_front import install_activation_topmost
+        install_activation_topmost(self)
+        # Windows 手势（Win+方向键贴靠/最大化、任务栏最小化），与翻译窗口一致
+        self._enable_windows_window_management()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(720, 480)
         self.resize(920, 640)
 
-        # 窗口状态（最大化/最小化，与翻译窗口一致）
-        self._is_maximized = False
-        self._is_minimized = False
-        self._normal_geometry: Optional[QRect] = None
-
         self._config = get_config()
         self._store = get_chat_store()
         self._theme = get_theme()
+
+        # 任务栏图标：与翻译窗口保持一致（assets/icon.png）
+        self._set_window_icon()
+
+        # MCP 连接状态：「连接中」标记 + 后台事件监听（经 pyqtSignal 切回主线程）
+        self._mcp_connecting = False
+        self._mcp_status_sig.connect(self._on_mcp_status_event)
+        get_mcp_manager().add_status_listener(self._mcp_status_sig.emit)
 
         # 拖动状态
         self._is_dragging = False
         self._drag_start_pos: Optional[QPoint] = None
         self._drag_window_start_pos: Optional[QPoint] = None
 
+        # 最大化状态（标题栏按钮 / 双击标题栏 / Win+方向键共用）
+        self._is_maximized = False
+        self._normal_geometry: Optional[QRect] = None
+
         # 边缘缩放状态（无框窗口拖拽边缘调整大小）
         self._resize_edge = 0
         self._resize_start_pos: Optional[QPoint] = None
         self._resize_start_geo: Optional[QRect] = None
-        self._resize_cursor_child: Optional[QWidget] = None  # 被设过缩放光标的子控件
-        self._last_edge_shape = Qt.CursorShape.ArrowCursor  # 上次同步的边缘光标形状
-        self._sync_cursor_child: Optional[QWidget] = None  # 被轮询设过光标的子控件
 
         self._current_session_id: Optional[str] = None
         self._worker: Optional[ChatWorker] = None
+        self._trusted_skills: set = set()  # 本会话勾选过「不再询问」的技能
         self._stream_buffer = ""
-        self._reasoning_buffer = ""
-        self._reason_follow = True  # 思考框折叠时是否跟随到底
-        self._main_follow = True  # 主消息区是否自动跟随到底
-
+        self._reasoning_buffer = ""  # 思考模型的流式思考内容缓冲
 
         self._setup_ui()
         self._apply_theme()
         self._applied_theme_signature = self._theme_signature()
-
-        # 在 Windows 上启用任务栏最小化和 Win+方向键贴靠/最大化
-        self._enable_windows_window_management()
 
         # 鼠标追踪：未按键时也响应移动，及时切换边缘缩放光标
         self.setMouseTracking(True)
@@ -587,36 +482,13 @@ class ChatWindow(QWidget):
         self._title_bar.setMouseTracking(True)
         self._side_panel.setMouseTracking(True)
         # 子控件占据整个窗口，边缘按下/悬停事件到不了窗口自身，
-        # 通过事件过滤器在内容容器（含全部后代）上拦截处理
+        # 通过事件过滤器在内容容器及其全部后代上拦截处理。
+        # 必须装到每个后代：会话列表/消息视图等控件会自行接受鼠标移动
+        # 事件不向上传播，只装在容器上会漏掉它们所在区域（如左边缘）
         self._content_frame.installEventFilter(self)
-        # 应用级鼠标移动监听：可选中气泡/列表等子控件会接受移动事件，
-        # 窗口级 mouseMoveEvent 收不到，光标离开边缘区无法立刻复原；
-        # 应用级过滤器先于任何子控件收到全部移动事件，可即时检查复原
-        QApplication.instance().installEventFilter(self)
-
-        # 气泡最大宽在渲染时按当时聊天区宽度定死，窗口变宽后防抖重排气泡
-        self._last_render_width = 0
-        self._relayout_timer = QTimer(self)
-        self._relayout_timer.setSingleShot(True)
-        self._relayout_timer.setInterval(200)
-        self._relayout_timer.timeout.connect(self._relayout_on_resize)
-
-        # 流式刷新节流：chunk 先入缓冲，合并后最多约 25 次/秒刷新气泡，
-        # 避免长回复时每个 chunk 都全量重排富文本导致卡死
-        self._flush_timer = QTimer(self)
-        self._flush_timer.setSingleShot(True)
-        self._flush_timer.setInterval(40)
-        self._flush_timer.timeout.connect(self._update_stream_display)
-
-        # 边缘光标同步：可选中文本等子控件会接受鼠标移动事件，事件不再冒泡到
-        # 窗口，窗口级 mouseMoveEvent 不触发，离开边缘后缩放光标迟迟不复原；
-        # 轮询鼠标位置主动同步（与划词工具栏/翻译图标按钮同方案）
-        self._cursor_check_timer = QTimer(self)
-        self._cursor_check_timer.setInterval(100)
-        self._cursor_check_timer.timeout.connect(self._sync_edge_cursor)
-        self._cursor_check_timer.start()
-        # 已取消但仍在跑的 worker：保持引用直到结束，防止 QThread 运行中被回收 abort
-        self._zombie_workers: List[ChatWorker] = []
+        for _w in self.findChildren(QWidget):
+            if _w is not self._input_edit:
+                _w.installEventFilter(self)
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -645,20 +517,21 @@ class ChatWindow(QWidget):
         title_layout.addWidget(self._title_label)
         title_layout.addStretch()
 
+        # 最小化 / 最大化按钮（与翻译窗口同款）
         self._minimize_btn = QPushButton("─")
         self._minimize_btn.setObjectName("chatMinimizeBtn")
         self._minimize_btn.setFixedSize(26, 26)
-        self._minimize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._minimize_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._minimize_btn.clicked.connect(self._on_minimize)
+        self._minimize_btn.setToolTip("最小化")
+        self._minimize_btn.clicked.connect(self._on_minimize_clicked)
         title_layout.addWidget(self._minimize_btn)
 
         self._maximize_btn = QPushButton("□")
         self._maximize_btn.setObjectName("chatMaximizeBtn")
         self._maximize_btn.setFixedSize(26, 26)
-        self._maximize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._maximize_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._maximize_btn.clicked.connect(self._on_maximize)
+        self._maximize_btn.setToolTip("最大化 / 还原")
+        self._maximize_btn.clicked.connect(self._toggle_maximize)
         title_layout.addWidget(self._maximize_btn)
 
         self._close_btn = QPushButton("×")
@@ -695,6 +568,8 @@ class ChatWindow(QWidget):
         self._session_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._session_list.customContextMenuRequested.connect(self._on_session_context_menu)
         self._session_list.itemClicked.connect(self._on_session_item_clicked)
+        # 垃圾桶删除按钮等条目装饰由委托绘制（文字/边框仍走 QSS）
+        self._session_list.setItemDelegate(SessionItemDelegate(self._session_list))
         side.addWidget(self._session_list, 1)
 
         self._splitter.addWidget(self._side_panel)
@@ -731,7 +606,7 @@ class ChatWindow(QWidget):
         self._mcp_btn.setMinimumHeight(28)
         self._mcp_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._mcp_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self._mcp_menu = QMenu(self._mcp_btn)
+        self._mcp_menu = StayOpenMenu(self._mcp_btn)
         self._mcp_btn.setMenu(self._mcp_menu)
         top_bar.addWidget(self._mcp_btn)
 
@@ -744,25 +619,11 @@ class ChatWindow(QWidget):
 
         right.addLayout(top_bar)
 
-        # 消息区（控件式气泡：QSS 支持圆角，Qt 富文本不支持 border-radius）
-        self._message_scroll = QScrollArea()
-        self._message_scroll.setObjectName("messageView")
-        self._message_scroll.setWidgetResizable(True)
-        self._message_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._message_container = QWidget()
-        self._message_container.setObjectName("messageContainer")
-        self._message_layout = QVBoxLayout(self._message_container)
-        self._message_layout.setContentsMargins(4, 10, 10, 10)
-        self._message_layout.setSpacing(10)
-        self._message_scroll.setWidget(self._message_container)
-        _mbar = self._message_scroll.verticalScrollBar()
-        _mbar.rangeChanged.connect(self._on_main_range_changed)
-        _mbar.valueChanged.connect(self._on_main_scroll_moved)
-        self._stream_label: Optional[QLabel] = None  # 流式输出中的气泡正文
-        self._stream_reason_label: Optional[QLabel] = None  # 流式思考块内容
-        self._stream_reason_scroll: Optional[QScrollArea] = None
-        self._stream_row: Optional[QWidget] = None  # 流式输出所在的行容器
-        right.addWidget(self._message_scroll, 1)
+        # 消息区
+        self._message_view = QTextBrowser()
+        self._message_view.setObjectName("messageView")
+        self._message_view.setOpenExternalLinks(True)
+        right.addWidget(self._message_view, 1)
 
         # 输入区
         input_bar = QHBoxLayout()
@@ -786,8 +647,8 @@ class ChatWindow(QWidget):
         self._splitter.setStretchFactor(0, 0)
         self._splitter.setStretchFactor(1, 1)
         self._splitter.setSizes([220, 700])
-        # 侧栏宽度变化后重排会话条目：标题按新宽度省略，避免超宽截断圆角
-        self._splitter.splitterMoved.connect(self._reload_session_list)
+        # 拖动分割条改变侧栏宽度时，按新宽度重排会话条目标题省略
+        self._splitter.splitterMoved.connect(self._on_splitter_moved)
         root.addWidget(self._splitter, 1)
 
     # ------------------------------------------------------------------
@@ -813,11 +674,6 @@ class ChatWindow(QWidget):
         accent = t['accent_color']
         accent_hover = t['accent_hover']
         font_size = self._config.get('font.size', 15)
-        self._reasoning_color = text2
-        # 思考气泡底色：主题色浅调（约 10% 不透明），与正文气泡区分
-        self._reasoning_tint = _hex_to_rgba(accent, 26)
-        # 侧栏条目文字色：条目透明底，按侧栏底色亮度选黑/白，避免深色背景黑字看不清
-        self._session_text_color = _contrast_color(bg2)
 
         self._content_frame.setStyleSheet(f"""
             #chatContentFrame {{
@@ -831,9 +687,11 @@ class ChatWindow(QWidget):
             #chatTitleLabel {{ color: {text1}; font-size: 13px; font-weight: 600; background: transparent; }}
             #chatMinimizeBtn, #chatMaximizeBtn {{
                 background: transparent; color: {text2}; border: none;
-                font-size: 12px; font-weight: bold; border-radius: 5px;
+                font-size: 14px; border-radius: 5px;
             }}
-            #chatMinimizeBtn:hover, #chatMaximizeBtn:hover {{ background-color: {border}; color: {text1}; }}
+            #chatMinimizeBtn:hover, #chatMaximizeBtn:hover {{
+                background-color: {accent}; color: #ffffff;
+            }}
             #chatCloseBtn {{
                 background: transparent; color: {text2}; border: none;
                 font-size: 16px; border-radius: 5px;
@@ -851,26 +709,19 @@ class ChatWindow(QWidget):
             #chatSplitter::handle:hover {{ background-color: {accent}; }}
             #chatSplitter::handle:pressed {{ background-color: {accent_hover}; }}
         """)
+        # 条目透明底：文字色按侧栏背景亮度自动选黑/白，避免深色底黑字看不清
+        item_text = getattr(self, '_session_item_text_color', None) or self._contrast_color(bg2)
         self._session_list.setStyleSheet(f"""
             #sessionList {{
-                background-color: transparent; border: none; color: {text1};
+                background-color: transparent; border: none; color: {item_text};
                 font-size: {max(font_size - 2, 12)}px; outline: none;
             }}
             #sessionList::item {{
-                padding: 0; border-radius: 8px; margin: 2px 1px;
+                padding: 8px 10px; border-radius: 8px; margin: 1px 2px;
+                color: {item_text};
             }}
-            #sessionList::item:selected {{
-                background: transparent; border: 1px solid {text2};
-            }}
-            #sessionList::item:hover:!selected {{
-                background: transparent; border: 1px solid {border};
-            }}
-            #sessionRow {{ background: transparent; }}
-            #sessionRowLabel {{ background: transparent; color: {self._session_text_color}; }}
-            #sessionDelBtn {{
-                background: transparent; border: none; border-radius: 5px;
-            }}
-            #sessionDelBtn:hover {{ background-color: {border}; }}
+            #sessionList::item:selected {{ background-color: transparent; color: {item_text}; border: 1px solid {text2}; }}
+            #sessionList::item:hover:!selected {{ border: 1px solid {border}; }}
             #sessionList QScrollBar:vertical {{
                 background: transparent; width: 6px; margin: 2px;
             }}
@@ -915,11 +766,11 @@ class ChatWindow(QWidget):
             }}
             #clearCtxBtn:hover {{ color: {text1}; border-color: {accent}; }}
         """)
-        self._message_scroll.setStyleSheet(f"""
+        self._message_view.setStyleSheet(f"""
             #messageView {{
-                background-color: {bg}; border: none;
+                background-color: {bg}; color: {text1}; border: none;
+                font-size: {font_size}px;
             }}
-            #messageContainer {{ background: transparent; }}
             #messageView QScrollBar:vertical {{
                 background: transparent; width: 8px; margin: 2px;
             }}
@@ -929,58 +780,31 @@ class ChatWindow(QWidget):
             #messageView QScrollBar::handle:vertical:hover {{ background: {text2}; }}
             #messageView QScrollBar::add-line:vertical, #messageView QScrollBar::sub-line:vertical {{ height: 0; }}
             #messageView QScrollBar::add-page:vertical, #messageView QScrollBar::sub-page:vertical {{ background: transparent; }}
-            #bubbleUser {{
-                background-color: {accent}; color: #ffffff;
-                border-radius: 12px; padding: 8px 12px;
-                font-size: {font_size}px;
-            }}
-            #bubbleAssistant {{
-                background-color: {bg2}; color: {text1};
-                border: 1px solid {border};
-                border-radius: 12px; padding: 8px 12px;
-                font-size: {font_size}px;
-            }}
-            #bubbleUser pre, #bubbleAssistant pre {{
-                background-color: {border}; padding: 6px;
-                font-family: Consolas, monospace;
-            }}
-            #bubbleAssistant QLabel {{ background: transparent; }}
-            #bubbleReasoning {{
-                background-color: {self._reasoning_tint};
-                border: 1px dashed {border};
-                border-radius: 12px;
-            }}
-            #bubbleReasoning QLabel {{ background: transparent; }}
-            #bubbleContentText {{ color: {text1}; font-size: {font_size}px; }}
-            #reasoningTitle {{
-                color: {text2}; font-size: 12px; background: transparent;
-            }}
-            #reasoningToggleBtn {{
-                background-color: transparent; color: {text2};
-                border: 1px solid {border}; border-radius: 10px;
-                padding: 1px 10px; font-size: 11px;
-            }}
-            #reasoningToggleBtn:hover {{ color: {text1}; border-color: {accent}; }}
-            #reasoningContent {{
-                color: {text2}; background: transparent;
-                font-size: {max(font_size - 1, 12)}px;
-            }}
-            #reasoningScroll {{ background: transparent; border: none; }}
-            #reasoningScroll QScrollBar:vertical {{
-                background: transparent; width: 6px; margin: 1px;
-            }}
-            #reasoningScroll QScrollBar::handle:vertical {{
-                background: {border}; border-radius: 3px; min-height: 20px;
-            }}
-            #reasoningScroll QScrollBar::handle:vertical:hover {{ background: {text2}; }}
-            #reasoningScroll QScrollBar::add-line:vertical, #reasoningScroll QScrollBar::sub-line:vertical {{ height: 0; }}
-            #reasoningScroll QScrollBar::add-page:vertical, #reasoningScroll QScrollBar::sub-page:vertical {{ background: transparent; }}
-            #emptyHint {{
-                color: {text2}; font-size: 13px; background: transparent;
-            }}
-            #emptyTitle {{
-                color: {text1}; font-size: 20px; font-weight: 700; background: transparent;
-            }}
+        """)
+        self._message_view.document().setDefaultStyleSheet(f"""
+            body {{ color: {text1}; font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+                    background-color: {bg}; }}
+            td.user {{ background-color: {accent}; color: #ffffff;
+                       border-radius: 12px; padding: 8px 12px; margin: 6px 0;
+                       text-align: left; }}
+            .row-assistant {{ text-align: left; margin: 8px 0; }}
+            .role-tag {{ color: {accent}; font-size: 11px; font-weight: 700;
+                         letter-spacing: 1px; }}
+            .assistant {{ background-color: {bg2}; color: {text1};
+                          border: 1px solid {border};
+                          border-radius: 12px; padding: 8px 12px; margin-top: 2px; }}
+            .info {{ color: {text2}; font-size: 12px; margin: 4px 0; }}
+            details.reasoning {{ background-color: {bg2}; color: {text2};
+                                 border: 1px solid {border}; border-radius: 10px;
+                                 margin: 0 0 4px 0; padding: 6px 10px; font-size: 12px; }}
+            details.reasoning summary {{ color: {text2}; font-weight: 600; }}
+            .reasoning-body {{ margin-top: 6px; max-height: 150px; }}
+            .empty-wrap {{ text-align: center; margin-top: 90px; }}
+            .empty-title {{ color: {text1}; font-size: 20px; font-weight: 700;
+                            margin-bottom: 8px; }}
+            .empty-hint {{ color: {text2}; font-size: 13px; }}
+            pre {{ background-color: {border}; padding: 8px; border-radius: 6px;
+                   white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; }}
         """)
         self._input_edit.setStyleSheet(f"""
             #chatInput {{
@@ -1009,6 +833,59 @@ class ChatWindow(QWidget):
         """)
         self._skill_label.setStyleSheet(f"color: {text2}; font-size: 12px; background: transparent;")
 
+        # 侧栏背景亮度决定的条目文字色（供渲染委托的垃圾桶图标跟随）
+        self._session_item_text_color = self._contrast_color(bg2)
+
+    @staticmethod
+    def _contrast_color(bg_hex: str) -> str:
+        """按背景色 BT.601 亮度自动选对比文字色：深色背景白字、浅色背景黑字"""
+        fallback_bg = '#2d2d2d'
+        try:
+            c = QColor(bg_hex)
+            if not c.isValid():
+                c = QColor(fallback_bg)
+        except Exception:
+            c = QColor(fallback_bg)
+        lum = 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
+        return '#ffffff' if lum < 140 else '#1f1f1f'
+
+    @staticmethod
+    def _create_trash_icon(color: QColor):
+        """绘制垃圾桶删除图标（桶盖 + 桶身 + 内部纹理），仿翻译窗口 _create_copy_icon 风格"""
+        from PyQt6.QtGui import QPixmap
+        from PyQt6.QtCore import QPointF
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(color, 1.3, Qt.PenStyle.SolidLine,
+                   Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        def line(x1, y1, x2, y2):
+            painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+
+        # 提手
+        line(6.5, 2.5, 9.5, 2.5)
+        # 桶盖
+        line(3.5, 4.5, 12.5, 4.5)
+        # 桶身（上宽下窄收口）
+        line(4.8, 4.5, 5.6, 13.0)
+        line(11.2, 4.5, 10.4, 13.0)
+        line(5.6, 13.0, 10.4, 13.0)
+        # 内部纹理
+        line(7.0, 7.0, 7.0, 11.0)
+        line(9.0, 7.0, 9.0, 11.0)
+        painter.end()
+        return pixmap
+
+    def _set_window_icon(self):
+        """设置窗口图标（任务栏图标），与翻译窗口一致"""
+        icon_path = Path(__file__).parent.parent.parent / "assets" / "icon.png"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
+
     # ------------------------------------------------------------------
     # 窗口显示 / 拖动
     # ------------------------------------------------------------------
@@ -1024,40 +901,15 @@ class ChatWindow(QWidget):
         if self._current_session_id is None:
             self._ensure_session()
         if self.isMinimized():
-            # 从最小化恢复（任务栏/快捷键再次唤起）
-            self._is_minimized = False
+            # 从最小化唤醒：先还原，否则窗口仍缩在任务栏
             self.showNormal()
         self.show()
-        self.raise_()
-        self.activateWindow()
-        self._bring_to_front()
-
-    def _bring_to_front(self):
-        """Win32：可靠抢占前台焦点。全局热键从其他进程（如 PyCharm）唤起时，
-        仅 raise_/activateWindow 拿不到前台权限，窗口会闪一下又被原窗口盖回；
-        AttachThreadInput + TOPMOST/NOTOPMOST 技巧可拉到最前且不保持置顶"""
-        if sys.platform != 'win32':
-            return
+        # 唤醒时刻短暂置前一次（「始终置顶」设置只控制翻译窗口）
         try:
-            import ctypes
-            hwnd = int(self.winId())
-            user32 = ctypes.windll.user32
-            foreground_tid = user32.GetWindowThreadProcessId(
-                user32.GetForegroundWindow(), None)
-            current_tid = ctypes.windll.kernel32.GetCurrentThreadId()
-            attached = False
-            if foreground_tid and foreground_tid != current_tid:
-                attached = user32.AttachThreadInput(current_tid, foreground_tid, True)
-            SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW = 0x0002, 0x0001, 0x0040
-            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
-            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, flags)  # HWND_TOPMOST
-            user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, flags)  # HWND_NOTOPMOST
-            user32.SetForegroundWindow(hwnd)
-            user32.BringWindowToTop(hwnd)
-            if attached:
-                user32.AttachThreadInput(current_tid, foreground_tid, False)
-        except Exception:
-            pass
+            from ..utils.window_front import bring_to_front_once
+        except ImportError:
+            from src.utils.window_front import bring_to_front_once
+        bring_to_front_once(self)
 
     def show_with_text(self, text: str, skill: str = ""):
         """从划词工具栏唤起：预填选中文本，可选激活指定技能"""
@@ -1081,124 +933,82 @@ class ChatWindow(QWidget):
         self._store.append_message(sid, 'assistant', result or "（已执行，无返回内容）")
         self._render_messages()
 
-    def _on_close_clicked(self):
-        self.hide()
-        self.closed.emit()
+    def _on_minimize_clicked(self):
+        self.showMinimized()
 
-    def hideEvent(self, event):
-        # 隐藏前还原子控件光标，避免下次显示时残留缩放光标
-        self._restore_sync_cursor_child()
-        super().hideEvent(event)
-
-    def _on_minimize(self):
-        """最小化窗口"""
-        self._is_minimized = True
-        self.showMinimized()  # 使用系统最小化
-
-    def _on_maximize(self):
-        """最大化/还原窗口"""
-        if self._is_maximized or self.isMaximized():
-            # 还原
-            if self.isMaximized():
-                # 系统最大化（Win+↑）：由系统还原到原尺寸
-                self.showNormal()
-            elif self._normal_geometry:
+    def _toggle_maximize(self):
+        """最大化/还原：标题栏按钮与双击标题栏共用（行为同翻译窗口）"""
+        if self._is_maximized:
+            if self._normal_geometry:
                 self.setGeometry(self._normal_geometry)
+            else:
+                self.showNormal()
             self._is_maximized = False
             self._maximize_btn.setText("□")
         else:
-            # 最大化
             self._normal_geometry = self.geometry()
-            # 获取窗口当前所在的屏幕（而不是主屏幕）
             screen = QApplication.screenAt(self.geometry().center())
             if screen is None:
                 screen = QApplication.primaryScreen()
             if screen:
                 self.setGeometry(screen.availableGeometry())
-            self._is_maximized = True
-            self._maximize_btn.setText("❐")
-
-    def changeEvent(self, event):
-        """同步系统窗口状态（Win+↑ 最大化 / Win+↓ 还原）与按钮图标"""
-        if event.type() == event.Type.WindowStateChange:
-            if self.isMaximized():
                 self._is_maximized = True
                 self._maximize_btn.setText("❐")
-            elif self.isMinimized():
-                pass
-            elif self._is_maximized:
-                self._is_maximized = False
-                self._maximize_btn.setText("□")
-            if not self.isMinimized():
-                self._is_minimized = False
-        super().changeEvent(event)
 
     def _enable_windows_window_management(self):
-        """在 Windows 上启用系统窗口管理快捷键和任务栏最小化。"""
+        """Windows 上启用 Win+方向键贴靠/最大化与任务栏最小化（同翻译窗口）"""
         try:
             if not sys.platform.startswith("win"):
                 return
-
             import ctypes
-            # 获取窗口句柄
             hwnd = int(self.winId())
-
-            # 获取当前窗口样式
             GWL_STYLE = -16
             style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
-
-            # WS_THICKFRAME/WS_MAXIMIZEBOX 让 Windows 识别该无边框窗口可贴靠/最大化，
-            # 因而支持 Win+方向键等系统窗口管理快捷键。
+            # WS_THICKFRAME/WS_MAXIMIZEBOX 让 Windows 识别该无边框窗口
+            # 可贴靠/最大化，因而支持 Win+方向键等系统窗口管理快捷键
             WS_THICKFRAME = 0x00040000
             WS_MINIMIZEBOX = 0x00020000
             WS_MAXIMIZEBOX = 0x00010000
             WS_SYSMENU = 0x00080000
             new_style = style | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU
-
-            # 设置新样式
             ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, new_style)
-
-            # 通知 Windows 重新计算非客户区样式，否则快捷键/贴靠状态可能不立即生效。
-            SWP_NOSIZE = 0x0001
-            SWP_NOMOVE = 0x0002
-            SWP_NOZORDER = 0x0004
-            SWP_NOACTIVATE = 0x0010
-            SWP_FRAMECHANGED = 0x0020
+            # 通知 Windows 重新计算非客户区样式，否则快捷键可能不立即生效
             ctypes.windll.user32.SetWindowPos(
-                hwnd,
-                0,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
-            )
+                hwnd, 0, 0, 0, 0, 0,
+                0x0002 | 0x0001 | 0x0004 | 0x0010 | 0x0020)  # NOMOVE|NOSIZE|NOZORDER|NOACTIVATE|FRAMECHANGED
         except Exception:
             pass
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        # 尺寸变化停止后（拖拽边缘/最大化）再重排，避免频繁重建气泡
-        self._relayout_timer.start()
-
-    def _relayout_on_resize(self):
-        """窗口尺寸稳定后按新聊天区宽度重排气泡"""
-        vp_w = self._message_scroll.viewport().width()
-        if vp_w < 50:
-            return  # 最小化等退化尺寸不处理
-        m = self._message_layout.contentsMargins()
-        usable = max(vp_w - m.left() - m.right(), 200)
-        if usable == self._last_render_width:
-            return
-        if self._worker and self._worker.isRunning():
-            return  # 流式输出中不打断，结束后会重渲染
-        self._render_messages()
+    def _on_close_clicked(self):
+        self.hide()
+        self.closed.emit()
 
     def closeEvent(self, event):
         """点系统关闭也仅隐藏，保留会话状态"""
         event.ignore()
         self.hide()
         self.closed.emit()
+
+    def hideEvent(self, event):
+        """窗口隐藏时清理拖拽/缩放状态与残留鼠标抓取，避免全应用输入被锁"""
+        self._is_dragging = False
+        self._resize_edge = 0
+        self._resize_start_geo = None
+        self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        self.releaseMouse()
+        super().hideEvent(event)
+
+    def changeEvent(self, event):
+        """Win+方向键等系统快捷键触发的窗口状态变化：同步最大化标记与按钮图标"""
+        if event.type() == QEvent.Type.WindowStateChange:
+            state = self.windowState()
+            if state & Qt.WindowState.WindowMaximized:
+                self._is_maximized = True
+                self._maximize_btn.setText("❐")
+            elif self._is_maximized and state == Qt.WindowState.WindowNoState:
+                self._is_maximized = False
+                self._maximize_btn.setText("□")
+        super().changeEvent(event)
 
     # ------------------------------------------------------------------
     # 窗口拖动 / 边缘缩放
@@ -1208,13 +1018,6 @@ class ChatWindow(QWidget):
 
     def _edge_at(self, pos) -> int:
         """返回鼠标位置命中的边缘位组合（可为角）"""
-        # 最大化状态下不允许边缘缩放（与系统最大化窗口一致）
-        if self._is_maximized or self.isMaximized():
-            return 0
-        # 标题栏区域整体不参与边缘检测：标题栏内的最小化/最大化/关闭按钮
-        # 上半部落在检测带内，若命中会把按钮点击误拦截成边缘缩放，导致按钮无法点击
-        if self._title_bar.geometry().contains(int(pos.x()), int(pos.y())):
-            return 0
         r = self.rect()
         b = self._RESIZE_BORDER
         edge = 0
@@ -1240,64 +1043,6 @@ class ChatWindow(QWidget):
             return Qt.CursorShape.SizeBDiagCursor
         return Qt.CursorShape.ArrowCursor
 
-    def _sync_edge_cursor(self):
-        """轮询鼠标位置同步边缘缩放光标。可选中气泡/文本框会接受鼠标移动事件，
-        事件不冒泡到窗口，窗口级 mouseMoveEvent 不触发，
-        导致离开边缘后缩放光标残留；这里主动检查并复原"""
-        if not self.isVisible() or self._resize_edge or self._is_dragging:
-            return
-        if QWidget.mouseGrabber() is not None:
-            return  # 拖拽/选择过程中光标由抓取方管理
-        gpos = QCursor.pos()
-        if gpos is None:
-            return
-        pos = self.mapFromGlobal(gpos)
-        if not self.rect().contains(pos):
-            return  # 鼠标在窗口外：由 leaveEvent 负责复原
-        shape = self._resize_cursor(self._edge_at(pos))
-        if shape != self._last_edge_shape:
-            self._last_edge_shape = shape
-            self.setCursor(shape)
-        child = self.childAt(pos)
-        if shape == Qt.CursorShape.ArrowCursor or child is None or child is self:
-            self._restore_sync_cursor_child()
-            return
-        if child is self._sync_cursor_child:
-            return
-        if child.testAttribute(Qt.WidgetAttribute.WA_SetCursor):
-            self._restore_sync_cursor_child()
-            return  # 按钮/输入框/滚动条等自带光标，不覆盖
-        self._restore_sync_cursor_child()
-        # 窗口级 setCursor 在鼠标停在子控件上时不一定刷新原生光标，
-        # 直接设到鼠标下的子控件才能即时生效
-        child.setCursor(shape)
-        self._sync_cursor_child = child
-
-    def _restore_sync_cursor_child(self):
-        """还原被轮询改过光标的子控件"""
-        if self._sync_cursor_child is not None:
-            try:
-                self._sync_cursor_child.unsetCursor()
-            except RuntimeError:
-                pass
-            self._sync_cursor_child = None
-
-    def _interactive_child_at(self, pos) -> bool:
-        """窗口坐标 pos 下是否为交互控件（可选文本气泡 / 列表 / 滚动区 / 按钮 / 输入框）。
-        这类控件上的按下交给控件自己处理，不拦截成边缘缩放，
-        否则贴边的会话列表条目、气泡内边距等会被误拦成窗口缩放"""
-        w = self._content_frame.childAt(pos)
-        while w is not None and w is not self._content_frame:
-            if isinstance(w, (QAbstractScrollArea, QAbstractButton, QTextEdit)):
-                return True
-            if isinstance(w, QLabel) and (
-                w.textInteractionFlags()
-                & Qt.TextInteractionFlag.TextSelectableByMouse
-            ):
-                return True
-            w = w.parentWidget()
-        return False
-
     def _do_resize(self, gpos: QPoint):
         """根据拖动位移重算窗口几何（不小于最小尺寸）"""
         start = self._resize_start_geo
@@ -1322,13 +1067,14 @@ class ChatWindow(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
             edge = self._edge_at(pos)
-            if edge:
-                # 边缘/角落：进入缩放模式
+            if edge and not self._is_maximized:
+                # 边缘/角落：进入缩放模式（最大化时不可缩放）
                 self._resize_edge = edge
                 self._resize_start_pos = event.globalPosition().toPoint()
                 self._resize_start_geo = self.geometry()
                 self.setCursor(self._resize_cursor(edge))
-            elif self._title_bar.geometry().contains(pos):
+                self.grabMouse()  # 拖出窗口外仍能收到移动与释放
+            elif not self._is_maximized and self._title_bar.geometry().contains(pos):
                 self._is_dragging = True
                 self._drag_start_pos = event.globalPosition().toPoint()
                 self._drag_window_start_pos = self.pos()
@@ -1342,93 +1088,72 @@ class ChatWindow(QWidget):
             delta = gpos - self._drag_start_pos
             self.move(self._drag_window_start_pos + delta)
         elif event.buttons() == Qt.MouseButton.NoButton:
-            # 悬停时切换边缘光标
-            self.setCursor(self._resize_cursor(self._edge_at(event.position().toPoint())))
+            # 悬停时切换边缘光标（最大化状态无边缘缩放）
+            if self._is_maximized:
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            else:
+                self.setCursor(self._resize_cursor(self._edge_at(event.position().toPoint())))
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         self._is_dragging = False
         self._resize_edge = 0
         self._resize_start_geo = None
-        if self._resize_cursor_child is not None:
-            self._resize_cursor_child.unsetCursor()
-            self._resize_cursor_child = None
-        self._restore_sync_cursor_child()
-        # 显式释放鼠标抓取，避免抓取卡死导致全局点击失效（仅在自己是抓取者时）
-        if QWidget.mouseGrabber() is self:
-            self.releaseMouse()
-        self.setCursor(self._resize_cursor(self._edge_at(event.position().toPoint())))
+        # 必须与 grabMouse 配对：Qt 显式抓取不会在松手时自动解除，
+        # 漏掉 releaseMouse 会让本窗口永久窃取全应用鼠标输入（所有按钮点不了）
+        self.releaseMouse()
+        self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-        """鼠标双击事件 - 双击标题栏切换最大化状态"""
-        if event.button() == Qt.MouseButton.LeftButton and not self._resize_edge:
-            pos = event.position().toPoint()
-            # 双击标题栏任意位置切换最大化（按钮自身消费点击，不会到这里）
-            if self._title_bar.geometry().contains(pos):
-                self._on_maximize()
-                return
+        """双击标题栏切换最大化/还原（同翻译窗口）"""
+        if event.button() == Qt.MouseButton.LeftButton and \
+                self._title_bar.geometry().contains(event.position().toPoint()):
+            self._toggle_maximize()
+            return
         super().mouseDoubleClickEvent(event)
 
-    def leaveEvent(self, event):
-        """鼠标离开窗口：复原默认箭头，避免缩放光标残留"""
-        self._restore_sync_cursor_child()
-        if self._resize_cursor_child is not None:
-            self._resize_cursor_child.unsetCursor()
-            self._resize_cursor_child = None
-        if not self._resize_edge:
-            self._last_edge_shape = Qt.CursorShape.ArrowCursor
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-        super().leaveEvent(event)
-
     def eventFilter(self, obj, event):
-        # 任何鼠标移动（无论被哪个子控件接受）都立即检查是否离开边缘缩放区：
-        # 在区内→同步缩放光标，离开→即刻复原，不等 100ms 轮询（轮询作兜底）
-        if event.type() == event.Type.MouseMove:
-            if self.isVisible() and not self._resize_edge and not self._is_dragging:
-                self._sync_edge_cursor()
-            return False
-        if (isinstance(obj, QWidget) and obj.objectName() == "sessionRow"
-                and event.type() == event.Type.MouseButtonPress
-                and event.button() == Qt.MouseButton.LeftButton):
-            sid = obj.property("sid")
-            if sid:
-                self._select_session(sid)
-            return False
         is_child = (
             isinstance(obj, QWidget)
             and obj is not self._input_edit
             and not isinstance(obj, QSplitterHandle)
             and self._content_frame.isAncestorOf(obj)
         )
+        is_hover_target = is_child or obj is self._input_edit
 
         # 子控件（内容容器及其后代）上的边缘按下：子控件占满窗口，
-        # 不拦截的话边缘按下事件到不了窗口，缩放无法启动。
-        # 按钮/滚动条类控件绝不拦截：按钮自身会处理按下（如发送按钮贴右边/下边、
-        # 标题栏按钮在顶部检测带内），消息区滚动条贴右边缘，拦截会导致无法点击/滚动
+        # 不拦截的话边缘按下事件到不了窗口，缩放无法启动
         if (
             is_child
-            and not isinstance(obj, (QAbstractButton, QAbstractSlider))
             and event.type() == event.Type.MouseButtonPress
             and event.button() == Qt.MouseButton.LeftButton
+            and not isinstance(obj, QScrollBar)  # 滚动条贴边，拖动不能被误判成缩放
         ):
             pos = self.mapFromGlobal(obj.mapToGlobal(event.position().toPoint()))
             edge = self._edge_at(pos)
-            if edge and not self._interactive_child_at(pos):
+            if edge and not self._is_maximized:
                 self._resize_edge = edge
                 self._resize_start_pos = event.globalPosition().toPoint()
                 self._resize_start_geo = self.geometry()
                 self.setCursor(self._resize_cursor(edge))
-                try:
-                    # 拖出控件/窗口外仍能收到移动与释放；
-                    # 抓取失败（如弹窗正持有抓取）则放弃本次缩放，避免事件被吞后无后续释放
-                    self.grabMouse()
-                except Exception:
-                    self._resize_edge = 0
-                    self._resize_start_geo = None
-                    self.setCursor(Qt.CursorShape.ArrowCursor)
-                    return False
+                self.grabMouse()  # 拖出控件/窗口外仍能收到移动与释放
                 return True
+
+        # 悬停同步缩放光标；离开边缘立即还原（行为同翻译窗口）
+        if is_hover_target and event.type() == event.Type.MouseMove and not self._resize_edge:
+            pos = self.mapFromGlobal(obj.mapToGlobal(event.position().toPoint()))
+            edge = self._edge_at(pos)
+            if edge and not self._is_maximized:
+                cursor = self._resize_cursor(edge)
+                self.setCursor(QCursor(cursor))
+                obj.setCursor(QCursor(cursor))
+            else:
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+                obj.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        elif is_hover_target and event.type() == event.Type.Leave:
+            self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            obj.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
         if obj is self._input_edit and event.type() == event.Type.KeyPress:
             if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -1450,46 +1175,28 @@ class ChatWindow(QWidget):
 
     def _reload_session_list(self):
         current_sid = self._current_session_id
-        self._session_list.clear()
+        # 标题按侧栏当前可视宽度省略（预留垃圾桶按钮区与条目内边距），避免条目超宽截断圆角
+        list_w = max(self._session_list.viewport().width(), 100)
+        title_w = max(list_w - SessionItemDelegate.DELETE_ZONE_WIDTH - 16, 48)
         fm = self._session_list.fontMetrics()
-        # 标题按侧栏当前宽度省略：条目超宽会撑出视口，选中态圆角被截断
-        max_title_w = max(self._session_list.viewport().width() - 60, 60)
+        self._session_list.clear()
         for s in self._store.list_sessions():
             title = (s.get('title') or "新对话").strip() or "新对话"
-            title = fm.elidedText(title, Qt.TextElideMode.ElideRight, max_title_w)
+            elided = fm.elidedText(title, Qt.TextElideMode.ElideRight, title_w)
             try:
                 when = datetime.fromtimestamp(s.get('updated_at', 0) / 1000).strftime('%m-%d %H:%M')
             except Exception:
                 when = ""
-            item = QListWidgetItem()
+            item = QListWidgetItem(f"{elided}\n{when}")
             item.setData(Qt.ItemDataRole.UserRole, s['id'])
-            row = QWidget()
-            row.setObjectName("sessionRow")
-            row.setProperty("sid", s['id'])
-            row.installEventFilter(self)  # 行内点击（控件覆盖 item）→ 切换会话
-            rl = QHBoxLayout(row)
-            rl.setContentsMargins(10, 8, 6, 8)
-            rl.setSpacing(4)
-            label = QLabel(f"{title}\n{when}")
-            label.setObjectName("sessionRowLabel")
-            rl.addWidget(label, 1)
-            del_btn = QPushButton()
-            del_btn.setObjectName("sessionDelBtn")
-            del_btn.setFixedSize(20, 20)
-            # 绘制图标替代 emoji：颜色跟主题走，悬停走 QIcon Active 模式变红
-            del_btn.setIcon(_trash_icon((getattr(self, '_theme', None) or {}).get('text_secondary', '#999999')))
-            del_btn.setIconSize(QSize(14, 14))
-            del_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            del_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            del_btn.setToolTip("删除对话")
-            del_btn.clicked.connect(
-                lambda checked=False, sid=s['id']: self._delete_session(sid))
-            rl.addWidget(del_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+            item.setData(Qt.ItemDataRole.UserRole + 1, title)  # 完整标题（重命名预填用）
             self._session_list.addItem(item)
-            self._session_list.setItemWidget(item, row)
-            item.setSizeHint(QSize(0, row.sizeHint().height()))
             if s['id'] == current_sid:
                 item.setSelected(True)
+
+    def _on_splitter_moved(self, pos, index):
+        """拖动分割条调整侧栏宽度后，按新宽度重排会话条目的标题省略"""
+        self._reload_session_list()
 
     def _on_new_session(self, select: bool = True):
         session = self._store.create_session()
@@ -1498,9 +1205,24 @@ class ChatWindow(QWidget):
             self._select_session(session['id'])
 
     def _on_session_item_clicked(self, item: QListWidgetItem):
+        # 点击条目右侧垃圾桶区域 → 删除（行为同右键菜单删除）；其余区域切换会话
+        rect = self._session_list.visualItemRect(item)
+        if rect.isValid() and self._session_list.viewport().mapFromGlobal(QCursor.pos()).x() \
+                >= rect.right() - SessionItemDelegate.DELETE_ZONE_WIDTH:
+            self._delete_session(item.data(Qt.ItemDataRole.UserRole))
+            return
         sid = item.data(Qt.ItemDataRole.UserRole)
         if sid and sid != self._current_session_id:
             self._select_session(sid)
+
+    def _delete_session(self, sid):
+        if not sid:
+            return
+        self._store.delete_session(sid)
+        if sid == self._current_session_id:
+            self._current_session_id = None
+        self._reload_session_list()
+        self._ensure_session()
 
     def _select_session(self, session_id: str):
         self._cancel_worker()
@@ -1524,21 +1246,15 @@ class ChatWindow(QWidget):
         delete_act = menu.addAction("删除")
         chosen = menu.exec(self._session_list.mapToGlobal(pos))
         if chosen == rename_act:
-            old_title = (self._store.get_session(sid) or {}).get('title', '')
+            # 预填取存储里的完整标题（item.text() 是省略/含时间的显示文本）
+            session = self._store.get_session(sid) or {}
+            old_title = (session.get('title') or "新对话").strip() or "新对话"
             new_title, ok = QInputDialog.getText(self, "重命名对话", "新名称:", text=old_title)
             if ok and new_title.strip():
                 self._store.rename_session(sid, new_title)
                 self._reload_session_list()
         elif chosen == delete_act:
             self._delete_session(sid)
-
-    def _delete_session(self, sid: str):
-        """删除会话（右键菜单与条目删除按钮共用）"""
-        self._store.delete_session(sid)
-        if sid == self._current_session_id:
-            self._current_session_id = None
-        self._reload_session_list()
-        self._ensure_session()
 
     def _on_clear_context(self):
         if self._current_session_id:
@@ -1600,22 +1316,44 @@ class ChatWindow(QWidget):
         enable_act = self._mcp_menu.addAction("启用 MCP 工具")
         enable_act.setCheckable(True)
         enable_act.setChecked(self._config.get('mcp.enabled', True))
-        enable_act.triggered.connect(self._on_toggle_mcp_enabled)
+        enable_act.toggled.connect(self._on_toggle_mcp_enabled)
 
         self._mcp_menu.addSeparator()
 
         if not manager.available:
             self._mcp_menu.addAction("未安装 mcp 包（pip install mcp）").setEnabled(False)
+        elif self._mcp_connecting or manager.reconnecting:
+            self._mcp_menu.addAction("⏳ 正在连接 MCP 服务器…").setEnabled(False)
         else:
             statuses = manager.server_statuses()
             if not statuses:
                 self._mcp_menu.addAction("未配置 MCP 服务器").setEnabled(False)
+            disabled_tools = set(self._config.get('mcp.disabled_tools', []) or [])
+            tools_by_server = {}
+            for t in manager.list_tools():
+                tools_by_server.setdefault(t.server, []).append(t)
             for st in statuses:
                 if st.connected:
-                    label = f"✓ {st.name}（{st.tool_count} 个工具）"
+                    server_tools = tools_by_server.get(st.name, [])
+                    sub = StayOpenMenu(
+                        f"✓ {st.name}（{len(server_tools)} 个工具）", self._mcp_menu)
+                    self._mcp_menu.addMenu(sub)
+                    if not server_tools:
+                        sub.addAction("（无工具）").setEnabled(False)
+                    for t in server_tools:
+                        tid = f"{t.server}/{t.name}"
+                        act = sub.addAction(t.name)
+                        act.setCheckable(True)
+                        act.setChecked(tid not in disabled_tools)
+                        act.setToolTip((t.description or "").strip() or "（无描述）")
+                        act.toggled.connect(
+                            lambda checked, _tid=tid: self._on_toggle_mcp_tool(_tid))
                 else:
                     label = f"✗ {st.name}：{st.error[:30] or '连接失败'}"
-                self._mcp_menu.addAction(label).setEnabled(False)
+                    act = self._mcp_menu.addAction(label)
+                    act.setEnabled(False)
+                    # 完整失败原因悬停可见（详细错误也已写入日志）
+                    act.setToolTip(st.error or "连接失败")
 
         self._mcp_menu.addSeparator()
         reconnect_act = self._mcp_menu.addAction("重新连接")
@@ -1625,294 +1363,111 @@ class ChatWindow(QWidget):
             lambda: os.startfile(str(manager.config_path))
         )
 
+        self._update_mcp_btn_text()
+
+    def _update_mcp_btn_text(self):
+        """按钮计数只统计启用中的工具；停用某工具后数字随之变化"""
+        manager = get_mcp_manager()
         tools = manager.list_tools()
-        self._mcp_btn.setText(f"MCP（{len(tools)}）" if tools else "MCP")
+        _disabled = set(self._config.get('mcp.disabled_tools', []) or [])
+        enabled_tools = [t for t in tools
+                         if f"{t.server}/{t.name}" not in _disabled]
+        if self._mcp_connecting or manager.reconnecting:
+            self._mcp_btn.setText("MCP（连接中…）")
+        else:
+            self._mcp_btn.setText(
+                f"MCP（{len(enabled_tools)}）" if enabled_tools else "MCP")
 
     def _on_toggle_mcp_enabled(self, checked: bool):
         self._config.set('mcp.enabled', checked)
         self._config.save()
 
+    def _on_toggle_mcp_tool(self, tool_id: str):
+        """启用/停用单个 MCP 工具（停用后不再注入给模型），持久保存"""
+        disabled = list(self._config.get('mcp.disabled_tools', []) or [])
+        if tool_id in disabled:
+            disabled.remove(tool_id)
+            log_info(f"MCP 工具启用: {tool_id}")
+        else:
+            disabled.append(tool_id)
+            log_info(f"MCP 工具停用: {tool_id}")
+        self._config.set('mcp.disabled_tools', disabled)
+        self._config.save()
+        # 勾选状态已由点击本身翻转，菜单保持展开，只需更新按钮计数
+        self._update_mcp_btn_text()
+
     def _on_mcp_reconnect(self):
         manager = get_mcp_manager()
-        manager.start()
+        if manager.reconnecting:
+            return
+        # 立即进入「连接中」状态；完成后 done 事件自动回主线程刷新最终结果。
+        # reconnect() 内部会在未启动时自动走首次启动流程，不能再额外调 start()，
+        # 否则两条连接流程并发（重复拉起子进程）
+        self._mcp_connecting = True
+        self._refresh_mcp_menu()
         manager.reconnect()
-        QTimer.singleShot(1500, self._refresh_mcp_menu)
+
+    def _on_mcp_status_event(self, event: str):
+        """MCP 后台线程的连接状态事件（经信号已切回主线程），实时刷新菜单与按钮"""
+        if event.startswith("done:"):
+            self._mcp_connecting = False
+        self._refresh_mcp_menu()
 
     # ------------------------------------------------------------------
     # 消息渲染与发送
     # ------------------------------------------------------------------
-    def _render_messages(self, streaming_extra: str = "", streaming_reasoning: str = "",
-                         force_scroll: bool = False, reasoning_plain: bool = False):
+    def _render_messages(self, streaming_extra: str = ""):
         session = self._store.get_session(self._current_session_id) if self._current_session_id else None
         messages = (session or {}).get('messages', [])
 
-        # 只有用户停留在底部附近时才自动跟随滚动（修复生成时向上滚动导致的闪烁）
-        bar = self._message_scroll.verticalScrollBar()
-        stick = force_scroll or bar.value() >= bar.maximum() - 30
-
-        # 计算视口宽度，用于限制气泡最大宽（避免 QLabel 富文本因无宽度
-        # 约束而撑宽容器 → 水平溢出 → 文字被截断）
-        vp_w = self._message_scroll.viewport().width()
-        layout_margins = self._message_layout.contentsMargins()
-        usable = max(vp_w - layout_margins.left() - layout_margins.right(), 200)
-        self._last_render_width = usable
-
-        # 清空旧气泡
-        self._stream_label = None
-        self._stream_reason_label = None
-        self._stream_reason_scroll = None
-        self._stream_row = None
-        while self._message_layout.count():
-            item = self._message_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-
+        parts = []
         if not messages and not streaming_extra:
-            wrap = QWidget()
-            wl = QVBoxLayout(wrap)
-            wl.setContentsMargins(0, 90, 0, 0)
-            wl.setSpacing(8)
-            title = QLabel("👋 开始对话")
-            title.setObjectName("emptyTitle")
-            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            title.setMaximumWidth(usable)
-            hint = QLabel("直接输入问题，或划词后从工具栏选择「AI 对话」，\n选中的内容会自动带入这里。")
-            hint.setObjectName("emptyHint")
-            hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hint.setMaximumWidth(usable)
-            wl.addWidget(title)
-            wl.addWidget(hint)
-            self._message_layout.addWidget(wrap)
+            parts.append(
+                '<div class="empty-wrap"><div class="empty-title">👋 开始对话</div>'
+                '<div class="empty-hint">直接输入问题，或划词后从工具栏选择「AI 对话」，'
+                '选中的内容会自动带入这里。</div></div>'
+            )
 
         for m in messages:
             role = m.get('role')
             content = m.get('content', '')
-            if role == 'assistant' and not content and not (m.get('reasoning') or ''):
-                continue  # 流式占位消息（完成时原地填充），不渲染空气泡
-            if role in ('user', 'assistant'):
-                row, _ = self._make_bubble(
-                    role, content, reasoning=m.get('reasoning') or '', usable=usable)
-                self._message_layout.addWidget(row)
+            if role == 'user':
+                parts.append(
+                    '<table width="100%"><tr><td width="20%"></td>'
+                    f'<td class="user">{_format_content(content)}</td></tr></table>'
+                )
+            elif role == 'assistant':
+                # 空 assistant 是发送时的占位消息，不渲染空气泡
+                if not (content or '').strip():
+                    continue
+                block = self._render_assistant_block(content, m.get('reasoning', ''))
+                parts.append(
+                    f'<div class="row-assistant"><span class="role-tag">AI</span>{block}</div>'
+                )
 
-        if streaming_extra or streaming_reasoning:
-            content_html = (_format_content(streaming_extra) if streaming_extra else "") + "<br>▍"
-            row, label = self._make_bubble(
-                'assistant', content_html, reasoning=streaming_reasoning,
-                html_ready=True, usable=usable, reasoning_plain=reasoning_plain)
-            # 流式中高频更新：禁掉文本选择（可选中富文本 QLabel 快速 setText
-            # 是 Qt 易崩溃路径），结束后重渲染会恢复可选
-            label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-            self._stream_label = label
-            rlabel = row.findChild(QLabel, "reasoningContent")
-            if rlabel is not None:
-                rlabel.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-                self._stream_reason_label = rlabel
-                self._stream_reason_scroll = row.findChild(QScrollArea, "reasoningScroll")
-                # 折叠态自动跟随：rangeChanged 在布局更新范围的同帧（绘制前）触发，
-                # 补偿 setText 后用旧范围滚动的一帧滞后（末行闪烁根因）；
-                # valueChanged 记录用户是否手动上滚，上滚则暂停跟随
-                if self._stream_reason_scroll is not None:
-                    _rb = self._stream_reason_scroll.verticalScrollBar()
-                    _rb.rangeChanged.connect(self._on_reason_range_changed)
-                    _rb.valueChanged.connect(self._on_reason_scroll_moved)
-            toggle = row.findChild(QPushButton, "reasoningToggleBtn")
-            if toggle is not None:
-                # 思考中禁止展开：内容仍在增长，展开态会随刷新剧烈抖动；
-                # 结束后整体重建，新按钮自动恢复可用
-                toggle.setEnabled(False)
-                toggle.setToolTip("思考完成后可展开查看")
-            self._message_layout.addWidget(row)
-            self._stream_row = row
+        if streaming_extra:
+            block = self._render_assistant_block(streaming_extra, self._reasoning_buffer, streaming=True)
+            parts.append(
+                f'<div class="row-assistant"><span class="role-tag">AI</span>{block}<br>▍</div>'
+            )
 
-        self._message_layout.addStretch()
-        if stick:
-            QTimer.singleShot(0, self._scroll_to_bottom)
-
-    def _make_bubble(self, role: str, content: str, reasoning: str = "",
-                     html_ready: bool = False, usable: int = 400,
-                     reasoning_plain: bool = False):
-        """创建单条消息气泡（返回行容器与正文 QLabel）；
-        带思考过程时思考块作为独立气泡叠在正文气泡上方"""
-        text_html = content if html_ready else _format_content(content)
-        label = QLabel(text_html)
-        label.setTextFormat(Qt.TextFormat.RichText)
-        label.setWordWrap(True)
-        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        label.setMinimumWidth(40)
-        # 撑满聊天区可用宽度（不加 maxWidth 会按未换行宽度撑大容器 → 溢出截断）
-        label.setMaximumWidth(usable)
-
-        row = QWidget()
-        lay = QVBoxLayout(row)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(8)  # 思考气泡与正文气泡的间距
-
-        if reasoning.strip() and role == 'assistant':
-            # 思考过程独立成气泡，正文气泡紧随其下
-            lay.addWidget(self._make_reasoning_bubble(reasoning, usable, reasoning_plain))
-        label.setObjectName("bubbleUser" if role == 'user' else "bubbleAssistant")
-        lay.addWidget(label)  # 占满整行，与聊天区同宽
-        return row, label
-
-    def _make_reasoning_bubble(self, reasoning: str, usable: int, plain: bool = False) -> QWidget:
-        """思考过程独立气泡：浅底 + 虚线边框，与正文气泡视觉区分"""
-        bubble = QWidget()
-        bubble.setObjectName("bubbleReasoning")
-        bubble.setMaximumWidth(usable)
-        bl = QVBoxLayout(bubble)
-        # QWidget 容器的 QSS padding 不影响子控件布局，须用布局边距代替，
-        # 否则「展开」按钮会贴住气泡角落、凸出圆角弧外
-        bl.setContentsMargins(12, 8, 12, 8)
-        bl.setSpacing(0)
-        bl.addWidget(self._make_reasoning_block(reasoning, plain))
-        return bubble
-
-    def _make_reasoning_block(self, reasoning: str, plain: bool = False) -> QWidget:
-        """思考过程块：标题 + 展开/收起按钮 + 默认 6 行高的可滚动内容区"""
-        block = QWidget()
-        block.setObjectName("reasoningBlock")
-        vl = QVBoxLayout(block)
-        vl.setContentsMargins(0, 0, 0, 6)
-        vl.setSpacing(4)
-
-        header = QHBoxLayout()
-        header.setSpacing(6)
-        title = QLabel("💭 思考过程")
-        title.setObjectName("reasoningTitle")
-        header.addWidget(title)
-        header.addStretch()
-        toggle = QPushButton("展开")
-        toggle.setObjectName("reasoningToggleBtn")
-        toggle.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        toggle.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        header.addWidget(toggle)
-        vl.addLayout(header)
-
-        scroll = QScrollArea()
-        scroll.setObjectName("reasoningScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        rlabel = QLabel()
-        rlabel.setObjectName("reasoningContent")
-        if plain:
-            # 流式中用纯文本格式：每次 setText 免富文本全量解析，
-            # 长思考高频刷新下开销远小于富文本（结束后重建才按富文本渲染）
-            rlabel.setTextFormat(Qt.TextFormat.PlainText)
-            rlabel.setText(reasoning)
-        else:
-            rlabel.setTextFormat(Qt.TextFormat.RichText)
-            rlabel.setText(_format_content(reasoning))
-        rlabel.setWordWrap(True)
-        rlabel.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        # 以与 QSS（#reasoningContent）一致的字号度量行高，
-        # 否则按默认字体度量会让折叠高度不足实际的 6 行
-        _fs = max(int(self._config.get('font.size', 15)) - 1, 12)
-        _f = rlabel.font()
-        _f.setPixelSize(_fs)
-        rlabel.setFont(_f)
-        scroll.setWidget(rlabel)
-        vl.addWidget(scroll)
-
-        # 折叠高度 = 6 行文字
-        collapsed_h = rlabel.fontMetrics().lineSpacing() * 6 + 6
-        scroll.setFixedHeight(collapsed_h)
-
-        def _on_toggle():
-            if toggle.text() == "展开":
-                scroll.setMinimumHeight(0)
-                scroll.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX：完全展开
-                toggle.setText("收起")
-            else:
-                scroll.setFixedHeight(collapsed_h)
-                toggle.setText("展开")
-
-        toggle.clicked.connect(_on_toggle)
-        return block
-
-    def _scroll_to_bottom(self):
-        # 滚动到底。不可 adjustSize：widgetResizable 下容器高度由滚动区管理，
-        # 手动改高会与布局互相拉扯，流式中每帧震荡造成文字抖动；
-        # 布局滞后一帧的范围变化由 rangeChanged 同帧补偿。
-        # 先 activate 使布局定稿：富文本气泡高度需一轮布局才算出，
-        # 未定稿时 maximum() 仍为旧值（重建后为 0），setValue 不生效
-        self._message_container.layout().activate()
-        bar = self._message_scroll.verticalScrollBar()
+        self._message_view.setHtml(''.join(parts))
+        # 滚动到底部
+        bar = self._message_view.verticalScrollBar()
         bar.setValue(bar.maximum())
 
-    def _finalize_stream_row(self):
-        """把流式气泡原地替换为完成气泡，其余消息不动。
-        全量重建会瞬间清空布局（滚动范围归零、value 回 0），
-        造成视觉上先闪到顶部再跳到底部；原地替换只换最后一行，
-        滚动范围连续无闪动。上方消息不受影响，上滚用户的位置也天然保持。
-        返回是否完成原地替换（False 表示退回了全量重建）"""
-        session = self._store.get_session(self._current_session_id) \
-            if self._current_session_id else None
-        messages = (session or {}).get('messages', [])
-        last = messages[-1] if messages else None
-        old_row = self._stream_row
-        idx = self._message_layout.indexOf(old_row) if old_row is not None else -1
-        if idx < 0 or last is None or last.get('role') != 'assistant':
-            self._render_messages()  # 结构不符时退回全量重建
-            return False
-        vp_w = self._message_scroll.viewport().width()
-        margins = self._message_layout.contentsMargins()
-        usable = max(vp_w - margins.left() - margins.right(), 200)
-        row, _ = self._make_bubble(
-            'assistant', last.get('content', ''),
-            reasoning=last.get('reasoning') or '', usable=usable)
-        self._message_layout.insertWidget(idx, row)
-        self._message_layout.removeWidget(old_row)
-        old_row.deleteLater()
-        self._stream_row = None
-        self._stream_label = None
-        self._stream_reason_label = None
-        self._stream_reason_scroll = None
-        self._last_render_width = usable
-        return True
-
-    def _on_main_range_changed(self, _min: int, maxv: int):
-        """消息区内容长高：绘制前同帧滚到底，补偿 setText 后布局未完成的一帧滞后"""
-        bar = self._message_scroll.verticalScrollBar()
-        if self.sender() is not bar:
-            return
-        if not self._main_follow:
-            return
-        if not (self._worker and self._worker.isRunning()):
-            return
-        bar.setValue(maxv)
-
-    def _on_main_scroll_moved(self, value: int):
-        """用户在主消息区上滚时暂停自动跟随，滚回底部附近恢复"""
-        bar = self._message_scroll.verticalScrollBar()
-        if self.sender() is not bar:
-            return
-        self._main_follow = (bar.maximum() - value) <= 40
-
-    def _near_bottom(self) -> bool:
-        return self._main_follow
-
-    def _scroll_last_reasoning_to_bottom(self):
-        """回复结束后把最后一个思考框滚到底（与流式跟随位置一致，
-        否则重建后回到第一行，视觉上像思考完突然跳上去）"""
-        rs = None
-        for i in range(self._message_layout.count() - 1, -1, -1):
-            item = self._message_layout.itemAt(i)
-            w = item.widget() if item else None
-            if w is not None:
-                rs = w.findChild(QScrollArea, "reasoningScroll")
-                if rs is not None:
-                    break
-        if rs is None:
-            return
-        inner = rs.widget()
-        if inner is not None:
-            w = rs.viewport().width()
-            if w > 0 and inner.width() != w:
-                inner.resize(w, inner.height())
-            inner.adjustSize()
-        bar = rs.verticalScrollBar()
-        bar.setValue(bar.maximum())
+    def _render_assistant_block(self, content: str, reasoning: str = "", streaming: bool = False) -> str:
+        """助手消息 HTML：思考框（有实际思考文字才显示，默认折叠）+ 正文"""
+        parts = []
+        reasoning = (reasoning or '').strip()
+        if reasoning:
+            open_attr = ' open' if streaming else ''
+            parts.append(
+                f'<details class="reasoning"{open_attr}><summary>💭 思考过程</summary>'
+                f'<div class="reasoning-body">{_format_content(reasoning)}</div></details>'
+            )
+        parts.append(f'<div class="assistant">{_format_content(content)}</div>')
+        return ''.join(parts)
 
     def send_message(self, text: Optional[str] = None):
         if self._worker and self._worker.isRunning():
@@ -1925,9 +1480,8 @@ class ChatWindow(QWidget):
 
         sid = self._current_session_id
         self._store.append_message(sid, 'user', content)
-        # assistant 占位消息：完成后 update_last_assistant_message 覆盖这最后一条。
-        # 无占位时多轮会话末尾是 user，覆盖会追加到末尾或误改更早的 assistant，
-        # 且完成渲染的结构校验失败退回全量重建，滚动位置失控
+        # 同步追加空 assistant 占位：完成时原地覆盖，避免多轮会话下
+        # 末尾是 user 导致落库错位 / 渲染兜底重建引起滚动跳顶
         self._store.append_message(sid, 'assistant', '')
         self._input_edit.clear()
         self._reload_session_list()
@@ -1957,179 +1511,161 @@ class ChatWindow(QWidget):
         manager = get_mcp_manager()
         if self._config.get('mcp.enabled', True) and manager.available:
             tools = manager.list_tools()
+            # 停用的工具不注入给模型（在 MCP 菜单中按工具勾选管理）
+            _disabled_tools = set(self._config.get('mcp.disabled_tools', []) or [])
+            if _disabled_tools:
+                tools = [t for t in tools
+                         if f"{t.server}/{t.name}" not in _disabled_tools]
 
-        # 独立 API 配置：勾选"与翻译共用"时走 translator 段，否则走 chat 段
-        if self._config.get('chat.use_shared_api', True):
-            client_kwargs = {
-                'api_key': self._config.get('translator.api_key', ''),
-                'base_url': self._config.get('translator.base_url', ''),
-                'timeout': self._config.get('translator.timeout', 60),
-            }
-            model = self._config.get('translator.model', '')
-        else:
-            client_kwargs = {
-                'api_key': self._config.get('chat.api_key', ''),
-                'base_url': self._config.get('chat.base_url', ''),
-                'timeout': self._config.get('chat.timeout', 60),
-            }
-            model = self._config.get('chat.model', '')
+        # 技能本地执行工具（存在技能时才注册；脚本执行需用户确认）
+        skill_tools = None
+        try:
+            if get_skill_manager().load_skills():
+                skill_tools = get_skill_local_tools(confirm=self._skill_confirm,
+                                                    trusted=self._trusted_skills)
+        except Exception as e:
+            log_error(f"加载技能本地工具失败: {e}")
+
+        client_kwargs = {
+            'api_key': self._config.get('translator.api_key', ''),
+            'base_url': self._config.get('translator.base_url', ''),
+            'timeout': self._config.get('translator.timeout', 60),
+        }
+        model = self._config.get('translator.model', '')
 
         self._stream_buffer = ""
         self._reasoning_buffer = ""
-        self._reason_follow = True
-        self._main_follow = True
         self._send_btn.setEnabled(False)
-        self._render_messages(streaming_extra="…", force_scroll=True)
+        self._render_messages(streaming_extra="…")
 
         self._worker = ChatWorker(sid, system_prompt, history, summary, summary_count,
-                                  model, client_kwargs, context_limit, tools)
+                                  model, client_kwargs, context_limit, tools, skill_tools)
         self._worker.chunk.connect(self._on_chunk)
-        self._worker.reasoning.connect(self._on_reasoning)
+        self._worker.reasoning_chunk.connect(self._on_reasoning_chunk)
         self._worker.tool_info.connect(self._on_tool_info)
         self._worker.finished_ok.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.context_compressed.connect(self._on_context_compressed)
+        self._worker.confirm_request.connect(self._on_confirm_request)
         self._worker.start()
 
     def _on_context_compressed(self, session_id: str, summary: str, covered: int):
         """后台线程完成历史压缩后，持久滚动摘要与覆盖条数"""
         self._store.set_session_summary(session_id, summary, covered)
 
-    def _update_stream_display(self, body_extra: str = ""):
-        """按当前缓冲（思考 + 正文）刷新流式气泡"""
-        body = self._stream_buffer + body_extra
-        need_reasoning = bool(self._reasoning_buffer.strip())
-        has_reason_ui = self._stream_reason_label is not None
-        if self._stream_label is not None and (not need_reasoning or has_reason_ui):
-            # 只更新流式气泡，不重建全部消息（减少重绘与滚动跳动）
-            stick = self._near_bottom()
-            body_html = (_format_content(body) if body else "") + "<br>▍"
-            if self._stream_label.text() != body_html:
-                self._stream_label.setText(body_html)
-            if need_reasoning:
-                # 标签为纯文本格式：直接写原始缓冲，免转义与解析
-                self._stream_reason_label.setText(self._reasoning_buffer)
-                rs = self._stream_reason_scroll
-                if rs.minimumHeight() == rs.maximumHeight() and self._reason_follow:
-                    # 折叠且用户未上滚：跟随到最新
-                    # （范围滞后一帧由 rangeChanged 同帧补偿，见 _on_reason_range_changed）
-                    rbar = rs.verticalScrollBar()
-                    rbar.setValue(rbar.maximum())
-            if stick:
-                QTimer.singleShot(0, self._scroll_to_bottom)
-        else:
-            # 思考首次到达等结构变化场景：重建气泡
-            self._render_messages(
-                streaming_extra=body,
-                streaming_reasoning=self._reasoning_buffer,
-                reasoning_plain=True)
+    # ---------------- 技能脚本执行确认 ----------------
+    def _skill_confirm(self, skill_name: str, desc: str) -> bool:
+        """技能本地工具在后台线程调用的确认回调：经 worker 阻塞等待主窗口弹窗结果"""
+        if skill_name in self._trusted_skills:
+            return True
+        worker = self._worker
+        if worker is None:
+            return False
+        return worker.ask_user_confirm(skill_name, desc)
 
-    def _on_reason_range_changed(self, _min: int, maxv: int):
-        """思考框内容长高导致滚动范围变化：绘制前同帧滚到底，避免末行闪烁"""
-        rs = self._stream_reason_scroll
-        if rs is None or self.sender() is not rs.verticalScrollBar():
-            return  # 上一代已重建的旧滚动条
-        if not getattr(self, '_reason_follow', True):
+    def _on_confirm_request(self, skill_name: str, desc: str):
+        """技能脚本执行确认弹窗（主线程）；勾选信任后本会话不再询问"""
+        worker = self._worker
+        if worker is None:
             return
-        if not (self._worker and self._worker.isRunning()):
-            return
-        if rs.minimumHeight() != rs.maximumHeight():
-            return  # 展开态不自动跟随
-        rs.verticalScrollBar().setValue(maxv)
-
-    def _on_reason_scroll_moved(self, value: int):
-        """用户手动滚离底部时暂停跟随，滚回底部恢复"""
-        rs = self._stream_reason_scroll
-        if rs is None or self.sender() is not rs.verticalScrollBar():
-            return
-        self._reason_follow = (rs.verticalScrollBar().maximum() - value) < 40
-
-    def _schedule_flush(self):
-        """合并高频 chunk：计时器未激活时安排一次刷新，期间的 chunk 一并呈现"""
-        if not self._flush_timer.isActive():
-            self._flush_timer.start()
-
-    def _on_reasoning(self, chunk: str):
-        self._reasoning_buffer += chunk
-        self._schedule_flush()
+        log_info(f"技能脚本确认弹窗: {skill_name}")
+        box = QMessageBox(self)
+        box.setWindowTitle("技能脚本执行确认")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(f"AI 请求执行技能目录中的脚本：\n\n{desc}")
+        box.setStandardButtons(QMessageBox.StandardButton.Ok
+                               | QMessageBox.StandardButton.Cancel)
+        box.button(QMessageBox.StandardButton.Ok).setText("允许执行")
+        box.button(QMessageBox.StandardButton.Cancel).setText("拒绝")
+        cb = QCheckBox("本会话内此技能不再询问")
+        box.setCheckBox(cb)
+        # 模态弹窗必须抢到前台：QMessageBox 是应用级模态，一旦弹窗
+        # 落在后面/看不见，整个应用就被模态锁住——其它窗口都能
+        # 激活置顶，但所有按钮都点不了。先 show 再做 Win32 前台抢占，
+        # 最后进 exec 模态循环
+        box.show()
+        box.raise_()
+        box.activateWindow()
+        if sys.platform == "win32":
+            import ctypes
+            user32 = ctypes.windll.user32
+            # 必须声明 argtypes：否则 64 位句柄按 32 位截断，调用静默失效
+            user32.SetWindowPos.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+            user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+            hwnd = int(box.winId())
+            SWP_NOMOVE, SWP_NOSIZE = 0x0002, 0x0001
+            # 临时置顶后立即释放：落在非置顶带最顶端，压过所有窗口
+            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE)
+            user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE)
+            user32.SetForegroundWindow(hwnd)
+        log_info(f"[Confirm] 确认弹窗已显示，进入模态循环: {skill_name}")
+        _t0 = time.time()
+        ok = box.exec() == QMessageBox.StandardButton.Ok
+        log_info(f"[Confirm] 确认弹窗关闭: {skill_name} ok={ok} "
+                 f"勾选信任={cb.isChecked()} 持续={time.time() - _t0:.1f}s")
+        if ok and cb.isChecked():
+            self._trusted_skills.add(skill_name)
+        worker.deliver_confirm(ok)
 
     def _on_chunk(self, chunk: str):
         self._stream_buffer += chunk
-        self._schedule_flush()
+        self._render_messages(streaming_extra=self._stream_buffer)
+
+    def _on_reasoning_chunk(self, chunk: str):
+        self._reasoning_buffer += chunk
+        # 思考进行中正文未到：思考框先行展示（正文区显示等待光标）
+        self._render_messages(streaming_extra=self._stream_buffer or "…")
 
     def _on_tool_info(self, info: str):
         log_info(info)
-        extra = f"\n\n*{info}*" if self._stream_buffer else f"*{info}*"
-        self._update_stream_display(body_extra=extra)
+        self._render_messages(streaming_extra=(self._stream_buffer + f"\n\n*{info}*" if self._stream_buffer else f"*{info}*"))
 
-    def _on_finished(self, full_text: str):
-        self._flush_timer.stop()
-        _bar = self._message_scroll.verticalScrollBar()
-        was_at_bottom = self._main_follow or _bar.value() >= _bar.maximum() - 30
-        had_reasoning = bool(self._reasoning_buffer.strip())
+    def _on_finished(self, full_text: str, reasoning: str = ""):
         if self._current_session_id and full_text:
-            # 纯空白思考内容视为无思考（部分非思考模型会回传空白 reasoning_content）
+            # 覆盖发送时追加的空 assistant 占位；思考内容纯空白则不落库
+            reasoning = (reasoning or '').strip()
             self._store.update_last_assistant_message(
-                self._current_session_id, full_text,
-                reasoning=self._reasoning_buffer if had_reasoning else '')
+                self._current_session_id, full_text, reasoning)
+        elif self._current_session_id:
+            # 无正文返回：清理占位，不残留空消息
+            self._store.remove_trailing_empty_assistant(self._current_session_id)
         self._stream_buffer = ""
         self._reasoning_buffer = ""
         self._send_btn.setEnabled(True)
         self._reload_session_list()
-        # 原地把流式行换成完成气泡（不全量重建）：重建会瞬间把滚动范围
-        # 归零、value 回 0，视觉上先闪到顶部再跳回底部
-        swapped = self._finalize_stream_row()
-        if was_at_bottom:
-            if swapped:
-                self._scroll_to_bottom()
-                # 完成气泡可能比流式气泡更高，滚动范围在替换后异步增长，
-                # 落定后再补滚一次保持贴底
-                QTimer.singleShot(120, self._scroll_to_bottom)
-            else:
-                # 全量重建后滚动范围需重新落定，同步滚时机过早，延迟补滚
-                QTimer.singleShot(0, self._scroll_to_bottom)
-                QTimer.singleShot(120, self._scroll_to_bottom)
-        if had_reasoning:
-            # 保持与流式跟随一致的阅读位置：完成后的思考框不跳回第一行
-            QTimer.singleShot(0, self._scroll_last_reasoning_to_bottom)
-            QTimer.singleShot(120, self._scroll_last_reasoning_to_bottom)
+        self._render_messages()
+        # 富文本布局落定后补滚一次，确保严格贴底
+        QTimer.singleShot(120, self._scroll_to_bottom)
 
     def _on_failed(self, error: str):
-        self._flush_timer.stop()
+        if self._current_session_id:
+            # 请求失败：清理空 assistant 占位
+            self._store.remove_trailing_empty_assistant(self._current_session_id)
         self._stream_buffer = ""
         self._reasoning_buffer = ""
         self._send_btn.setEnabled(True)
-        if self._current_session_id:
-            # 清理本轮的空 assistant 占位，失败不残留空消息
-            self._store.remove_trailing_empty_assistant(self._current_session_id)
         self._render_messages(streaming_extra=f"[请求失败] {error}")
 
+    def _scroll_to_bottom(self):
+        bar = self._message_view.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
     def _cancel_worker(self):
-        worker = self._worker
-        self._worker = None
-        self._flush_timer.stop()
-        if worker and worker.isRunning():
-            worker.cancel()
-            # 断开 UI 信号：已取消的输出不再刷新界面（会话可能已切走）
-            for sig, slot in ((worker.chunk, self._on_chunk),
-                              (worker.reasoning, self._on_reasoning),
-                              (worker.tool_info, self._on_tool_info),
-                              (worker.finished_ok, self._on_finished),
-                              (worker.failed, self._on_failed),
-                              (worker.context_compressed,
-                               self._on_context_compressed)):
-                try:
-                    sig.disconnect(slot)
-                except TypeError:
-                    pass
-            if not worker.wait(2000):
-                # 网络读取无法立即中断：保持引用直到线程自然结束，
-                # 否则 QThread 在运行中被回收会直接 abort 进程
-                self._zombie_workers.append(worker)
-                worker.finished.connect(
-                    lambda: self._zombie_workers.remove(worker)
-                    if worker in self._zombie_workers else None)
-        self._send_btn.setEnabled(True)
+        if self._worker and self._worker.isRunning():
+            self._worker.cancel()
+            self._worker.wait(2000)
+            self._worker = None
+            self._send_btn.setEnabled(True)
+            # 取消请求：清理空 assistant 占位与流式缓冲
+            if self._current_session_id:
+                self._store.remove_trailing_empty_assistant(self._current_session_id)
+            self._stream_buffer = ""
+            self._reasoning_buffer = ""
+            self._render_messages()
 
 
 # 全局实例

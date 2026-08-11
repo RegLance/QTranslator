@@ -481,10 +481,16 @@ class SettingsDialog(QDialog):
         self._theme = get_theme()
 
         # 设置无边框窗口属性
+        # 不常驻置顶：「始终置顶」设置只控制翻译窗口
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.FramelessWindowHint
         )
+        # 用时置顶、切走降级：「始终置顶」设置只控制翻译窗口
+        try:
+            from .utils.window_front import install_activation_topmost
+        except ImportError:
+            from src.utils.window_front import install_activation_topmost
+        install_activation_topmost(self)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(480, 620)
         self.resize(500, 680)
@@ -2617,8 +2623,12 @@ class SettingsDialog(QDialog):
             self._center_window()
 
         self.show()
-        self.raise_()
-        self.activateWindow()
+        # 唤醒时刻短暂置前一次
+        try:
+            from .utils.window_front import bring_to_front_once
+        except ImportError:
+            from src.utils.window_front import bring_to_front_once
+        bring_to_front_once(self)
 
     def closeEvent(self, event):
         """隐藏而非销毁，保持单例可用"""

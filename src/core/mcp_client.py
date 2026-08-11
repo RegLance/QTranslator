@@ -26,7 +26,7 @@ import threading
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 try:
     from ..config import get_config
@@ -110,7 +110,7 @@ class _ServerConnection:
             log_info(f"MCP 服务器已连接: {self.name}（{len(self.tools)} 个工具）")
         except Exception as e:
             self.error = str(e)
-            log_error(f"MCP 服务器连接失败 {self.name}: {e}")
+            log_error(f"MCP 服务器连接失败 {self.name}: {type(e).__name__}: {e}")
             await self.close()
             raise
 
@@ -150,6 +150,10 @@ class MCPClientManager:
         self._connections: Dict[str, _ServerConnection] = {}
         self._lock = threading.RLock()
         self._started = False
+        # 连接状态事件监听器（回调在 MCP 后台线程触发，UI 需自行切回主线程）；
+        # 事件：reconnecting / connecting:<名> / ok:<名>(N) / failed:<名>:<原因> / done:OK数,总数
+        self._status_listeners: List[Callable[[str], None]] = []
+        self._reconnecting = False
         self._ensure_config_file()
 
     # ------------------------------------------------------------------
@@ -185,6 +189,23 @@ class MCPClientManager:
     def available(self) -> bool:
         return _MCP_AVAILABLE
 
+    @property
+    def reconnecting(self) -> bool:
+        """是否正在连接/重连（供 UI 展示「连接中」状态）"""
+        return self._reconnecting
+
+    def add_status_listener(self, fn: Callable[[str], None]):
+        """注册连接状态事件监听；回调在 MCP 后台线程触发，Qt UI 需经信号转发到主线程"""
+        self._status_listeners.append(fn)
+
+    def _notify_status(self, event: str):
+        log_info(f"MCP 状态: {event}")
+        for fn in list(self._status_listeners):
+            try:
+                fn(event)
+            except Exception:
+                pass
+
     def start(self):
         """启动后台 asyncio 线程并连接所有已配置的 MCP 服务器"""
         if not _MCP_AVAILABLE:
@@ -215,7 +236,16 @@ class MCPClientManager:
         ready.wait(5)
 
         # 连接所有服务器（在后台循环中执行，不阻塞 UI 线程）
-        self._submit(self._connect_all(), timeout=None)
+        self._reconnecting = True
+        self._notify_status("reconnecting")
+
+        async def _initial_connect():
+            try:
+                await self._connect_all()
+            finally:
+                self._finish_reconnect()
+
+        self._submit(_initial_connect(), timeout=None)
         log_info("MCP 客户端管理器已启动")
 
     def _submit(self, coro, timeout: Optional[float] = 60.0):
@@ -247,6 +277,7 @@ class MCPClientManager:
                 args = ["/c", command] + args
                 command = "cmd"
             params = StdioServerParameters(command=command, args=args, env=env)
+            self._notify_status(f"connecting:{name}")
             conn = _ServerConnection(name, params)
             await conn.connect()
             with self._lock:
@@ -254,23 +285,38 @@ class MCPClientManager:
                 if old:
                     await old.close()
                 self._connections[name] = conn
+            self._notify_status(f"ok:{name}({len(conn.tools)})")
         except Exception as e:
-            log_error(f"MCP 服务器 {name} 启动失败: {e}")
+            log_error(f"MCP 服务器 {name} 启动失败: {type(e).__name__}: {e}")
             with self._lock:
                 failed = _ServerConnection(name, StdioServerParameters(command="", args=[]))
                 failed.error = str(e)
                 self._connections[name] = failed
+            self._notify_status(f"failed:{name}:{e}")
 
     def reconnect(self):
         """重新读取配置并连接（供设置界面/聊天窗口刷新用）"""
         if not self._started:
             self.start()
             return
+        self._reconnecting = True
+        self._notify_status("reconnecting")
         self._submit(self._reconnect_async(), timeout=None)
 
     async def _reconnect_async(self):
-        await self._close_all()
-        await self._connect_all()
+        try:
+            await self._close_all()
+            await self._connect_all()
+        finally:
+            self._finish_reconnect()
+
+    def _finish_reconnect(self):
+        """连接流程收尾：复位状态并广播最终结果（done:成功数,总数）"""
+        self._reconnecting = False
+        with self._lock:
+            total = len(self._connections)
+            ok = sum(1 for c in self._connections.values() if c.session)
+        self._notify_status(f"done:{ok},{total}")
 
     async def _close_all(self):
         with self._lock:

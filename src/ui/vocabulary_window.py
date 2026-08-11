@@ -123,9 +123,16 @@ class VocabularyWindow(QWidget):
         self._last_trans_size = (0, 0)
         self._last_bb_output_size = (0, 0)
 
+        # 不常驻置顶：「始终置顶」设置只控制翻译窗口
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.FramelessWindowHint
         )
+        # 用时置顶、切走降级：「始终置顶」设置只控制翻译窗口
+        try:
+            from ..utils.window_front import install_activation_topmost
+        except ImportError:
+            from src.utils.window_front import install_activation_topmost
+        install_activation_topmost(self)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(560, 520)
         self.resize(720, 640)
@@ -748,8 +755,12 @@ class VocabularyWindow(QWidget):
                 g.y() + (g.height() - self.height()) // 2,
             )
         self.show()
-        self.raise_()
-        self.activateWindow()
+        # 唤醒时刻短暂置前一次
+        try:
+            from ..utils.window_front import bring_to_front_once
+        except ImportError:
+            from src.utils.window_front import bring_to_front_once
+        bring_to_front_once(self)
         QTimer.singleShot(0, self._refresh_overlay_layouts)
 
     def update_theme(self) -> None:

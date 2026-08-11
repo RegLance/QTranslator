@@ -108,6 +108,7 @@ a = Analysis(
         "src.core.writing",
         "src.core.chat_store",      # AI 对话会话本地存储
         "src.core.skills",          # Skills（SKILL.md）加载器
+        "src.core.skill_tools",     # 技能本地执行工具（读文件/跑脚本）
         "src.core.custom_actions",  # 自定义工具栏功能扩展
         "src.core.mcp_client",      # MCP 客户端管理器
         "src.core.__init__",
@@ -138,6 +139,7 @@ a = Analysis(
         "src.utils.selection_blacklist",
         "src.utils.update_checker",
         "src.utils.vocabulary",
+        "src.utils.window_front",
         "src.utils.__init__",
     ] + _mcp_hiddenimports,
     hookspath=[],

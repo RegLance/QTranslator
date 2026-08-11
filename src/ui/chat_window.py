@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QToolButton, QInputDialog, QSplitter, QSplitterHandle, QStyle,
     QStyledItemDelegate, QStyleOptionViewItem, QMessageBox, QCheckBox,
     QScrollBar, QScrollArea, QAbstractButton, QAbstractSlider,
+    QAbstractScrollArea,
 )
 
 try:
@@ -663,6 +664,8 @@ class ChatWindow(QWidget):
         self._relayout_timer.setSingleShot(True)
         self._relayout_timer.setInterval(200)
         self._relayout_timer.timeout.connect(self._relayout_on_resize)
+        # 会话条目标题当前截断宽度（_reload_session_list 更新，resize 时对比）
+        self._session_list_title_w = 0
 
         # 流式刷新节流：chunk 先入缓冲，合并后最多约 25 次/秒刷新气泡，
         # 避免长回复时每个 chunk 都全量重排富文本导致卡死
@@ -715,10 +718,11 @@ class ChatWindow(QWidget):
         title_layout.addWidget(self._title_label)
         title_layout.addStretch()
 
-        # 最小化 / 最大化按钮（与翻译窗口同款）
+        # 最小化 / 最大化 / 关闭按钮（与翻译窗口完全一致：22x22 圆形 hover）
         self._minimize_btn = QPushButton("─")
         self._minimize_btn.setObjectName("chatMinimizeBtn")
-        self._minimize_btn.setFixedSize(26, 26)
+        self._minimize_btn.setFixedSize(22, 22)
+        self._minimize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._minimize_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._minimize_btn.setToolTip("最小化")
         self._minimize_btn.clicked.connect(self._on_minimize_clicked)
@@ -726,7 +730,8 @@ class ChatWindow(QWidget):
 
         self._maximize_btn = QPushButton("□")
         self._maximize_btn.setObjectName("chatMaximizeBtn")
-        self._maximize_btn.setFixedSize(26, 26)
+        self._maximize_btn.setFixedSize(22, 22)
+        self._maximize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._maximize_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._maximize_btn.setToolTip("最大化 / 还原")
         self._maximize_btn.clicked.connect(self._toggle_maximize)
@@ -734,7 +739,9 @@ class ChatWindow(QWidget):
 
         self._close_btn = QPushButton("×")
         self._close_btn.setObjectName("chatCloseBtn")
-        self._close_btn.setFixedSize(26, 26)
+        self._close_btn.setFixedSize(22, 22)
+        self._close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._close_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._close_btn.clicked.connect(self._on_close_clicked)
         title_layout.addWidget(self._close_btn)
         root.addWidget(self._title_bar)
@@ -899,18 +906,29 @@ class ChatWindow(QWidget):
         self._title_bar.setStyleSheet(f"""
             #chatTitleBar {{ background-color: {bg2}; border-top-left-radius: 10px; border-top-right-radius: 10px; }}
             #chatTitleLabel {{ color: {text1}; font-size: 13px; font-weight: 600; background: transparent; }}
-            #chatMinimizeBtn, #chatMaximizeBtn {{
-                background: transparent; color: {text2}; border: none;
-                font-size: 14px; border-radius: 5px;
+            #chatMinimizeBtn {{
+                background-color: transparent; color: {t['text_muted']}; border: none;
+                border-radius: 11px; font-size: 10px; font-weight: bold;
             }}
-            #chatMinimizeBtn:hover, #chatMaximizeBtn:hover {{
-                background-color: {accent}; color: #ffffff;
+            #chatMinimizeBtn:hover {{
+                background-color: {t['button_hover']}; color: {text1};
+            }}
+            #chatMaximizeBtn {{
+                background-color: transparent; color: {t['text_muted']}; border: none;
+                border-radius: 11px; font-size: 12px; font-weight: bold;
+                padding-bottom: 2px;
+            }}
+            #chatMaximizeBtn:hover {{
+                background-color: {t['button_hover']}; color: {text1};
             }}
             #chatCloseBtn {{
-                background: transparent; color: {text2}; border: none;
-                font-size: 16px; border-radius: 5px;
+                background-color: transparent; color: {t['text_muted']}; border: none;
+                border-radius: 11px; font-size: 14px; font-weight: bold;
+                padding-bottom: 1px;
             }}
-            #chatCloseBtn:hover {{ background-color: #e81123; color: #ffffff; }}
+            #chatCloseBtn:hover {{
+                background-color: {t['close_hover']}; color: #ffffff;
+            }}
         """)
         self._side_panel.setStyleSheet(f"""
             #chatSidePanel {{
@@ -1263,6 +1281,12 @@ class ChatWindow(QWidget):
 
     def _relayout_on_resize(self):
         """窗口尺寸稳定后按新聊天区宽度重排气泡"""
+        # 窗口 resize 会压缩/拉伸侧栏但不触发 splitterMoved，
+        # 截断宽度需按新的列表宽度重算，否则窄窗下条目右侧被截
+        sl_w = self._session_list.viewport().width()
+        new_title_w = max(sl_w - SessionItemDelegate.DELETE_ZONE_WIDTH - 16, 48)
+        if sl_w > 50 and new_title_w != self._session_list_title_w:
+            self._reload_session_list()
         vp_w = self._message_scroll.viewport().width()
         if vp_w < 50:
             return  # 最小化等退化尺寸不处理
@@ -1376,9 +1400,13 @@ class ChatWindow(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        was_moving = self._is_dragging or bool(self._resize_edge)
         self._is_dragging = False
         self._resize_edge = 0
         self._resize_start_geo = None
+        if was_moving and (self._stream_buffer or self._reasoning_buffer):
+            # 拖动期间暂停的流式刷新，松手后一次性补上
+            self._schedule_flush()
         # 必须与 grabMouse 配对：Qt 显式抓取不会在松手时自动解除，
         # 漏掉 releaseMouse 会让本窗口永久窃取全应用鼠标输入（所有按钮点不了）
         self.releaseMouse()
@@ -1421,7 +1449,8 @@ class ChatWindow(QWidget):
                 return True
 
         # 悬停同步缩放光标；离开边缘立即还原（行为同翻译窗口）
-        if is_hover_target and event.type() == event.Type.MouseMove and not self._resize_edge:
+        if is_hover_target and event.type() == event.Type.MouseMove \
+                and not self._resize_edge and not self._is_dragging:
             pos = self.mapFromGlobal(obj.mapToGlobal(event.position().toPoint()))
             edge = self._edge_at(pos)
             if edge and not self._is_maximized:
@@ -1458,6 +1487,7 @@ class ChatWindow(QWidget):
         # 标题按侧栏当前可视宽度省略（预留垃圾桶按钮区与条目内边距），避免条目超宽截断圆角
         list_w = max(self._session_list.viewport().width(), 100)
         title_w = max(list_w - SessionItemDelegate.DELETE_ZONE_WIDTH - 16, 48)
+        self._session_list_title_w = title_w
         fm = self._session_list.fontMetrics()
         self._session_list.clear()
         for s in self._store.list_sessions():
@@ -1541,6 +1571,10 @@ class ChatWindow(QWidget):
         if self._current_session_id:
             self._cancel_worker()
             self._store.clear_messages(self._current_session_id)
+            # 上下文从零开始：会话名一并重置，滚动摘要同步清空避免残留旧语境
+            self._store.rename_session(self._current_session_id, "新对话")
+            self._store.set_session_summary(self._current_session_id, "", 0)
+            self._reload_session_list()
             self._render_messages()
 
     # ------------------------------------------------------------------
@@ -1554,7 +1588,7 @@ class ChatWindow(QWidget):
         # 技能执行总开关（与 MCP 菜单的"启用 MCP 工具"对应）
         enable_act = self._skill_menu.addAction("启用技能执行")
         enable_act.setCheckable(True)
-        enable_act.setChecked(self._config.get('skills.enabled', True))
+        enable_act.setChecked(self._config.get('skills.enabled', False))
         enable_act.toggled.connect(self._on_toggle_skills_enabled)
         self._skill_menu.addSeparator()
 
@@ -1603,7 +1637,7 @@ class ChatWindow(QWidget):
 
         enable_act = self._mcp_menu.addAction("启用 MCP 工具")
         enable_act.setCheckable(True)
-        enable_act.setChecked(self._config.get('mcp.enabled', True))
+        enable_act.setChecked(self._config.get('mcp.enabled', False))
         enable_act.toggled.connect(self._on_toggle_mcp_enabled)
 
         self._mcp_menu.addSeparator()
@@ -2004,6 +2038,8 @@ class ChatWindow(QWidget):
 
     def _update_stream_display(self, body_extra: str = ""):
         """按当前缓冲（思考 + 正文）刷新流式气泡"""
+        if self._is_dragging or self._resize_edge:
+            return  # 拖动中跳过（singleShot 定时器随之停止），松手后补刷
         body = self._stream_buffer + body_extra
         need_reasoning = bool(self._reasoning_buffer.strip())
         has_reason_ui = self._stream_reason_label is not None
@@ -2032,7 +2068,10 @@ class ChatWindow(QWidget):
                 reasoning_plain=True)
 
     def _schedule_flush(self):
-        """合并高频 chunk：计时器未激活时安排一次刷新，期间的 chunk 一并呈现"""
+        """合并高频chunk：计时器未激活时安排一次刷新，期间的 chunk 一并呈现"""
+        if self._is_dragging or self._resize_edge:
+            return  # 拖动/缩放中暂停 UI 刷新：富文本重排与窗口重绘竞争主线程掉帧；
+            # 缓冲照常累积，mouseReleaseEvent 松手后补刷
         if not self._flush_timer.isActive():
             self._flush_timer.start()
 
@@ -2076,7 +2115,7 @@ class ChatWindow(QWidget):
         # MCP 工具
         tools: List[MCPToolInfo] = []
         manager = get_mcp_manager()
-        if self._config.get('mcp.enabled', True) and manager.available:
+        if self._config.get('mcp.enabled', False) and manager.available:
             tools = manager.list_tools()
             # 停用的工具不注入给模型（在 MCP 菜单中按工具勾选管理）
             _disabled_tools = set(self._config.get('mcp.disabled_tools', []) or [])
@@ -2086,7 +2125,7 @@ class ChatWindow(QWidget):
 
         # 技能本地执行工具（存在技能时才注册；脚本执行需用户确认）
         skill_tools = None
-        if self._config.get('skills.enabled', True):
+        if self._config.get('skills.enabled', False):
             try:
                 if get_skill_manager().load_skills():
                     skill_tools = get_skill_local_tools(confirm=self._skill_confirm,

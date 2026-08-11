@@ -234,6 +234,36 @@ def _hex_to_rgba(hex_color: str, alpha: int) -> str:
 # 最近的消息原文保留，较早的消息被滚动摘要压缩。
 # token 计数优先用 OpenAI 开源的 tiktoken（已安装时），否则退化为 CJK 启发式估算。
 CONTEXT_USAGE_RATIO = 0.7   # 上下文超过约 70% 模型窗口时触发压缩
+
+
+def _split_think_tags(text: str):
+    """把 <think>...</think> 内嵌思考拆成 (思考, 正文)。
+
+    MiniMax 等模型不走 reasoning_content 字段，而是把思考以 <think> 标签
+    形式混在正文里返回——不拆分的话标签会原样显示给用户。
+    支持多段 think；未闭合的 <think> 视为其后全部是思考。
+    无标签时返回 ('', 原文)。"""
+    if not text or '<think>' not in text.lower():
+        return '', text
+    lower = text.lower()
+    parts = []
+    reasons = []
+    pos = 0
+    n = len(text)
+    while pos < n:
+        i = lower.find('<think>', pos)
+        if i < 0:
+            parts.append(text[pos:])
+            break
+        parts.append(text[pos:i])
+        j = lower.find('</think>', i + 7)
+        if j < 0:
+            reasons.append(text[i + 7:])
+            break
+        reasons.append(text[i + 7:j])
+        pos = j + 8
+    return '\n'.join(r.strip() for r in reasons if r.strip()), \
+        ''.join(parts).strip()
 KEEP_RECENT_RATIO = 0.5     # 压缩后最近消息保留约 50% 窗口预算
 MIN_KEEP_RECENT = 4         # 最近至少保留 4 条消息不参与摘要
 SUMMARY_PROMPT = (
@@ -303,6 +333,9 @@ class ChatWorker(QThread):
         self._cancelled = False
         self._messages: List[Dict[str, Any]] = []
         self._reasoning_full = ""  # 思考模型累积的完整思考内容
+        # <think> 标签流式解析状态（思考内嵌正文的模型，如 MiniMax）
+        self._think_state = 'normal'
+        self._think_buf = ""
 
     def cancel(self):
         self._cancelled = True
@@ -432,8 +465,75 @@ class ChatWorker(QThread):
                 self.reasoning_chunk.emit(reasoning)
             if delta.content:
                 full_text += delta.content
-                self.chunk.emit(delta.content)
+                self._feed_content(delta.content)
+        self._feed_content(None)  # 冲刷缓冲：残留的部分标签按正文输出
         self.finished_ok.emit(full_text, self._reasoning_full)
+
+    def _feed_content(self, text):
+        """正文流状态机：把 <think>...</think> 内嵌思考拆到 reasoning 通道。
+
+        标签可能跨 chunk 分裂（如 '<th' + 'ink>'），尾部疑似部分标签先
+        留在缓冲等下一块；text=None 表示流结束，冲刷全部缓冲。"""
+        if text is None:
+            if self._think_buf:
+                self._emit_body(self._think_buf)
+                self._think_buf = ""
+            self._think_state = 'normal'
+            return
+        self._think_buf += text
+        while True:
+            if self._think_state == 'normal':
+                idx = self._think_buf.lower().find('<think>')
+                if idx >= 0:
+                    if idx:
+                        self._emit_body(self._think_buf[:idx])
+                    self._think_buf = self._think_buf[idx + 7:]
+                    self._think_state = 'think'
+                    if not self._reasoning_full:
+                        log_info('[Chat] 检测到内嵌 <think> 标签（思考混在正文中）')
+                    continue
+                hold = self._partial_suffix_len(self._think_buf, '<think>')
+                if hold:
+                    self._emit_body(self._think_buf[:-hold])
+                    self._think_buf = self._think_buf[-hold:]
+                else:
+                    self._emit_body(self._think_buf)
+                    self._think_buf = ""
+                return
+            else:
+                idx = self._think_buf.lower().find('</think>')
+                if idx >= 0:
+                    if idx:
+                        self._emit_think(self._think_buf[:idx])
+                    self._think_buf = self._think_buf[idx + 8:]
+                    self._think_state = 'normal'
+                    continue
+                hold = self._partial_suffix_len(self._think_buf, '</think>')
+                if hold:
+                    self._emit_think(self._think_buf[:-hold])
+                    self._think_buf = self._think_buf[-hold:]
+                else:
+                    self._emit_think(self._think_buf)
+                    self._think_buf = ""
+                return
+
+    @staticmethod
+    def _partial_suffix_len(buf: str, tag: str) -> int:
+        """buf 尾部与 tag 前缀重叠的长度（如 buf 以 '<thi' 结尾对 '<think>' 返回 4）"""
+        low = buf.lower()
+        for k in range(min(len(tag) - 1, len(low)), 0, -1):
+            if low.endswith(tag[:k]):
+                return k
+        return 0
+
+    def _emit_body(self, text: str):
+        if text:
+            self.chunk.emit(text)
+
+    def _emit_think(self, text: str):
+        if text:
+            self._reasoning_full += text
+            self.reasoning_chunk.emit(text)
 
     # ---------------- 带 MCP 工具调用（非流式循环） ----------------
     def _run_with_tools(self, client):
@@ -533,6 +633,19 @@ class ChatWorker(QThread):
 
         if not answer:
             answer = "[模型未返回内容]"
+        # 思考内嵌正文的模型（MiniMax 等）：把 <think> 段拆到思考框；
+        # 已有 reasoning_content 的模型不重复拆
+        if not self._reasoning_full:
+            _think_part, _body_part = _split_think_tags(answer)
+            if _think_part:
+                log_info(f'[Chat] 非流式响应拆出内嵌思考 (len={len(_think_part)})')
+                self._reasoning_full = _think_part
+                for _ri in range(0, len(_think_part), 30):
+                    if self._cancelled:
+                        return
+                    self.reasoning_chunk.emit(_think_part[_ri:_ri + 30])
+                    time.sleep(0.01)
+                answer = _body_part or "[模型未返回正文]"
         # 非流式路径：分块 emit 模拟流式显示（API 已一次性返回，
         # 逐块呈现避免整段瞬间弹出的突兀感）
         for _ri in range(0, len(answer), 20):
@@ -1792,9 +1905,14 @@ class ChatWindow(QWidget):
             content = m.get('content', '')
             if role == 'assistant' and not content and not (m.get('reasoning') or ''):
                 continue  # 流式占位消息（完成时原地填充），不渲染空气泡
+            reasoning = m.get('reasoning') or ''
+            if role == 'assistant' and not reasoning and content \
+                    and '<think>' in content.lower():
+                # 旧消息存储时未拆分内嵌思考标签：渲染时拆到思考框
+                reasoning, content = _split_think_tags(content)
             if role in ('user', 'assistant'):
                 row, _ = self._make_bubble(
-                    role, content, reasoning=m.get('reasoning') or '', usable=usable)
+                    role, content, reasoning=reasoning, usable=usable)
                 self._message_layout.addWidget(row)
 
         if streaming_extra or streaming_reasoning:
@@ -2268,6 +2386,13 @@ class ChatWindow(QWidget):
         _bar = self._message_scroll.verticalScrollBar()
         was_at_bottom = self._main_follow or _bar.value() >= _bar.maximum() - 30
         had_reasoning = bool(self._reasoning_buffer.strip())
+        # 兜底：正文里仍残留 <think> 标签时（未经流式解析的异常路径）拆出
+        _t, _b = _split_think_tags(full_text)
+        if _t:
+            full_text = _b
+            if not had_reasoning:
+                self._reasoning_buffer = _t
+                had_reasoning = True
         log_info(f'[Chat] _on_finished: had_reasoning={had_reasoning}, '
                  f'reasoning_len={len(self._reasoning_buffer)}, '
                  f'full_text_len={len(full_text)}')

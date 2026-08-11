@@ -1042,6 +1042,7 @@ class SettingsDialog(QDialog):
         chat_api_form.addRow(self._chat_timeout_label, self._chat_timeout_spin)
 
         self._chat_api_test_btn = QPushButton("测试连接")
+        self._chat_api_test_btn.setObjectName("chatApiTestBtn")
         self._chat_api_test_btn.setMinimumHeight(32)
         self._chat_api_test_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._chat_api_test_btn.setToolTip("发送一条最小请求验证此 API 是否可用，"
@@ -1600,6 +1601,23 @@ class SettingsDialog(QDialog):
             }}
             QPushButton#blacklistAddBtn:hover {{
                 border-color: {t['accent_color']};
+            }}
+
+            /* AI 对话 API 测试按钮 */
+            QPushButton#chatApiTestBtn {{
+                background-color: {t['input_bg']};
+                border: 1px solid {t['input_border']};
+                border-radius: 6px;
+                color: {t['text_primary']};
+                font-size: 13px;
+                padding: 4px 14px;
+            }}
+            QPushButton#chatApiTestBtn:hover {{
+                border-color: {t['accent_color']};
+            }}
+            QPushButton#chatApiTestBtn:disabled {{
+                color: {t['text_muted']};
+                background-color: {t['input_disabled_bg']};
             }}
 
             /* 复选框 */

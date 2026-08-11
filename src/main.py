@@ -4104,6 +4104,19 @@ def main():
     """主入口。"""
     _startup_timing('main() 入口')
 
+    # Windows 任务栏图标：必须在 QApplication 创建前设 AppUserModelID，
+    # 否则进程任务栏图标用 python.exe 默认图标而非应用图标
+    if sys.platform.startswith('win'):
+        try:
+            import ctypes
+            try:
+                from .config import APP_ID
+            except ImportError:
+                from src.config import APP_ID
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 

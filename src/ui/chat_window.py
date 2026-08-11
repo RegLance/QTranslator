@@ -1943,36 +1943,48 @@ class ChatWindow(QWidget):
         bar.setValue(bar.maximum())
 
     def _finalize_stream_row(self):
-        """把流式气泡原地替换为完成气泡，其余消息不动。
-        全量重建会瞬间清空布局（滚动范围归零、value 回 0），
-        造成视觉上先闪到顶部再跳到底部；原地替换只换最后一行，
-        滚动范围连续无闪动。上方消息不受影响，上滚用户的位置也天然保持。
-        返回是否完成原地替换（False 表示退回了全量重建）"""
+        """流式气泡原地定稿为完成态，不替换、不重建任何行。
+        替换行（insert 新行 + remove 旧行）时，新气泡富文本 QLabel 的
+        初始高度尚未约束计算（heightForWidth 需布局轮次，默认仅几十像素），
+        移除旧行后滚动内容总高瞬间塌陷、滚动值被夹到极小 max，
+        视觉上先闪到顶部再跳回底部。原地定稿只改文本与交互属性，
+        高度随文本微调，滚动范围连续无闪动；上滚用户的位置也天然保持。
+        返回是否完成原地定稿（False 表示退回了全量重建）"""
         session = self._store.get_session(self._current_session_id) \
             if self._current_session_id else None
         messages = (session or {}).get('messages', [])
         last = messages[-1] if messages else None
-        old_row = self._stream_row
-        idx = self._message_layout.indexOf(old_row) if old_row is not None else -1
-        if idx < 0 or last is None or last.get('role') != 'assistant':
+        row = self._stream_row
+        label = self._stream_label
+        idx = self._message_layout.indexOf(row) if row is not None else -1
+        if idx < 0 or label is None or last is None or last.get('role') != 'assistant':
             self._render_messages()  # 结构不符时退回全量重建
             return False
         vp_w = self._message_scroll.viewport().width()
         margins = self._message_layout.contentsMargins()
         usable = max(vp_w - margins.left() - margins.right(), 200)
-        row, _ = self._make_bubble(
-            'assistant', last.get('content', ''),
-            reasoning=last.get('reasoning') or '', usable=usable)
-        self._message_layout.insertWidget(idx, row)
-        self._message_layout.removeWidget(old_row)
-        old_row.deleteLater()
+        # 正文：去掉流式光标、恢复文本可选
+        label.setText(_format_content(last.get('content', '')))
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # 思考框：流式期纯文本（免高频富文本解析）→ 定稿按富文本渲染
+        rlabel = self._stream_reason_scroll.findChild(QLabel, "reasoningContent") \
+            if self._stream_reason_scroll is not None else None
+        if rlabel is not None:
+            stored_reasoning = last.get('reasoning') or ''
+            if stored_reasoning:
+                rlabel.setTextFormat(Qt.TextFormat.RichText)
+                rlabel.setText(_format_content(stored_reasoning))
+            rlabel.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        toggle = row.findChild(QPushButton, "reasoningToggleBtn")
+        if toggle is not None:
+            toggle.setEnabled(True)
+            toggle.setToolTip("")
         self._stream_row = None
         self._stream_label = None
         self._stream_reason_label = None
         self._stream_reason_scroll = None
         self._last_render_width = usable
         return True
-
     def _on_main_range_changed(self, _min: int, maxv: int):
         """消息区内容长高：绘制前同帧滚到底，补偿 setText 后布局未完成的一帧滞后"""
         bar = self._message_scroll.verticalScrollBar()
@@ -2137,12 +2149,24 @@ class ChatWindow(QWidget):
                  f'skill_tools={"有" if skill_tools else "无"}, '
                  f'→ {"非流式" if tools or skill_tools else "流式"}')
 
-        client_kwargs = {
-            'api_key': self._config.get('translator.api_key', ''),
-            'base_url': self._config.get('translator.base_url', ''),
-            'timeout': self._config.get('translator.timeout', 60),
-        }
-        model = self._config.get('translator.model', '')
+        # API 配置：取消"与翻译共用"且独立配置已填写时走对话专用 API
+        # （设置里测试通过的那套）；否则继续用与翻译相同的模型配置
+        if (not self._config.get('chat.use_shared_api', True)) \
+                and self._config.get('chat.base_url', '') \
+                and self._config.get('chat.model', ''):
+            client_kwargs = {
+                'api_key': self._config.get('chat.api_key', ''),
+                'base_url': self._config.get('chat.base_url', ''),
+                'timeout': self._config.get('chat.timeout', 60),
+            }
+            model = self._config.get('chat.model', '')
+        else:
+            client_kwargs = {
+                'api_key': self._config.get('translator.api_key', ''),
+                'base_url': self._config.get('translator.base_url', ''),
+                'timeout': self._config.get('translator.timeout', 60),
+            }
+            model = self._config.get('translator.model', '')
 
         self._stream_buffer = ""
         self._reasoning_buffer = ""
@@ -2264,10 +2288,9 @@ class ChatWindow(QWidget):
         swapped = self._finalize_stream_row()
         if was_at_bottom:
             if swapped:
+                # 原地定稿不换行，高度仅随文本微调：同帧滚到底即可，
+                # 残余一帧的 rangeChanged 由 _on_main_range_changed 补偿
                 self._scroll_to_bottom()
-                # 完成气泡可能比流式气泡更高，滚动范围在替换后异步增长，
-                # 落定后再补滚一次保持贴底
-                QTimer.singleShot(120, self._scroll_to_bottom)
             else:
                 # 全量重建后滚动范围需重新落定，同步滚时机过早，延迟补滚
                 QTimer.singleShot(0, self._scroll_to_bottom)

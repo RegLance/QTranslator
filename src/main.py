@@ -109,6 +109,45 @@ class _CtxProbeEmitter(QObject):
     done = pyqtSignal(int, int, str)  # (序号, tokens, 来源 api/guess)
 
 
+class _ChatApiTestWorker(QThread):
+    """AI 对话独立 API 连通性测试线程：发一条最小请求验证通路，
+    成功后顺带探测模型上下文长度（/models 端点优先，查不到退回内置表）"""
+    ok = pyqtSignal(int)    # 测试通过，参数为探测到的上下文 tokens（0=未探测到）
+    fail = pyqtSignal(str)  # 测试失败，参数为错误信息
+
+    def __init__(self, api_key: str, base_url: str, model: str,
+                 timeout: int, parent=None):
+        super().__init__(parent)
+        self._api_key = api_key
+        self._base_url = base_url
+        self._model = model
+        self._timeout = max(5, int(timeout or 60))
+
+    def run(self):
+        try:
+            from openai import OpenAI
+            # max_retries=0：测试要快速反馈不通，不做 SDK 默认 2 次自动重试
+            client = OpenAI(api_key=self._api_key or 'sk-no-key',
+                            base_url=self._base_url, timeout=self._timeout,
+                            max_retries=0)
+            # 最小请求：只要求 1 个 token，验证 key/base_url/model 全链路可用
+            client.chat.completions.create(
+                model=self._model,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+                stream=False,
+            )
+        except Exception as e:
+            self.fail.emit(str(e).strip() or type(e).__name__)
+            return
+        # 测试通过：探测上下文窗口（探测失败不影响测试结论）
+        tokens = probe_context_limit(self._base_url, self._api_key, self._model,
+                                     timeout=min(self._timeout, 8.0))
+        if not tokens:
+            tokens = guess_context_limit(self._model)
+        self.ok.emit(int(tokens or 0))
+
+
 # ============================================================================
 # 自定义 SpinBox 组件（带三角形箭头）
 # ============================================================================
@@ -1001,6 +1040,15 @@ class SettingsDialog(QDialog):
         self._chat_timeout_spin.setSuffix(" 秒")
         self._chat_timeout_label = QLabel("Timeout:")
         chat_api_form.addRow(self._chat_timeout_label, self._chat_timeout_spin)
+
+        self._chat_api_test_btn = QPushButton("测试连接")
+        self._chat_api_test_btn.setMinimumHeight(32)
+        self._chat_api_test_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._chat_api_test_btn.setToolTip("发送一条最小请求验证此 API 是否可用，"
+                                           "通过后自动更新模型上下文长度")
+        self._chat_api_test_btn.clicked.connect(self._on_test_chat_api)
+        chat_api_form.addRow("连接测试:", self._chat_api_test_btn)
+        self._chat_api_test_worker = None
 
         chat_layout.addWidget(self._chat_api_form_widget)
         self._on_chat_shared_api_toggled(True)
@@ -2296,6 +2344,57 @@ class SettingsDialog(QDialog):
         self._chat_api_url_edit.setEnabled(enabled)
         self._chat_model_edit.setEnabled(enabled)
         self._chat_timeout_spin.setEnabled(enabled)
+        self._chat_api_test_btn.setEnabled(enabled)
+
+    def _on_test_chat_api(self):
+        """测试 AI 对话独立 API 连通性：后台线程发最小请求，
+        通过则回填探测到的上下文长度，失败则提示回退共用翻译 API"""
+        base = self._chat_api_url_edit.text().strip()
+        key = self._chat_api_key_edit.text().strip()
+        model = self._chat_model_edit.text().strip()
+        if not base or not model:
+            QMessageBox.warning(self, "测试失败", "请先填写 Base URL 和 Model。")
+            return
+        if self._chat_api_test_worker is not None \
+                and self._chat_api_test_worker.isRunning():
+            return
+        self._chat_api_test_btn.setEnabled(False)
+        self._chat_api_test_btn.setText("测试中…")
+        self._chat_api_test_worker = _ChatApiTestWorker(
+            key, base, model, int(self._chat_timeout_spin.value()), self)
+        self._chat_api_test_worker.ok.connect(self._on_chat_api_test_ok)
+        self._chat_api_test_worker.fail.connect(self._on_chat_api_test_fail)
+        self._chat_api_test_worker.finished.connect(self._on_chat_api_test_done)
+        self._chat_api_test_worker.start()
+
+    def _on_chat_api_test_ok(self, tokens: int):
+        """测试通过：更新最大上下文 token（随设置保存生效）"""
+        if tokens >= 4096:
+            self._ctx_limit_spin.setValue(min(max(tokens, 4096), 1048576))
+            QMessageBox.information(
+                self, "测试通过",
+                f"API 连接正常，模型上下文长度已更新为 {tokens} tokens。\n"
+                f"点击保存后生效。")
+        else:
+            QMessageBox.information(
+                self, "测试通过",
+                "API 连接正常。未能自动探测到该模型的上下文长度，\n"
+                "将沿用当前上下文长度设置。")
+
+    def _on_chat_api_test_fail(self, error: str):
+        """测试不通：提示用户，回退继续用和翻译一样的模型配置"""
+        QMessageBox.warning(
+            self, "测试失败",
+            f"无法连接该 API：\n{error}\n\n"
+            f"对话将继续使用与翻译相同的模型配置。")
+        # 回退到"与翻译共用 API"（toggled 会自动置灰独立 API 字段）
+        self._chat_shared_api_check.setChecked(True)
+
+    def _on_chat_api_test_done(self):
+        """测试收尾：恢复按钮文案与启用态"""
+        self._chat_api_test_btn.setText("测试连接")
+        self._chat_api_test_btn.setEnabled(
+            not self._chat_shared_api_check.isChecked())
 
     def _on_theme_combo_changed(self, index):
         """主题下拉框选项变更时，控制自定义颜色选择器的可见性"""

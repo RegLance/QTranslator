@@ -1936,6 +1936,9 @@ class ChatWindow(QWidget):
                     _rb = self._stream_reason_scroll.verticalScrollBar()
                     _rb.rangeChanged.connect(self._on_reason_range_changed)
                     _rb.valueChanged.connect(self._on_reason_scroll_moved)
+                    # 思考未完成不显示展开按钮，定稿后按内容决定
+                    self._stream_reason_scroll._allow_toggle = False
+                    self._fit_reasoning_scroll(self._stream_reason_scroll)
             toggle = row.findChild(QPushButton, "reasoningToggleBtn")
             if toggle is not None:
                 # 思考中禁止展开：内容仍在增长，展开态会随刷新剧烈抖动；
@@ -1985,11 +1988,63 @@ class ChatWindow(QWidget):
         # 否则「展开」按钮会贴住气泡角落、凸出圆角弧外
         bl.setContentsMargins(12, 8, 12, 8)
         bl.setSpacing(0)
-        bl.addWidget(self._make_reasoning_block(reasoning, plain))
+        bl.addWidget(self._make_reasoning_block(reasoning, plain, usable))
         return bubble
 
-    def _make_reasoning_block(self, reasoning: str, plain: bool = False) -> QWidget:
-        """思考过程块：标题 + 展开/收起按钮 + 默认 6 行高的可滚动内容区"""
+    def _fit_reasoning_scroll(self, scroll, width_hint: int = 0):
+        """折叠态思考框高度自适应：内容不足 6 行按内容收缩（最少 1 行），
+        超过 6 行封顶滚动。展开态（min!=max）不处理。"""
+        if scroll is None:
+            return
+        label = scroll.findChild(QLabel, "reasoningContent")
+        if label is None:
+            return
+        if getattr(scroll, '_expanded', False):
+            return  # 已展开（完全展开态 min=0/max=QWIDGETSIZE_MAX）
+        from math import ceil
+        fm = label.fontMetrics()
+        if label.textFormat() == Qt.TextFormat.PlainText:
+            line_h = float(fm.lineSpacing())
+        else:
+            # 富文本行高须实测（字体度量偏小会截出第七行顶部残影）；
+            # 文档边距清零与 QLabel 渲染保持一致（QLabel 内部即 0 边距）
+            from PyQt6.QtGui import QTextDocument
+            _d = QTextDocument()
+            _d.setDocumentMargin(0)
+            _d.setDefaultFont(label.font())
+            _d.setTextWidth(100000)
+            _d.setHtml('测\x3cbr\x3e测')
+            line_h = _d.size().height() / 2.0
+        # 上限精确等于 6 行高度，不留松弛：任何多余像素都会露出第七行
+        collapsed_h = int(ceil(line_h * 6))
+        min_h = int(ceil(line_h))
+        if getattr(scroll, '_capped', False):
+            return  # 已达上限：内容只增不减，无需再算
+        w = scroll.viewport().width()
+        if w <= 10:
+            w = width_hint
+        if w <= 10:
+            w = max(self._message_scroll.viewport().width() - 60, 200)
+        doc_h = label.heightForWidth(max(w - 4, 40))
+        h = max(min(doc_h, collapsed_h), min_h)
+        # 严格大于才算封顶：恰好 6 行无滚动余量，不显示展开按钮
+        scroll._capped = (doc_h > collapsed_h)
+        # 高度未变但 min/max 不一致（如展开态刚收起）也要重设以同步约束
+        if scroll.height() != h or scroll.minimumHeight() != scroll.maximumHeight():
+            scroll.setFixedHeight(h)
+        # 「展开」按钮仅在思考完成且内容超过 6 行（有可滚动余量）时显示；
+        # 流式中 _allow_toggle=False，定稿路径置 True 并清 _capped 强制重算
+        _blk = scroll.parentWidget()
+        if _blk is not None:
+            _tg = _blk.findChild(QPushButton, "reasoningToggleBtn")
+            if _tg is not None:
+                _tg.setVisible(scroll._capped
+                               and getattr(scroll, '_allow_toggle', True))
+
+    def _make_reasoning_block(self, reasoning: str, plain: bool = False,
+                              usable_w: int = 0) -> QWidget:
+        """思考过程块：标题 + 展开/收起按钮 + 高度自适应的可滚动内容区
+        （内容少按内容收缩，最多 6 行）"""
         block = QWidget()
         block.setObjectName("reasoningBlock")
         vl = QVBoxLayout(block)
@@ -2034,17 +2089,25 @@ class ChatWindow(QWidget):
         scroll.setWidget(rlabel)
         vl.addWidget(scroll)
 
-        # 折叠高度 = 6 行文字
-        collapsed_h = rlabel.fontMetrics().lineSpacing() * 6 + 6
-        scroll.setFixedHeight(collapsed_h)
+        # 初始高度按内容自适应（1~6 行）；布局落定后流式/定稿路径会再校正。
+        # 首次用 setFixedHeight 使 min==max，供流式折叠态判断使用
+        scroll.setFixedHeight(rlabel.fontMetrics().lineSpacing() + 6)
+        scroll._expanded = False
+        scroll._capped = False
+        self._fit_reasoning_scroll(scroll,
+                                   width_hint=max(usable_w - 24, 60))
 
         def _on_toggle():
             if toggle.text() == "展开":
+                scroll._expanded = True
+                scroll._capped = False
                 scroll.setMinimumHeight(0)
                 scroll.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX：完全展开
                 toggle.setText("收起")
             else:
-                scroll.setFixedHeight(collapsed_h)
+                scroll._expanded = False
+                self._fit_reasoning_scroll(scroll,
+                                           width_hint=max(usable_w - 24, 60))
                 toggle.setText("展开")
 
         toggle.clicked.connect(_on_toggle)
@@ -2087,12 +2150,17 @@ class ChatWindow(QWidget):
         # 思考框：流式期纯文本（免高频富文本解析）→ 定稿按富文本渲染
         rlabel = self._stream_reason_scroll.findChild(QLabel, "reasoningContent") \
             if self._stream_reason_scroll is not None else None
+        rs = self._stream_reason_scroll
         if rlabel is not None:
             stored_reasoning = last.get('reasoning') or ''
             if stored_reasoning:
                 rlabel.setTextFormat(Qt.TextFormat.RichText)
                 rlabel.setText(_format_content(stored_reasoning))
             rlabel.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            # 思考完成：允许显示展开按钮；清 _capped 强制按富文本行高重算
+            rs._allow_toggle = True
+            rs._capped = False
+            self._fit_reasoning_scroll(rs, width_hint=usable)
         toggle = row.findChild(QPushButton, "reasoningToggleBtn")
         if toggle is not None:
             toggle.setEnabled(True)
@@ -2183,6 +2251,8 @@ class ChatWindow(QWidget):
                 # 标签为纯文本格式：直接写原始缓冲，免转义与解析
                 self._stream_reason_label.setText(self._reasoning_buffer)
                 rs = self._stream_reason_scroll
+                # 思考增长时框随内容长高，到 6 行上限后不再变化
+                self._fit_reasoning_scroll(rs)
                 if rs.minimumHeight() == rs.maximumHeight() and self._reason_follow:
                     # 折叠且用户未上滚：跟随到最新
                     # （范围滞后一帧由 rangeChanged 同帧补偿，见 _on_reason_range_changed）

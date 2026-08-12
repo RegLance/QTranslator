@@ -736,8 +736,62 @@ class _ReserveWidget(QWidget):
         return self.sizeHint().height()
 
 
-class _ReasoningScroll(QScrollArea):
+class _SmoothWheelScroll(QScrollArea):
+    """滚轮平滑滚动：滚轮输入累加为目标偏移，QTimeLine 逐帧缓动推进
+    （OutQuad），替代默认阶梯式 singleStep 跳变。动画中再滚轮则从
+    当前值重定目标续接，手感连贯。程序化跳底前须先 stopSmooth()，
+    否则动画残留会把滚动值拉回旧目标。"""
+
+    # 滚轮速度旋钮（子类可覆写）：单次滚轮输入的距离倍率、动画时长夹取区间
+    _wheel_step = 1.0
+    _wheel_dur = (120, 260)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._smooth_tl = None   # 滚动动画 QTimeLine
+        self._smooth_target = 0  # 累加的滚动目标值
+
+    def stopSmooth(self):
+        if self._smooth_tl is not None:
+            self._smooth_tl.stop()
+            self._smooth_tl = None
+
+    def smoothWheel(self, delta: int):
+        bar = self.verticalScrollBar()
+        # 触摸板 pixelDelta 细粒度小步累加；鼠标滚轮一格 ±120
+        step = int(round(-delta * self._wheel_step))
+        base = self._smooth_target \
+            if self._smooth_tl is not None else bar.value()
+        target = max(bar.minimum(), min(bar.maximum(), base + step))
+        if target == bar.value():
+            self.stopSmooth()
+            return
+        self._smooth_target = target
+        if self._smooth_tl is not None:
+            self._smooth_tl.stop()
+        # 时长随距离伸缩：短程迅捷、长程不拖沓；16ms 更新节拍
+        # （QTimeLine 默认 33ms 仅约 30 帧/秒，减半后贴齐显示刷新率）
+        dist = abs(target - bar.value())
+        dur = max(self._wheel_dur[0], min(self._wheel_dur[1], dist * 3 // 2))
+        tl = QTimeLine(dur, self)
+        tl.setUpdateInterval(16)
+        tl.setFrameRange(bar.value(), target)
+        tl.setEasingCurve(QEasingCurve(QEasingCurve.Type.OutQuad))
+        tl.frameChanged.connect(bar.setValue)
+        tl.finished.connect(self._on_smooth_done)
+        self._smooth_tl = tl
+        tl.start()
+
+    def _on_smooth_done(self):
+        self._smooth_tl = None
+
+
+class _ReasoningScroll(_SmoothWheelScroll):
     """思考框滚动区：流式瞬时长高（平滑动画读起来像「新行滑动」，已停用）"""
+
+    # 滚轮节奏比主消息区慢：内容短、行距密，快了容易滚过头
+    _wheel_step = 0.6
+    _wheel_dur = (150, 320)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -761,6 +815,10 @@ class _ReasoningScroll(QScrollArea):
                 else ev.angleDelta().y()
             if (delta < 0 and bar.value() >= bar.maximum()) or \
                     (delta > 0 and bar.value() <= bar.minimum()):
+                ev.accept()
+                return
+            if delta != 0:
+                self.smoothWheel(delta)
                 ev.accept()
                 return
         super().wheelEvent(ev)
@@ -1029,7 +1087,7 @@ class ChatWindow(QWidget):
         right.addLayout(top_bar)
 
         # 消息区（控件式气泡：QSS 支持圆角，Qt 富文本不支持 border-radius）
-        self._message_scroll = QScrollArea()
+        self._message_scroll = _SmoothWheelScroll()
         self._message_scroll.setObjectName("messageView")
         self._message_scroll.setWidgetResizable(True)
         self._message_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2244,6 +2302,7 @@ class ChatWindow(QWidget):
         self._last_render_width = max(
             self._message_scroll.viewport().width() - _m.left() - _m.right(), 200)
         bar = self._message_scroll.verticalScrollBar()
+        self._message_scroll.stopSmooth()
         bar.setValue(bar.maximum())
 
     def _finalize_stream_row(self):
@@ -2314,6 +2373,7 @@ class ChatWindow(QWidget):
             return
         if not (self._worker and self._worker.isRunning()):
             return
+        self._message_scroll.stopSmooth()
         bar.setValue(maxv)
 
     def _on_main_scroll_moved(self, value: int):
@@ -2346,6 +2406,7 @@ class ChatWindow(QWidget):
                 inner.resize(w, inner.height())
             inner.adjustSize()
         bar = rs.verticalScrollBar()
+        rs.stopSmooth()
         bar.setValue(bar.maximum())
 
     def _on_reason_range_changed(self, _min: int, maxv: int):
@@ -2357,6 +2418,7 @@ class ChatWindow(QWidget):
             return
         if not (self._worker and self._worker.isRunning()):
             return
+        rs.stopSmooth()
         rs.verticalScrollBar().setValue(maxv)
 
     def _on_reason_scroll_moved(self, value: int):

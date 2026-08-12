@@ -741,7 +741,7 @@ class _ReasoningScroll(QScrollArea):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # 框高始终由 min==max 钳定（折叠/展开/动画均为固定值），垂直方向必须
+        # 框高始终由 min==max 钳定（折叠/动画均为固定值），垂直方向必须
         # 声明 Fixed：默认 Expanding 会沿 expandingDirections 一路上传染到行
         # 布局，消息区剩余空间会被分进本行、沉淀到思考块标题行，「思考过程」
         # 被垂直拉伸居中而悬空（内容越短越明显，首条消息必现）
@@ -751,7 +751,21 @@ class _ReasoningScroll(QScrollArea):
         self._animate_grow = False  # 长高动画开关（恒 False：动画读起来像新行滑动）
         self._reserve_w = None  # 引用本框高度的流式占位 widget
 
-    def applyHeight(self, h: int):
+    def wheelEvent(self, ev):
+        """滚轮到边界即停：内容滚到底/顶后吞掉滚轮事件，不再外传给
+        主消息区（默认行为会继续滚动外层界面，阅读思考内容时易误触）。
+        内容不足 5 行（无滚动余量）时不拦截，照常传给外层。"""
+        bar = self.verticalScrollBar()
+        if bar.maximum() > bar.minimum():
+            delta = ev.pixelDelta().y() if not ev.pixelDelta().isNull() \
+                else ev.angleDelta().y()
+            if (delta < 0 and bar.value() >= bar.maximum()) or \
+                    (delta > 0 and bar.value() <= bar.minimum()):
+                ev.accept()
+                return
+        super().wheelEvent(ev)
+
+    def applyHeight(self, h):
         """设置固定高度；同时使引用本框高度的占位重新度量。
         占位的 sizeHint 直接引用框高，两者在同一遍布局中一起定稿，
         容器总高严格恒定（避免两次布局间的中间态引起滚动 range 抖动）"""
@@ -1237,12 +1251,6 @@ class ChatWindow(QWidget):
             #reasoningTitle {{
                 color: {text2}; font-size: 12px; background: transparent;
             }}
-            #reasoningToggleBtn {{
-                background-color: transparent; color: {text2};
-                border: 1px solid {border}; border-radius: 10px;
-                padding: 1px 10px; font-size: 11px;
-            }}
-            #reasoningToggleBtn:hover {{ color: {text1}; border-color: {accent}; }}
             #reasoningContent {{
                 color: {text2}; background: transparent;
                 font-size: {max(font_size - 1, 12)}px;
@@ -1355,11 +1363,15 @@ class ChatWindow(QWidget):
             self._applied_theme_signature = sig
         self._refresh_skills()
         self._refresh_mcp_menu()
-        self._reload_session_list()
         if self.isMinimized():
             # 从最小化唤醒：先还原，否则窗口仍缩在任务栏
             self.showNormal()
         self.show()
+        # show() 之后侧栏视口宽度才真实：按实际宽度省略会话标题。
+        # show 前刷新用的是退化宽度，长标题会先被重度截断、随后防抖
+        # relayout 再按真实宽度重刷（肉眼可见「截断后恢复」）；
+        # 选中同步（_ensure_session）也依赖列表先就绪
+        self._reload_session_list()
         # 首次打开：show() 之后布局才有真实视口宽度，此时再渲染消息，
         # 气泡直接按正确宽度定稿；在 show 前渲染会按退化宽度排版，
         # 随后 resize 防抖再重排 → 首次进入消息区肉眼可见「调整一下」
@@ -2033,10 +2045,9 @@ class ChatWindow(QWidget):
                     _rb = self._stream_reason_scroll.verticalScrollBar()
                     _rb.rangeChanged.connect(self._on_reason_range_changed)
                     _rb.valueChanged.connect(self._on_reason_scroll_moved)
-                    # 思考未完成不显示展开按钮，定稿后按内容决定；
+                    # 此时行未入布局、视口宽度不可信，必须显式传宽度供折行度量
                     # 此时行未入布局、视口宽度不可信，必须显式传宽度供折行度量
                     #（usable - 24 = 布局后滚动区视口的真实最终宽度）
-                    self._stream_reason_scroll._allow_toggle = False
                     # 不做逐行长高动画：平滑过渡读起来像「新行在滑动」（用户
                     # 反馈）；瞬时长高让新行直接进入新增空间、首行纹丝不动
                     self._stream_reason_scroll._animate_grow = False
@@ -2056,12 +2067,6 @@ class ChatWindow(QWidget):
                     # 宽度基准不一会让入布局后的重测折行变化、整段文字偶发跳变
                     self._fit_reasoning_scroll(self._stream_reason_scroll,
                                                width_hint=max(usable - 24, 60))
-            toggle = row.findChild(QPushButton, "reasoningToggleBtn")
-            if toggle is not None:
-                # 思考中禁止展开：内容仍在增长，展开态会随刷新剧烈抖动；
-                # 结束后整体重建，新按钮自动恢复可用
-                toggle.setEnabled(False)
-                toggle.setToolTip("思考完成后可展开查看")
             self._message_layout.addWidget(row)
             self._stream_row = row
             if self._stream_reserve is not None:
@@ -2108,7 +2113,7 @@ class ChatWindow(QWidget):
         bubble.setMaximumWidth(usable)
         bl = QVBoxLayout(bubble)
         # QWidget 容器的 QSS padding 不影响子控件布局，须用布局边距代替，
-        # 否则「展开」按钮会贴住气泡角落、凸出圆角弧外
+        # 否则内容会贴住气泡角落、凸出圆角弧外
         bl.setContentsMargins(12, 8, 12, 8)
         bl.setSpacing(0)
         bl.addWidget(self._make_reasoning_block(reasoning, plain, usable))
@@ -2126,16 +2131,13 @@ class ChatWindow(QWidget):
         return _d.size().height() / 2.0
 
     def _fit_reasoning_scroll(self, scroll, width_hint: int = 0):
-        """折叠态思考框高度自适应：内容不足 5 行按内容收缩（最少 1 行），
-        超过 5 行封顶滚动（顶部「思考过程」标题固定占 1 行，整块合计 6 行）。
-        展开态不处理。"""
+        """思考框高度自适应：内容不足 5 行按内容收缩（最少 1 行），
+        超过 5 行封顶滚动（顶部「思考过程」标题固定占 1 行，整块合计 6 行）"""
         if scroll is None:
             return
         label = scroll.findChild(QLabel, "reasoningContent")
         if label is None:
             return
-        if getattr(scroll, '_expanded', False):
-            return  # 已展开（完全展开态 min=0/max=QWIDGETSIZE_MAX）
         from math import ceil
         # 行高一律按富文本实测（定稿/历史的最终渲染形态）：流式纯文本的
         # fontMetrics 行距偏大，混用两套基准会在定稿瞬间产生高度跳变
@@ -2145,7 +2147,7 @@ class ChatWindow(QWidget):
         collapsed_h = int(ceil(line_h * 5))
         min_h = int(ceil(line_h))
         if getattr(scroll, '_capped', False):
-            return  # 已达上限：内容只增不减，无需再算
+            return  # 已达上限（内容超 5 行需框内滚动）：内容只增不减，无需再算
         # 行未入布局时 scroll 视口是默认小宽度（约 98px），据此折行会把
         # 短内容误判成多行封顶；显式 width_hint 由调用方按可用宽度算出，优先
         if width_hint > 10:
@@ -2159,14 +2161,13 @@ class ChatWindow(QWidget):
         # 多算一行 → 提前封顶/跟随 → 整段文字无故上移（低概率跳变来源）
         doc_h = label.heightForWidth(max(w, 40))
         h = max(min(doc_h, collapsed_h), min_h)
-        # 严格大于才算封顶：恰好 6 行无滚动余量，不显示展开按钮
+        # 严格大于才算封顶：恰好 5 行无滚动余量
         scroll._capped = (doc_h > collapsed_h)
         # 纵向滚动条永久隐藏：封顶瞬间滚动条首次出现会占掉约一个字的宽度，
         # 视口变窄、全部行提前折行，整段文字跳一下（「最后一格空着就换行」
-        # 的来源）；隐藏后滚轮滚动与代码滚动（setValue）不受影响，
-        # 通读全文用顶部「展开」按钮
+        # 的来源）；隐藏后滚轮滚动与代码滚动（setValue）不受影响
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # 高度未变但 min/max 不一致（如展开态刚收起）必须即时重设以同步约束
+        # 高度未变但 min/max 不一致时必须即时重设以同步约束
         if scroll.minimumHeight() != scroll.maximumHeight():
             scroll.applyHeight(h)
         elif h > scroll.height() and getattr(scroll, '_animate_grow', False) \
@@ -2175,18 +2176,10 @@ class ChatWindow(QWidget):
             scroll.animateToHeight(h)
         elif scroll.height() != h:
             scroll.applyHeight(h)
-        # 「展开」按钮仅在思考完成且内容超过 5 行（折叠上限、有滚动余量）时显示；
-        # 流式中 _allow_toggle=False，定稿路径置 True 并清 _capped 强制重算
-        _blk = scroll.parentWidget()
-        if _blk is not None:
-            _tg = _blk.findChild(QPushButton, "reasoningToggleBtn")
-            if _tg is not None:
-                _tg.setVisible(scroll._capped
-                               and getattr(scroll, '_allow_toggle', True))
 
     def _make_reasoning_block(self, reasoning: str, plain: bool = False,
                               usable_w: int = 0) -> QWidget:
-        """思考过程块：标题 + 展开/收起按钮 + 高度自适应的可滚动内容区
+        """思考过程块：标题 + 高度自适应的可滚动内容区
         （内容少按内容收缩，最多 5 行；顶部标题固定占 1 行）"""
         block = QWidget()
         block.setObjectName("reasoningBlock")
@@ -2200,16 +2193,6 @@ class ChatWindow(QWidget):
         title.setObjectName("reasoningTitle")
         header.addWidget(title)
         header.addStretch()
-        toggle = QPushButton("展开")
-        toggle.setObjectName("reasoningToggleBtn")
-        toggle.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        toggle.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        # 隐藏时也保留占位：定稿后「展开」按钮出现不会把标题行撑高、
-        # 把内容往下顶（消除定稿瞬间的整段文字下跳）
-        _pol = toggle.sizePolicy()
-        _pol.setRetainSizeWhenHidden(True)
-        toggle.setSizePolicy(_pol)
-        header.addWidget(toggle)
         vl.addLayout(header)
 
         scroll = _ReasoningScroll()
@@ -2241,33 +2224,10 @@ class ChatWindow(QWidget):
         # 初始高度按内容自适应（1~6 行）；布局落定后流式/定稿路径会再校正。
         # 首次用 setFixedHeight 使 min==max，供流式折叠态判断使用
         scroll.setFixedHeight(rlabel.fontMetrics().lineSpacing() + 6)
-        scroll._expanded = False
         scroll._capped = False
         self._fit_reasoning_scroll(scroll,
                                    width_hint=max(usable_w - 24, 60))
 
-        def _on_toggle():
-            if toggle.text() == "展开":
-                scroll._expanded = True
-                scroll._capped = False
-                # 展开高度 = 内容实际高度，上限 12 行（超出部分框内滚动）
-                from math import ceil
-                _lab = scroll.findChild(QLabel, "reasoningContent")
-                _line = self._reason_line_h(_lab)
-                _w = scroll.viewport().width()
-                if _w < 120:  # 未布局视口不可信，回退可用宽度
-                    _w = max(usable_w - 24, 200)
-                _doc_h = _lab.heightForWidth(max(_w, 40))
-                _exp_h = int(min(_doc_h, ceil(_line * 12)))
-                scroll.setFixedHeight(max(_exp_h, int(ceil(_line))))
-                toggle.setText("收起")
-            else:
-                scroll._expanded = False
-                self._fit_reasoning_scroll(scroll,
-                                           width_hint=max(usable_w - 24, 60))
-                toggle.setText("展开")
-
-        toggle.clicked.connect(_on_toggle)
         return block
 
     def _scroll_to_bottom(self):
@@ -2277,6 +2237,12 @@ class ChatWindow(QWidget):
         # 先 activate 使布局定稿：富文本气泡高度需一轮布局才算出，
         # 未定稿时 maximum() 仍为旧值（重建后为 0），setValue 不生效
         self._message_container.layout().activate()
+        # 布局落定后滚动条才可能首次出现、视口随之收窄约一条滚动条宽：
+        # 把渲染宽度基准同步为真实折行宽度，否则 show() 后的防抖 relayout
+        # 误判「宽度变了」整段重建消息区（进窗口瞬间右侧气泡跳动调整）
+        _m = self._message_layout.contentsMargins()
+        self._last_render_width = max(
+            self._message_scroll.viewport().width() - _m.left() - _m.right(), 200)
         bar = self._message_scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
 
@@ -2316,7 +2282,7 @@ class ChatWindow(QWidget):
                 # keep_blanks：保留段落间空行，与流式显示逐行一致，消除跳变
                 rlabel.setText(_format_content(stored_reasoning, keep_blanks=True))
             rlabel.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            # 思考完成：允许显示展开按钮；清 _capped 强制按富文本行高重算；
+            # 思考完成：清 _capped 强制按富文本行高重算；
             # 停止并关闭增长动画，使定稿高度即时落定（避免动画帧覆盖定稿值）
             if rs._grow_anim is not None:
                 rs._grow_anim.stop()
@@ -2329,15 +2295,10 @@ class ChatWindow(QWidget):
                 _sp.deleteLater()
                 self._stream_reserve = None
             rs._animate_grow = False
-            rs._allow_toggle = True
             rs._capped = False
             # 定稿时行已在布局中、视口宽度可信：与流式测量保持同一宽度
             # 基准，避免 width_hint=usable（更宽）少折行导致框高回缩
             self._fit_reasoning_scroll(rs)
-        toggle = row.findChild(QPushButton, "reasoningToggleBtn")
-        if toggle is not None:
-            toggle.setEnabled(True)
-            toggle.setToolTip("")
         self._stream_row = None
         self._stream_label = None
         self._stream_reason_label = None
@@ -2396,8 +2357,6 @@ class ChatWindow(QWidget):
             return
         if not (self._worker and self._worker.isRunning()):
             return
-        if rs.minimumHeight() != rs.maximumHeight():
-            return  # 展开态不自动跟随
         rs.verticalScrollBar().setValue(maxv)
 
     def _on_reason_scroll_moved(self, value: int):

@@ -17,7 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QPoint, QRect, QThread, pyqtSignal, QTimer, QEvent
+from PyQt6.QtCore import (Qt, QPoint, QRect, QThread, pyqtSignal, QTimer,
+                          QEvent, QEasingCurve, QTimeLine)
 from PyQt6.QtGui import QCursor, QIcon, QPainter, QPen, QColor
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -25,7 +26,7 @@ from PyQt6.QtWidgets import (
     QToolButton, QInputDialog, QSplitter, QSplitterHandle, QStyle,
     QStyledItemDelegate, QStyleOptionViewItem, QMessageBox, QCheckBox,
     QScrollBar, QScrollArea, QAbstractButton, QAbstractSlider,
-    QAbstractScrollArea,
+    QAbstractScrollArea, QSizePolicy,
 )
 
 try:
@@ -89,7 +90,7 @@ def _inline_md(text: str) -> str:
     return text
 
 
-def _blocks_to_html(text: str) -> str:
+def _blocks_to_html(text: str, keep_blanks: bool = False) -> str:
     """块级 Markdown：标题/列表/引用/表格/分隔线，其余按段落（行间 <br>）"""
     parts: List[str] = []
     para: List[str] = []
@@ -114,8 +115,20 @@ def _blocks_to_html(text: str) -> str:
         if not stripped:
             flush_para()
             close_list()
-            parts.append('<br>')
-            i += 1
+            if keep_blanks:
+                # 忠实保留空行：段落间 k 个空行 = k+1 个换行（含前行结尾的
+                # 换行）；段首/段尾 k 个空行 = k 个换行。原实现每段间断恒定
+                # 少 1 个换行，空行被吞，定稿纯文本→富文本切换时内容缩短、
+                # 整段文字上跳
+                j = i
+                while j < len(lines) and not lines[j].strip():
+                    j += 1
+                _middle = bool(parts) and j < len(lines)
+                parts.append('<br>' * (j - i + (1 if _middle else 0)))
+                i = j
+            else:
+                parts.append('<br>')
+                i += 1
             continue
 
         m = _RE_HEADING.match(stripped)
@@ -196,13 +209,14 @@ def _blocks_to_html(text: str) -> str:
     return ''.join(parts)
 
 
-def _format_content(text: str) -> str:
-    """Markdown → Qt 富文本 HTML：代码块 / 标题 / 列表 / 引用 / 表格 / 行内样式"""
+def _format_content(text: str, keep_blanks: bool = False) -> str:
+    """Markdown → Qt 富文本 HTML：代码块 / 标题 / 列表 / 引用 / 表格 / 行内样式；
+    keep_blanks=True 时忠实保留段落间空行（思考框定稿与流式纯文本逐行一致）"""
     segments = text.split('```')
     parts = []
     for idx, seg in enumerate(segments):
         if idx % 2 == 0:
-            parts.append(_blocks_to_html(seg))
+            parts.append(_blocks_to_html(seg, keep_blanks))
         else:
             seg2 = seg.strip('\n')
             lines = seg2.split('\n')
@@ -459,8 +473,6 @@ class ChatWorker(QThread):
             # 思考模型的思考过程（reasoning_content），与正文分开流式输出
             reasoning = getattr(delta, 'reasoning_content', None)
             if reasoning:
-                if not self._reasoning_full:
-                    log_info(f'[Chat] reasoning_content 首次到达 (len={len(reasoning)}): {reasoning[:40]!r}')
                 self._reasoning_full += reasoning
                 self.reasoning_chunk.emit(reasoning)
             if delta.content:
@@ -706,6 +718,70 @@ class StayOpenMenu(QMenu):
         super().keyPressEvent(event)
 
 
+class _ReserveWidget(QWidget):
+    """流式思考增长占位：高度 = max(0, 上限 - 思考框当前高度)。
+    sizeHint 直接引用思考框高度，与思考框在同一遍布局中定稿"""
+
+    def __init__(self, scroll, cap: int, parent=None):
+        super().__init__(parent)
+        self._rs = scroll
+        self._cap = cap
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def sizeHint(self):
+        from PyQt6.QtCore import QSize
+        return QSize(1, max(0, self._cap - self._rs.minimumHeight()))
+
+    def heightForWidth(self, w):
+        return self.sizeHint().height()
+
+
+class _ReasoningScroll(QScrollArea):
+    """思考框滚动区：流式瞬时长高（平滑动画读起来像「新行滑动」，已停用）"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 框高始终由 min==max 钳定（折叠/展开/动画均为固定值），垂直方向必须
+        # 声明 Fixed：默认 Expanding 会沿 expandingDirections 一路上传染到行
+        # 布局，消息区剩余空间会被分进本行、沉淀到思考块标题行，「思考过程」
+        # 被垂直拉伸居中而悬空（内容越短越明显，首条消息必现）
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Fixed)
+        self._grow_anim = None  # QTimeLine 增长动画（见 animateToHeight）
+        self._animate_grow = False  # 长高动画开关（恒 False：动画读起来像新行滑动）
+        self._reserve_w = None  # 引用本框高度的流式占位 widget
+
+    def applyHeight(self, h: int):
+        """设置固定高度；同时使引用本框高度的占位重新度量。
+        占位的 sizeHint 直接引用框高，两者在同一遍布局中一起定稿，
+        容器总高严格恒定（避免两次布局间的中间态引起滚动 range 抖动）"""
+        if self.minimumHeight() != h or self.maximumHeight() != h:
+            self.setFixedHeight(h)
+            if self._reserve_w is not None:
+                self._reserve_w.updateGeometry()
+
+    def animateToHeight(self, target: int):
+        """从当前高度平滑过渡到 target；动画中再次调用则重定目标续接。
+        不用 QPropertyAnimation：其帧更新在上一帧布局定稿前触发，直接设高
+        会带着旧占位高度先做一轮布局（总高瞬间 ±数像素、标题一帧抖动）。
+        改用 0ms 定时器逐帧推进：posted timer 先于动画 update 事件触发，
+        框高与占位高在同一事件内同步设置，布局生效时两者皆为新值"""
+        cur = self.minimumHeight()
+        if target == cur:
+            return
+        if self._grow_anim is not None:
+            self._grow_anim.stop()
+        # 时长随增幅伸缩：约 6ms/px，夹在 80~220ms，逐行增长时衔接连贯
+        dur = max(80, min(220, abs(target - cur) * 6))
+        tl = QTimeLine(dur, self)
+        tl.setFrameRange(cur, target)
+        tl.setEasingCurve(QEasingCurve(QEasingCurve.Type.OutQuad))
+        tl.frameChanged.connect(self.applyHeight)
+        tl.finished.connect(lambda: self.applyHeight(target))
+        self._grow_anim = tl
+        tl.start()
+
+
 class ChatWindow(QWidget):
     """AI 对话独立窗口"""
 
@@ -780,11 +856,12 @@ class ChatWindow(QWidget):
         # 会话条目标题当前截断宽度（_reload_session_list 更新，resize 时对比）
         self._session_list_title_w = 0
 
-        # 流式刷新节流：chunk 先入缓冲，合并后最多约 25 次/秒刷新气泡，
-        # 避免长回复时每个 chunk 都全量重排富文本导致卡死
+        # 流式刷新节流：chunk 先入缓冲，合并后最多约 50 次/秒刷新气泡。
+        # singleShot 合并自保：单次刷新耗时变长时后续 chunk 自动合并、
+        # 实际频率自然回落，长回复的全量富文本重排不会堆积卡死
         self._flush_timer = QTimer(self)
         self._flush_timer.setSingleShot(True)
-        self._flush_timer.setInterval(40)
+        self._flush_timer.setInterval(20)
         self._flush_timer.timeout.connect(self._update_stream_display)
 
         # 已取消但仍在跑的 worker：保持引用直到结束，防止 QThread 运行中被回收 abort
@@ -942,6 +1019,12 @@ class ChatWindow(QWidget):
         self._message_scroll.setObjectName("messageView")
         self._message_scroll.setWidgetResizable(True)
         self._message_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # 纵向滚动条常驻：AsNeeded 会在流式内容越过视口高度时弹出滚动条、
+        # 视口收窄 8px、全部气泡重排（用户感知「整段文字跳一下」，首条
+        # 对话必越阈值故易复现）；禁用态由 QSS 设为透明，空闲不可见但
+        # 宽度恒定 → 永不重排
+        self._message_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self._message_container = QWidget()
         self._message_container.setObjectName("messageContainer")
         self._message_layout = QVBoxLayout(self._message_container)
@@ -955,6 +1038,7 @@ class ChatWindow(QWidget):
         self._stream_reason_label: Optional[QLabel] = None  # 流式思考块内容
         self._stream_reason_scroll: Optional[QScrollArea] = None
         self._stream_row: Optional[QWidget] = None  # 流式输出所在的行容器
+        self._stream_reserve = None  # (占位 spacer, 5行上限高)：思考增长补偿
         right.addWidget(self._message_scroll, 1)
 
         # 输入区
@@ -1125,6 +1209,8 @@ class ChatWindow(QWidget):
             #messageView QScrollBar::handle:vertical:hover {{ background: {text2}; }}
             #messageView QScrollBar::add-line:vertical, #messageView QScrollBar::sub-line:vertical {{ height: 0; }}
             #messageView QScrollBar::add-page:vertical, #messageView QScrollBar::sub-page:vertical {{ background: transparent; }}
+            #messageView QScrollBar:vertical:disabled {{ background: transparent; }}
+            #messageView QScrollBar::handle:vertical:disabled {{ background: transparent; }}
             #bubbleUser {{
                 background-color: {accent}; color: #ffffff;
                 border-radius: 12px; padding: 8px 12px;
@@ -1270,12 +1356,15 @@ class ChatWindow(QWidget):
         self._refresh_skills()
         self._refresh_mcp_menu()
         self._reload_session_list()
-        if self._current_session_id is None:
-            self._ensure_session()
         if self.isMinimized():
             # 从最小化唤醒：先还原，否则窗口仍缩在任务栏
             self.showNormal()
         self.show()
+        # 首次打开：show() 之后布局才有真实视口宽度，此时再渲染消息，
+        # 气泡直接按正确宽度定稿；在 show 前渲染会按退化宽度排版，
+        # 随后 resize 防抖再重排 → 首次进入消息区肉眼可见「调整一下」
+        if self._current_session_id is None:
+            self._ensure_session()
         # 唤醒时刻短暂置前一次（「始终置顶」设置只控制翻译窗口）
         try:
             from ..utils.window_front import bring_to_front_once
@@ -1877,6 +1966,7 @@ class ChatWindow(QWidget):
         self._stream_reason_label = None
         self._stream_reason_scroll = None
         self._stream_row = None
+        self._stream_reserve = None
         while self._message_layout.count():
             item = self._message_layout.takeAt(0)
             w = item.widget()
@@ -1916,13 +2006,18 @@ class ChatWindow(QWidget):
                 self._message_layout.addWidget(row)
 
         if streaming_extra or streaming_reasoning:
-            content_html = (_format_content(streaming_extra) if streaming_extra else "") + "<br>▍"
+            # 光标紧跟末行文本（不独占一行）：定稿去掉光标时气泡高度不变
+            content_html = (_format_content(streaming_extra) if streaming_extra else "") + "▍"
             row, label = self._make_bubble(
                 'assistant', content_html, reasoning=streaming_reasoning,
                 html_ready=True, usable=usable, reasoning_plain=reasoning_plain)
             # 流式中高频更新：禁掉文本选择（可选中富文本 QLabel 快速 setText
             # 是 Qt 易崩溃路径），结束后重渲染会恢复可选
             label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+            # 思考阶段只显示思考气泡：正文气泡在首个正文 chunk 到达前隐藏；
+            # 无思考时保持可见（正文流式中 / 工具状态 / 失败信息）
+            label.setVisible(bool(streaming_extra.strip())
+                             or not streaming_reasoning.strip())
             self._stream_label = label
             rlabel = row.findChild(QLabel, "reasoningContent")
             if rlabel is not None:
@@ -1936,9 +2031,29 @@ class ChatWindow(QWidget):
                     _rb = self._stream_reason_scroll.verticalScrollBar()
                     _rb.rangeChanged.connect(self._on_reason_range_changed)
                     _rb.valueChanged.connect(self._on_reason_scroll_moved)
-                    # 思考未完成不显示展开按钮，定稿后按内容决定
+                    # 思考未完成不显示展开按钮，定稿后按内容决定；
+                    # 此时行未入布局、视口宽度不可信，必须显式传宽度供折行度量
+                    #（usable - 24 = 布局后滚动区视口的真实最终宽度）
                     self._stream_reason_scroll._allow_toggle = False
-                    self._fit_reasoning_scroll(self._stream_reason_scroll)
+                    # 不做逐行长高动画：平滑过渡读起来像「新行在滑动」（用户
+                    # 反馈）；瞬时长高让新行直接进入新增空间、首行纹丝不动
+                    self._stream_reason_scroll._animate_grow = False
+                    # 占位补偿：思考框每长高 1px，占位（sizeHint 引用框高）
+                    # 缩小 1px，消息区总高恒定 → rangeChanged 不再触发底部
+                    # 跟随 → 「思考过程」标题位置固定、内容向下生长；长到
+                    # 5 行上限后占位归零。仅纯思考阶段创建（必须先于 fit 登记，
+                    # 使 fit/动画的每次 applyHeight 都触发占位重新度量）：
+                    # 正文开始后思考停止增长，占位只剩空隙、移除时塌陷
+                    if not streaming_extra.strip():
+                        from math import ceil
+                        _cap5 = int(ceil(self._reason_line_h(self._stream_reason_label) * 5))
+                        _sp = _ReserveWidget(self._stream_reason_scroll, _cap5)
+                        self._stream_reserve = (_sp, _cap5)
+                        self._stream_reason_scroll._reserve_w = _sp
+                    # 与 _make_reasoning_block 初始 fit 同基准（usable - 24）：
+                    # 宽度基准不一会让入布局后的重测折行变化、整段文字偶发跳变
+                    self._fit_reasoning_scroll(self._stream_reason_scroll,
+                                               width_hint=max(usable - 24, 60))
             toggle = row.findChild(QPushButton, "reasoningToggleBtn")
             if toggle is not None:
                 # 思考中禁止展开：内容仍在增长，展开态会随刷新剧烈抖动；
@@ -1947,6 +2062,12 @@ class ChatWindow(QWidget):
                 toggle.setToolTip("思考完成后可展开查看")
             self._message_layout.addWidget(row)
             self._stream_row = row
+            if self._stream_reserve is not None:
+                # 占位插入行内布局（思考气泡与正文之间）：思考框长高 Δ、
+                # 占位缩小 Δ，行高严格恒定 → 消息区总高永不变，滚动条
+                # range 无变化，「思考过程」标题位置绝对固定
+                row.layout().insertWidget(1, self._stream_reserve[0])
+                self._stream_reserve[0].updateGeometry()
 
         self._message_layout.addStretch()
         if stick:
@@ -1991,9 +2112,21 @@ class ChatWindow(QWidget):
         bl.addWidget(self._make_reasoning_block(reasoning, plain, usable))
         return bubble
 
+    def _reason_line_h(self, label) -> float:
+        """富文本实测行高（思考框高度计算的统一基准）：
+        文档边距清零与 QLabel 渲染保持一致（QLabel 内部即 0 边距）"""
+        from PyQt6.QtGui import QTextDocument
+        _d = QTextDocument()
+        _d.setDocumentMargin(0)
+        _d.setDefaultFont(label.font())
+        _d.setTextWidth(100000)
+        _d.setHtml('测\x3cbr\x3e测')
+        return _d.size().height() / 2.0
+
     def _fit_reasoning_scroll(self, scroll, width_hint: int = 0):
-        """折叠态思考框高度自适应：内容不足 6 行按内容收缩（最少 1 行），
-        超过 6 行封顶滚动。展开态（min!=max）不处理。"""
+        """折叠态思考框高度自适应：内容不足 5 行按内容收缩（最少 1 行），
+        超过 5 行封顶滚动（顶部「思考过程」标题固定占 1 行，整块合计 6 行）。
+        展开态不处理。"""
         if scroll is None:
             return
         label = scroll.findChild(QLabel, "reasoningContent")
@@ -2002,37 +2135,45 @@ class ChatWindow(QWidget):
         if getattr(scroll, '_expanded', False):
             return  # 已展开（完全展开态 min=0/max=QWIDGETSIZE_MAX）
         from math import ceil
-        fm = label.fontMetrics()
-        if label.textFormat() == Qt.TextFormat.PlainText:
-            line_h = float(fm.lineSpacing())
-        else:
-            # 富文本行高须实测（字体度量偏小会截出第七行顶部残影）；
-            # 文档边距清零与 QLabel 渲染保持一致（QLabel 内部即 0 边距）
-            from PyQt6.QtGui import QTextDocument
-            _d = QTextDocument()
-            _d.setDocumentMargin(0)
-            _d.setDefaultFont(label.font())
-            _d.setTextWidth(100000)
-            _d.setHtml('测\x3cbr\x3e测')
-            line_h = _d.size().height() / 2.0
-        # 上限精确等于 6 行高度，不留松弛：任何多余像素都会露出第七行
-        collapsed_h = int(ceil(line_h * 6))
+        # 行高一律按富文本实测（定稿/历史的最终渲染形态）：流式纯文本的
+        # fontMetrics 行距偏大，混用两套基准会在定稿瞬间产生高度跳变
+        line_h = self._reason_line_h(label)
+        # 内容上限精确等于 5 行高度，不留松弛：任何多余像素都会露出下一行；
+        # 顶部「思考过程」标题固定占 1 行，与内容 5 行合计整块 6 行
+        collapsed_h = int(ceil(line_h * 5))
         min_h = int(ceil(line_h))
         if getattr(scroll, '_capped', False):
             return  # 已达上限：内容只增不减，无需再算
-        w = scroll.viewport().width()
-        if w <= 10:
+        # 行未入布局时 scroll 视口是默认小宽度（约 98px），据此折行会把
+        # 短内容误判成多行封顶；显式 width_hint 由调用方按可用宽度算出，优先
+        if width_hint > 10:
             w = width_hint
-        if w <= 10:
-            w = max(self._message_scroll.viewport().width() - 60, 200)
-        doc_h = label.heightForWidth(max(w - 4, 40))
+        else:
+            w = scroll.viewport().width()
+            if w < 120:  # 未入布局的默认小视口不可信，回退消息区可用宽度
+                w = max(self._message_scroll.viewport().width() - 60, 200)
+        # 直接按视口宽度测量：heightForWidth 语义即「控件宽 w 时的高度」，
+        # 富文本 documentMargin 由其内部自洽处理；再减 4px 会把边界带的行
+        # 多算一行 → 提前封顶/跟随 → 整段文字无故上移（低概率跳变来源）
+        doc_h = label.heightForWidth(max(w, 40))
         h = max(min(doc_h, collapsed_h), min_h)
         # 严格大于才算封顶：恰好 6 行无滚动余量，不显示展开按钮
         scroll._capped = (doc_h > collapsed_h)
-        # 高度未变但 min/max 不一致（如展开态刚收起）也要重设以同步约束
-        if scroll.height() != h or scroll.minimumHeight() != scroll.maximumHeight():
-            scroll.setFixedHeight(h)
-        # 「展开」按钮仅在思考完成且内容超过 6 行（有可滚动余量）时显示；
+        # 纵向滚动条永久隐藏：封顶瞬间滚动条首次出现会占掉约一个字的宽度，
+        # 视口变窄、全部行提前折行，整段文字跳一下（「最后一格空着就换行」
+        # 的来源）；隐藏后滚轮滚动与代码滚动（setValue）不受影响，
+        # 通读全文用顶部「展开」按钮
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # 高度未变但 min/max 不一致（如展开态刚收起）必须即时重设以同步约束
+        if scroll.minimumHeight() != scroll.maximumHeight():
+            scroll.applyHeight(h)
+        elif h > scroll.height() and getattr(scroll, '_animate_grow', False) \
+                and self.isVisible():
+            # 流式增长：平滑过渡到目标高度（逐行连贯长高）
+            scroll.animateToHeight(h)
+        elif scroll.height() != h:
+            scroll.applyHeight(h)
+        # 「展开」按钮仅在思考完成且内容超过 5 行（折叠上限、有滚动余量）时显示；
         # 流式中 _allow_toggle=False，定稿路径置 True 并清 _capped 强制重算
         _blk = scroll.parentWidget()
         if _blk is not None:
@@ -2044,7 +2185,7 @@ class ChatWindow(QWidget):
     def _make_reasoning_block(self, reasoning: str, plain: bool = False,
                               usable_w: int = 0) -> QWidget:
         """思考过程块：标题 + 展开/收起按钮 + 高度自适应的可滚动内容区
-        （内容少按内容收缩，最多 6 行）"""
+        （内容少按内容收缩，最多 5 行；顶部标题固定占 1 行）"""
         block = QWidget()
         block.setObjectName("reasoningBlock")
         vl = QVBoxLayout(block)
@@ -2061,10 +2202,15 @@ class ChatWindow(QWidget):
         toggle.setObjectName("reasoningToggleBtn")
         toggle.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         toggle.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        # 隐藏时也保留占位：定稿后「展开」按钮出现不会把标题行撑高、
+        # 把内容往下顶（消除定稿瞬间的整段文字下跳）
+        _pol = toggle.sizePolicy()
+        _pol.setRetainSizeWhenHidden(True)
+        toggle.setSizePolicy(_pol)
         header.addWidget(toggle)
         vl.addLayout(header)
 
-        scroll = QScrollArea()
+        scroll = _ReasoningScroll()
         scroll.setObjectName("reasoningScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2077,7 +2223,8 @@ class ChatWindow(QWidget):
             rlabel.setText(reasoning)
         else:
             rlabel.setTextFormat(Qt.TextFormat.RichText)
-            rlabel.setText(_format_content(reasoning))
+            # keep_blanks：与流式纯文本逐行一致，定稿/重建不因空行消失跳变
+            rlabel.setText(_format_content(reasoning, keep_blanks=True))
         rlabel.setWordWrap(True)
         rlabel.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         # 以与 QSS（#reasoningContent）一致的字号度量行高，
@@ -2101,8 +2248,16 @@ class ChatWindow(QWidget):
             if toggle.text() == "展开":
                 scroll._expanded = True
                 scroll._capped = False
-                scroll.setMinimumHeight(0)
-                scroll.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX：完全展开
+                # 展开高度 = 内容实际高度，上限 12 行（超出部分框内滚动）
+                from math import ceil
+                _lab = scroll.findChild(QLabel, "reasoningContent")
+                _line = self._reason_line_h(_lab)
+                _w = scroll.viewport().width()
+                if _w < 120:  # 未布局视口不可信，回退可用宽度
+                    _w = max(usable_w - 24, 200)
+                _doc_h = _lab.heightForWidth(max(_w, 40))
+                _exp_h = int(min(_doc_h, ceil(_line * 12)))
+                scroll.setFixedHeight(max(_exp_h, int(ceil(_line))))
                 toggle.setText("收起")
             else:
                 scroll._expanded = False
@@ -2147,6 +2302,7 @@ class ChatWindow(QWidget):
         # 正文：去掉流式光标、恢复文本可选
         label.setText(_format_content(last.get('content', '')))
         label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        label.setVisible(bool(last.get('content', '').strip()))  # 不留空壳气泡
         # 思考框：流式期纯文本（免高频富文本解析）→ 定稿按富文本渲染
         rlabel = self._stream_reason_scroll.findChild(QLabel, "reasoningContent") \
             if self._stream_reason_scroll is not None else None
@@ -2155,12 +2311,27 @@ class ChatWindow(QWidget):
             stored_reasoning = last.get('reasoning') or ''
             if stored_reasoning:
                 rlabel.setTextFormat(Qt.TextFormat.RichText)
-                rlabel.setText(_format_content(stored_reasoning))
+                # keep_blanks：保留段落间空行，与流式显示逐行一致，消除跳变
+                rlabel.setText(_format_content(stored_reasoning, keep_blanks=True))
             rlabel.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            # 思考完成：允许显示展开按钮；清 _capped 强制按富文本行高重算
+            # 思考完成：允许显示展开按钮；清 _capped 强制按富文本行高重算；
+            # 停止并关闭增长动画，使定稿高度即时落定（避免动画帧覆盖定稿值）
+            if rs._grow_anim is not None:
+                rs._grow_anim.stop()
+            rs._reserve_w = None
+            if self._stream_reserve is not None:
+                _sp = self._stream_reserve[0]
+                _host = _sp.parentWidget()
+                if _host is not None and _host.layout() is not None:
+                    _host.layout().removeWidget(_sp)
+                _sp.deleteLater()
+                self._stream_reserve = None
+            rs._animate_grow = False
             rs._allow_toggle = True
             rs._capped = False
-            self._fit_reasoning_scroll(rs, width_hint=usable)
+            # 定稿时行已在布局中、视口宽度可信：与流式测量保持同一宽度
+            # 基准，避免 width_hint=usable（更宽）少折行导致框高回缩
+            self._fit_reasoning_scroll(rs)
         toggle = row.findChild(QPushButton, "reasoningToggleBtn")
         if toggle is not None:
             toggle.setEnabled(True)
@@ -2244,9 +2415,24 @@ class ChatWindow(QWidget):
         if self._stream_label is not None and (not need_reasoning or has_reason_ui):
             # 只更新流式气泡，不重建全部消息（减少重绘与滚动跳动）
             stick = self._near_bottom()
-            body_html = (_format_content(body) if body else "") + "<br>▍"
+            # 光标紧跟末行文本（不独占一行）：定稿去掉光标时气泡高度不变
+            body_html = (_format_content(body) if body else "") + "▍"
             if self._stream_label.text() != body_html:
                 self._stream_label.setText(body_html)
+            # 思考阶段只显示思考气泡，首个正文 chunk 到达时正文气泡才出现
+            self._stream_label.setVisible(bool(body.strip()) or not need_reasoning)
+            if body.strip() and self._stream_reserve is not None:
+                # 正文开始 = 思考停止增长：占位使命完成，与正文气泡同帧移除，
+                # 空隙即时闭合；留到定稿才移除会出现「正文先出现、随后整段
+                # 往上缩」的塌陷跳变
+                _sp = self._stream_reserve[0]
+                _host = _sp.parentWidget()
+                if _host is not None and _host.layout() is not None:
+                    _host.layout().removeWidget(_sp)
+                _sp.deleteLater()
+                self._stream_reserve = None
+                if self._stream_reason_scroll is not None:
+                    self._stream_reason_scroll._reserve_w = None
             if need_reasoning:
                 # 标签为纯文本格式：直接写原始缓冲，免转义与解析
                 self._stream_reason_label.setText(self._reasoning_buffer)
@@ -2254,10 +2440,19 @@ class ChatWindow(QWidget):
                 # 思考增长时框随内容长高，到 6 行上限后不再变化
                 self._fit_reasoning_scroll(rs)
                 if rs.minimumHeight() == rs.maximumHeight() and self._reason_follow:
-                    # 折叠且用户未上滚：跟随到最新
-                    # （范围滞后一帧由 rangeChanged 同帧补偿，见 _on_reason_range_changed）
+                    # 折叠且用户未上滚：跟随到最新。滚动条范围滞后一帧，
+                    # 直接读 maximum() 在封顶帧会读到旧值 0 滚不动、积累到
+                    # 下一帧一次跳两行；改用本次测量的内容高算目标，先
+                    # setRange 再 setValue，同帧到位，每行只移一行
                     rbar = rs.verticalScrollBar()
-                    rbar.setValue(rbar.maximum())
+                    _vw = rs.viewport().width()
+                    if _vw >= 120:  # 视口已布局：测量可信
+                        _doc = self._stream_reason_label.heightForWidth(max(_vw, 40))
+                        _max = max(0, _doc - rs.viewport().height())
+                        rbar.setRange(0, _max)
+                        rbar.setValue(_max)
+                    else:  # 视口未布局完成：等 rangeChanged 同帧补偿
+                        rbar.setValue(rbar.maximum())
             if stick:
                 QTimer.singleShot(0, self._scroll_to_bottom)
         else:
@@ -2333,10 +2528,6 @@ class ChatWindow(QWidget):
             except Exception as e:
                 log_error(f"加载技能本地工具失败: {e}")
 
-        log_info(f'[Chat] 工具路径: mcp_tools={len(tools)}, '
-                 f'skill_tools={"有" if skill_tools else "无"}, '
-                 f'→ {"非流式" if tools or skill_tools else "流式"}')
-
         # API 配置：取消"与翻译共用"且独立配置已填写时走对话专用 API
         # （设置里测试通过的那套）；否则继续用与翻译相同的模型配置
         if (not self._config.get('chat.use_shared_api', True)) \
@@ -2361,7 +2552,9 @@ class ChatWindow(QWidget):
         self._reason_follow = True
         self._main_follow = True
         self._send_btn.setEnabled(False)
-        self._render_messages(streaming_extra="…", force_scroll=True)
+        # 不渲染 "…" 占位气泡：发送后先只显示用户消息，思考框随首个
+        # 思考 chunk 出现，正文框随首个正文 chunk 出现
+        self._render_messages(force_scroll=True)
 
         self._worker = ChatWorker(sid, system_prompt, history, summary, summary_count,
                                   model, client_kwargs, context_limit, tools, skill_tools)
@@ -2441,8 +2634,6 @@ class ChatWindow(QWidget):
         self._schedule_flush()
 
     def _on_reasoning_chunk(self, chunk: str):
-        if not self._reasoning_buffer:
-            log_info(f'[Chat] _on_reasoning_chunk 首次 (len={len(chunk)}): {chunk[:40]!r}')
         self._reasoning_buffer += chunk
         self._schedule_flush()
 
@@ -2463,9 +2654,6 @@ class ChatWindow(QWidget):
             if not had_reasoning:
                 self._reasoning_buffer = _t
                 had_reasoning = True
-        log_info(f'[Chat] _on_finished: had_reasoning={had_reasoning}, '
-                 f'reasoning_len={len(self._reasoning_buffer)}, '
-                 f'full_text_len={len(full_text)}')
         if self._current_session_id and full_text:
             # 纯空白思考内容视为无思考（部分非思考模型会回传空白 reasoning_content）
             self._store.update_last_assistant_message(

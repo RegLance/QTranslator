@@ -2441,7 +2441,10 @@ class ChatWindow(QWidget):
                     self._stream_reason_scroll._reserve_w = None
             if need_reasoning:
                 # 标签为纯文本格式：直接写原始缓冲，免转义与解析
-                self._stream_reason_label.setText(self._reasoning_buffer)
+                # strip 去首尾空白：内嵌思考标签模型的思考紧随开标签带前导
+                # 换行，会被渲染成开头空行、单行思考显示两行高；落库/兜底
+                # 路径（_split_think_tags）均 strip，流式同 strip 保持一致
+                self._stream_reason_label.setText(self._reasoning_buffer.strip())
                 rs = self._stream_reason_scroll
                 # 思考增长时框随内容长高，到 6 行上限后不再变化
                 self._fit_reasoning_scroll(rs)
@@ -2465,7 +2468,7 @@ class ChatWindow(QWidget):
             # 思考首次到达等结构变化场景：重建气泡
             self._render_messages(
                 streaming_extra=body,
-                streaming_reasoning=self._reasoning_buffer,
+                streaming_reasoning=self._reasoning_buffer.strip(),
                 reasoning_plain=True)
 
     def _schedule_flush(self):
@@ -2664,7 +2667,7 @@ class ChatWindow(QWidget):
             # 纯空白思考内容视为无思考（部分非思考模型会回传空白 reasoning_content）
             self._store.update_last_assistant_message(
                 self._current_session_id, full_text,
-                reasoning=self._reasoning_buffer if had_reasoning else '')
+                reasoning=self._reasoning_buffer.strip() if had_reasoning else '')
         elif self._current_session_id:
             # 无正文返回：清理占位，不残留空消息
             self._store.remove_trailing_empty_assistant(self._current_session_id)

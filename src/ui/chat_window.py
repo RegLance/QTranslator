@@ -2007,7 +2007,9 @@ class ChatWindow(QWidget):
 
         if streaming_extra or streaming_reasoning:
             # 光标紧跟末行文本（不独占一行）：定稿去掉光标时气泡高度不变
-            content_html = (_format_content(streaming_extra) if streaming_extra else "") + "▍"
+            # lstrip 与 _update_stream_display / 定稿对齐（见上）
+            _se = streaming_extra.lstrip()
+            content_html = (_format_content(_se) if _se else "") + "▍"
             row, label = self._make_bubble(
                 'assistant', content_html, reasoning=streaming_reasoning,
                 html_ready=True, usable=usable, reasoning_plain=reasoning_plain)
@@ -2416,7 +2418,11 @@ class ChatWindow(QWidget):
             # 只更新流式气泡，不重建全部消息（减少重绘与滚动跳动）
             stick = self._near_bottom()
             # 光标紧跟末行文本（不独占一行）：定稿去掉光标时气泡高度不变
-            body_html = (_format_content(body) if body else "") + "▍"
+            # lstrip 去掉正文起始空白： 模型  后的换行会进入缓冲，
+            # 被渲染成开头空行；定稿内容经 _split_think_tags strip 后无此
+            # 空行 → 单行正文定稿瞬间收缩一行。流式同 lstrip 保持一致
+            disp = body.lstrip()
+            body_html = (_format_content(disp) if disp else "") + "▍"
             if self._stream_label.text() != body_html:
                 self._stream_label.setText(body_html)
             # 思考阶段只显示思考气泡，首个正文 chunk 到达时正文气泡才出现

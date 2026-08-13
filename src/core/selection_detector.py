@@ -237,6 +237,12 @@ class SelectionDetector(QObject):
 
         # 检查是否在我们自己的窗口中选择
         if self._is_own_window_active():
+            # 消费自家窗口期间产生的选择事件：应用内选区由窗口自己的
+            # selectionChanged 逻辑处理；若不消费，用户稍后切到外部窗口时
+            # 该旧事件会被重新检出，误报为应用外划词导致单词卡片「复活」
+            tc = self._get_text_capture()
+            if tc and tc.has_new_selection(self._last_capture_time):
+                self._last_capture_time = tc.get_last_capture_time()
             return
 
         # 方案 4 修复：检测用户是否正在手动复制
@@ -251,6 +257,14 @@ class SelectionDetector(QObject):
 
         # 检查是否有新选择
         if tc.has_new_selection(self._last_capture_time):
+            # 自家窗口内的选择事件：消费时间戳并跳过全局路径（应用内选区
+            # 由翻译窗口自己的 selectionChanged 逻辑处理）。若不消费，
+            # 用户稍后切到外部窗口时该旧事件会被重新检出，
+            # 误报为应用外划词导致单词卡片「复活」
+            if self._is_own_window_active_uncached():
+                self._last_capture_time = tc.get_last_capture_time()
+                return
+
             # 更新时间戳
             self._last_capture_time = tc.get_last_capture_time()
 

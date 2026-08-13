@@ -471,6 +471,10 @@ class TranslatorWindow(QWidget):
         self._word_selection_timer.setInterval(300)
         self._word_selection_timer.timeout.connect(self._check_word_selection)
 
+        # 最近一次弹出查询的单词：用于防止卡片被关闭后，失活等事件
+        # 再次触发 selectionChanged 导致同一单词重复弹窗
+        self._last_popup_word = ""
+
         # 当前译文所对应的原文（新增收藏时校验，避免输入已改却仍配对旧译文）
         self._output_paired_source_text = ""
         self._pending_operation_source_text = ""
@@ -853,18 +857,6 @@ class TranslatorWindow(QWidget):
         title_layout.addWidget(self._title_label)
         title_layout.addStretch()
 
-        # 更新提示文字（初始隐藏，检测到新版本时显示）
-        self._update_label = QLabel("新版本可用，请点击 →")
-        self._update_label.setStyleSheet(f"""
-            QLabel {{
-                color: {theme['text_muted']};
-                font-size: 11px;
-                font-weight: bold;
-            }}
-        """)
-        self._update_label.hide()
-        title_layout.addWidget(self._update_label)
-
         # 更新按钮（初始隐藏，检测到新版本时显示）
         self._update_btn = QPushButton("⬆️")
         self._update_btn.setObjectName("updateBtn")
@@ -873,14 +865,14 @@ class TranslatorWindow(QWidget):
         self._update_btn.setToolTip("有新版本可用，点击更新")
         self._update_btn.setStyleSheet(f"""
             QPushButton#updateBtn {{
-                background-color: transparent;
+                background-color: {theme.get('accent_color', '#4a9eff')};
                 border: none;
                 border-radius: 11px;
                 font-size: 12px;
                 padding-bottom: 2px;
             }}
             QPushButton#updateBtn:hover {{
-                background-color: {theme['button_hover']};
+                background-color: {theme.get('accent_hover', theme['button_hover'])};
             }}
         """)
         self._update_btn.clicked.connect(self._on_update_clicked)
@@ -1626,63 +1618,12 @@ class TranslatorWindow(QWidget):
             return
         self._update_available = True
         self._update_btn.show()
-        self._update_label.show()
         self._update_btn.setToolTip(f"新版本 {new_version} 可用，点击更新")
-        self._start_update_pulse()
 
     def _on_no_update(self):
         """无新版本"""
         self._update_available = False
         self._update_btn.hide()
-        self._update_label.hide()
-        self._stop_update_pulse()
-
-    def _start_update_pulse(self):
-        """启动更新按钮呼吸动画"""
-        if not hasattr(self, '_update_pulse_timer'):
-            self._update_pulse_timer = QTimer(self)
-            self._update_pulse_timer.setInterval(16)  # ~60fps
-            self._update_pulse_phase = 0.0
-            self._update_pulse_timer.timeout.connect(self._on_update_pulse)
-        self._update_pulse_timer.start()
-
-    def _stop_update_pulse(self):
-        """停止更新按钮呼吸动画"""
-        if hasattr(self, '_update_pulse_timer'):
-            self._update_pulse_timer.stop()
-            # 恢复默认样式
-            self._update_btn.setStyleSheet(self._update_btn.styleSheet())
-            self._update_label.setStyleSheet(self._update_label.styleSheet())
-
-    def _on_update_pulse(self):
-        """呼吸动画帧：仅图标缩放，文字保持静态"""
-        import math
-        self._update_pulse_phase += 0.1
-        if self._update_pulse_phase > 2 * math.pi:
-            self._update_pulse_phase -= 2 * math.pi
-
-        intensity = math.sin(self._update_pulse_phase)
-        scale = 1.0 + intensity * 0.3
-        opacity = 0.4 + (intensity + 1.0) / 2.0 * 0.6
-
-        theme = get_theme(self._theme_style)
-        accent = QColor(theme.get('accent_color', '#4a9eff'))
-        r, g, b = accent.red(), accent.green(), accent.blue()
-        alpha = int(255 * opacity)
-
-        btn_size = max(10, int(12 * scale + 0.5))
-        self._update_btn.setStyleSheet(f"""
-            QPushButton#updateBtn {{
-                background-color: rgba({r}, {g}, {b}, {alpha});
-                border: none;
-                border-radius: {btn_size // 2}px;
-                font-size: {btn_size}px;
-                padding-bottom: 2px;
-            }}
-            QPushButton#updateBtn:hover {{
-                background-color: rgba({r}, {g}, {b}, 200);
-            }}
-        """)
 
     def _on_update_check_error(self):
         """更新检查失败"""
@@ -1856,8 +1797,6 @@ class TranslatorWindow(QWidget):
             if self._update_available:
                 self._update_available = False
                 self._update_btn.hide()
-                self._update_label.hide()
-                self._stop_update_pulse()
 
         if new_always_on_top != self._always_on_top:
             self._always_on_top = new_always_on_top
@@ -1938,24 +1877,17 @@ class TranslatorWindow(QWidget):
         # 更新更新按钮样式
         self._update_btn.setStyleSheet(f"""
             QPushButton#updateBtn {{
-                background-color: transparent;
+                background-color: {theme.get('accent_color', '#4a9eff')};
                 border: none;
                 border-radius: 11px;
                 font-size: 12px;
                 padding-bottom: 2px;
             }}
             QPushButton#updateBtn:hover {{
-                background-color: {theme['button_hover']};
+                background-color: {theme.get('accent_hover', theme['button_hover'])};
             }}
         """)
 
-        self._update_label.setStyleSheet(f"""
-            QLabel {{
-                color: {theme['text_muted']};
-                font-size: 11px;
-                font-weight: bold;
-            }}
-        """)
 
         # 更新 AI 按钮样式
         self._ai_btn.setStyleSheet(f"""
@@ -3052,11 +2984,24 @@ class TranslatorWindow(QWidget):
     def _on_text_selection_changed(self, text_edit: QTextEdit):
         """文本选择变化时触发（防抖后检查是否为单词选中）。"""
         self._pending_word_text_edit = text_edit
+        # 选区内容与上次弹出的单词不同（含清空）→ 解除同词重弹封锁，
+        # 允许用户改选/重选后再次查询
+        try:
+            cur = text_edit.textCursor()
+            sel = cur.selectedText().strip() if cur.hasSelection() else ""
+        except Exception:
+            sel = ""
+        if sel != self._last_popup_word:
+            self._last_popup_word = ""
         self._word_selection_timer.start()
 
     def _check_word_selection(self):
         """检查当前选中的文本是否是英文单词，如果是则弹出单词查询窗口。"""
         if not get_config().get('word_popup.enabled', True):
+            return
+
+        # 窗口已隐藏不弹窗（防止关闭窗口后残留的防抖定时器把卡片弹回屏幕）
+        if not self.isVisible():
             return
 
         text_edit = getattr(self, '_pending_word_text_edit', None)
@@ -3071,13 +3016,16 @@ class TranslatorWindow(QWidget):
         if not selected or not is_english_word(selected):
             return
 
-        # 获取选中文本的屏幕坐标
-        rect = text_edit.cursorRect(cursor)
-        global_bottom_left = text_edit.viewport().mapToGlobal(
-            QPoint(rect.left(), rect.bottom() + 2)
-        )
+        # 同词防重弹：该单词已弹过且卡片已被用户关闭（选区未变化），
+        # 不再重新弹出；卡片仍在显示时 show_word_popup 内部自行去重
+        popup = get_word_popup()
+        if selected == self._last_popup_word \
+                and not (popup.isVisible() and popup._word == selected):
+            return
 
-        show_word_popup(selected, global_bottom_left, text_edit)
+        # 卡片出现在鼠标右下角（与应用外划词查词行为一致）
+        show_word_popup(selected, QCursor.pos(), text_edit)
+        self._last_popup_word = selected
 
     def _show_input_context_menu(self, pos):
         """显示输入框右键菜单"""
@@ -4440,6 +4388,16 @@ class TranslatorWindow(QWidget):
     def hide(self):
         """隐藏窗口"""
         self._stop_tts_playback()
+
+        # 联动关闭由本窗口划词触发的单词卡片
+        # （应用外划词弹窗的 _text_edit_widget 为 None，不会被误关）
+        try:
+            popup = get_word_popup()
+            te = popup._text_edit_widget
+            if popup.isVisible() and te is not None and te.window() is self:
+                popup.hide_popup()
+        except Exception:
+            pass
 
         # 记忆窗口位置：在隐藏前保存当前位置（跳过完全离屏的假位置，例如启动时离屏预渲染）
         if self._remember_window_position and self._window_overlaps_any_screen():

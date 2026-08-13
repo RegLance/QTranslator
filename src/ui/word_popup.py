@@ -165,6 +165,15 @@ class WordPopup(QFrame):
         # 防止用户划词选中新单词时的点击操作误关弹窗
         self._grace_until: float = 0.0
 
+        # 本次弹窗的定位锚点（鼠标位置）：释义返回后尺寸变化时按原锚点重排，
+        # 避免以窗口当前位置为锚点导致逐次偏移
+        self._anchor_pos: QPoint = QPoint(0, 0)
+
+        # 最近一次关闭时刻与关闭时的单词：
+        # 用于过滤关闭后立刻到达的陈旧选区回声事件
+        self._hide_time: float = 0.0
+        self._hidden_word: str = ""
+
         self._setup_ui()
         self._apply_theme()
 
@@ -511,6 +520,15 @@ class WordPopup(QFrame):
         if new_word == self._word and self.isVisible():
             return
 
+        # 过滤陈旧选区事件：卡片刚被关闭（如双击新词的第一击关闭了卡片），
+        # 随后立刻到达的「关闭时的单词」是 selection-hook 回报的旧选区回声：
+        # - 卡片未显示时到达 → 避免以旧词「复活」
+        # - 卡片已显示新词时延迟到达 → 避免把新词翻回旧词
+        # 真正的新词事件（不同的词）不受影响，立即显示并抛弃旧查询
+        if new_word == self._hidden_word \
+                and _time.time() - self._hide_time < 1.5:
+            return
+
         # === 第 1 步：立即停止旧的一切 ===
         self._cancel_lookup()
 
@@ -542,20 +560,34 @@ class WordPopup(QFrame):
         w = max(self._MIN_WIDTH, min(self.sizeHint().width(), self._MAX_WIDTH))
         self.setFixedWidth(w)
         self.adjustSize()
+        self._anchor_pos = QPoint(global_pos)
         self._position_popup(global_pos)
 
         # === 第 4 步：显示并立即绘制 ===
+        # 重新启用阴影 effect（hide_popup 时已禁用，避免旧外观缓存残留）
+        _eff2 = self.graphicsEffect()
+        if _eff2 is not None and not _eff2.isEnabled():
+            _eff2.setEnabled(True)
         self.setWindowOpacity(0.95)
         if not self.isVisible():
             self.show()
-        else:
-            self.repaint()  # 已可见时强制重绘，确保新单词立即可见
+        # Windows layered 窗口（WA_TranslucentBackground）hide→show 后
+        # 可能呈现旧 backing store，setText/repaint 均不刷新；
+        # 而几何变化可强制全量重绘（释义返回时 adjustSize+move 能刷新
+        # 内容即为证明）。这里主动做 +1px/-1px 尺寸抖动强制刷新。
+        _h = self.height()
+        self.resize(self.width(), _h + 1)
+        self.resize(self.width(), _h)
+        self.repaint()
+        # 下一帧再补一次重绘兜底（layered 窗口合成异步）
+        QTimer.singleShot(0, self.repaint)
         # 弹出时刻短暂置前一次（bring_to_front_once 含 raise/激活）
         try:
             from ..utils.window_front import bring_to_front_once
         except ImportError:
             from src.utils.window_front import bring_to_front_once
         bring_to_front_once(self)
+        _install_global_mouse_hook()
 
         # 开启 500ms 宽限期：其间不响应外部点击关闭
         # 防止用户划词选中新单词时，第一步（点击文本框）误关弹窗
@@ -590,8 +622,8 @@ class WordPopup(QFrame):
         popup_w = self.width()
         popup_h = self.height()
 
-        # 默认放在锚点下方偏左
-        x = anchor_pos.x()
+        # 默认放在锚点（鼠标）右下角
+        x = anchor_pos.x() + 8  # 右侧 8px 间距
         y = anchor_pos.y() + 8  # 下方 8px 间距
 
         # 水平边界检查
@@ -652,7 +684,7 @@ class WordPopup(QFrame):
         self.setFixedWidth(w)
         self.adjustSize()
         if self.isVisible():
-            self._position_popup(self.pos() + QPoint(0, 0))
+            self._position_popup(self._anchor_pos)
 
     def _on_lookup_error(self, error_msg: str, generation: int):
         """词典查询失败（generation 由 worker 信号携带，用于忽略过期结果）。"""
@@ -762,6 +794,13 @@ class WordPopup(QFrame):
         app.installEventFilter(f)
         app._word_popup_filter = f
 
+    def hide_if_from(self, text_edit: Optional[QWidget]):
+        """仅当弹窗由指定文本框（应用内划词）触发时关闭；
+        应用外划词（text_edit 为 None）弹出的卡片不受影响。"""
+        if self.isVisible() and text_edit is not None \
+                and self._text_edit_widget is text_edit:
+            self.hide_popup()
+
     def hide_popup(self):
         """隐藏弹窗并清理资源。"""
         try:
@@ -773,7 +812,115 @@ class WordPopup(QFrame):
         except Exception:
             pass
         self._cancel_lookup()
+        _uninstall_global_mouse_hook()
+        self._hide_time = _time.time()
+        self._hidden_word = self._word
+        # 阴影 effect 的像素缓存可能保留旧外观：隐藏期间禁用，
+        # 下次 show_at 显示前再启用，强制整体重建渲染内容
+        _eff = self.graphicsEffect()
+        if _eff is not None:
+            _eff.setEnabled(False)
         self.hide()
+        if sys.platform == 'win32':
+            # Windows 下纯 layered 窗口（WA_TranslucentBackground）隐藏后
+            # 系统可能不擦除旧位置图像。对全屏强制重画，彻底清除残影。
+            try:
+                ctypes.windll.user32.RedrawWindow(
+                    None, None, None,
+                    0x0001 | 0x0004 | 0x0100)  # INVALIDATE|ALLCHILDREN|UPDATENOW
+            except Exception:
+                pass
+
+# ----------------------------------------------------------------------
+# Win32 全局鼠标钩子：卡片可见时，点击卡片区域之外即关闭
+# （Qt 应用级事件过滤器收不到其他进程的鼠标事件，必须用系统级钩子）
+# ----------------------------------------------------------------------
+import ctypes
+
+_mouse_hook_handle = None
+_mouse_hook_proc = None  # 保持引用防止回调对象被 GC
+
+_WM_BUTTON_DOWN = (0x0201, 0x0204, 0x0207)  # L/R/M BUTTONDOWN
+_WM_DBLCLK = (0x0203, 0x0206, 0x0209)  # L/R/M BUTTONDBLCLK
+
+
+class _POINT(ctypes.Structure):
+    _fields_ = [('x', ctypes.c_long), ('y', ctypes.c_long)]
+
+
+class _MSLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ('pt', _POINT),
+        ('mouseData', ctypes.c_ulong),
+        ('flags', ctypes.c_ulong),
+        ('time', ctypes.c_ulong),
+        ('dwExtraInfo', ctypes.POINTER(ctypes.c_ulong)),
+    ]
+
+
+_MOUSE_LL_PROC = ctypes.WINFUNCTYPE(
+    ctypes.c_long, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+
+
+def _on_global_mouse_event(nCode, wParam, lParam):
+    """WH_MOUSE_LL 回调：卡片区域外的鼠标按下 → 关闭卡片；
+    双击 → 无条件关闭旧卡片（双击一定是查新词意图，且双击位置常落在
+    锚于鼠标右下角的卡片区域内，新选区事件上报前旧卡片必须先退场）。"""
+    if nCode == 0 and (wParam in _WM_BUTTON_DOWN or wParam in _WM_DBLCLK):
+        popup = _popup_ref[0]
+        if popup is not None:
+            try:
+                # 宽限期内不响应（show_at 刚弹出，划词的点击不算）
+                if popup.isVisible() and _time.time() >= popup._grace_until:
+                    if wParam in _WM_DBLCLK:
+                        # 双击：无论点在哪里都关闭旧卡片，等新词事件弹新卡片
+                        QTimer.singleShot(0, popup.hide_popup)
+                    else:
+                        info = _MSLLHOOKSTRUCT.from_address(int(lParam))
+                        click_pos = QPoint(info.pt.x, info.pt.y)
+                        if not popup.geometry().contains(click_pos):
+                            # 延迟到事件循环执行，避免在钩子回调里做耗时操作
+                            QTimer.singleShot(0, popup.hide_popup)
+            except Exception:
+                pass
+    return ctypes.windll.user32.CallNextHookEx(
+        _mouse_hook_handle, nCode, wParam, lParam)
+
+
+def _install_global_mouse_hook():
+    """安装系统级低级鼠标钩子（仅在 Windows 下生效）。"""
+    global _mouse_hook_handle, _mouse_hook_proc
+    if sys.platform != 'win32' or _mouse_hook_handle:
+        return
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+        kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+        user32.SetWindowsHookExW.restype = ctypes.c_void_p
+        user32.SetWindowsHookExW.argtypes = [
+            ctypes.c_int, _MOUSE_LL_PROC, ctypes.c_void_p, ctypes.c_ulong]
+        user32.CallNextHookEx.restype = ctypes.c_long
+        user32.CallNextHookEx.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
+        _mouse_hook_proc = _MOUSE_LL_PROC(_on_global_mouse_event)
+        h_mod = kernel32.GetModuleHandleW(None)
+        _mouse_hook_handle = user32.SetWindowsHookExW(
+            14, _mouse_hook_proc, h_mod, 0)  # 14 = WH_MOUSE_LL
+    except Exception:
+        _mouse_hook_handle = None
+
+
+def _uninstall_global_mouse_hook():
+    """卸载系统级低级鼠标钩子。"""
+    global _mouse_hook_handle, _mouse_hook_proc
+    if _mouse_hook_handle:
+        try:
+            ctypes.windll.user32.UnhookWindowsHookEx(_mouse_hook_handle)
+        except Exception:
+            pass
+    _mouse_hook_handle = None
+
 
 # 全局弹窗实例引用
 _word_popup_instance: Optional[WordPopup] = None

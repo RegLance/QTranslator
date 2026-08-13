@@ -43,7 +43,26 @@ try:
 except ImportError:
     _MCP_AVAILABLE = False
 
-_DEFAULT_CONFIG = {"mcpServers": {}}
+# 首次生成配置文件的模板：内置两个示例服务器。
+# 服务器名带下划线前缀的条目不会被加载，仅供参考；
+# 想用哪个就把它的名字改成不带下划线（如 "filesystem"），
+# Windows 下 npx / uvx 等 .cmd 命令由本模块自动用 cmd /c 包裹。
+_DEFAULT_CONFIG = {
+    "mcpServers": {
+        "_example_filesystem": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users"],
+            "env": {},
+            "_note": "示例：读写本地文件。需安装 Node.js；启用请把服务器名改为不带下划线"
+        },
+        "_example_fetch": {
+            "command": "uvx",
+            "args": ["mcp-server-fetch"],
+            "env": {},
+            "_note": "示例：抓取网页内容。需安装 uv；启用请把服务器名改为不带下划线"
+        }
+    }
+}
 
 # Windows 下需要 cmd /c 包裹才能启动的 .cmd 包装命令
 _WIN_CMD_TOOLS = {"npx", "npm", "uvx", "pipx"}
@@ -177,7 +196,11 @@ class MCPClientManager:
         try:
             data = json.loads(self._config_path.read_text(encoding='utf-8'))
             servers = data.get('mcpServers', {})
-            return servers if isinstance(servers, dict) else {}
+            if not isinstance(servers, dict):
+                return {}
+            # 名字以下划线开头的是示例条目（见 _DEFAULT_CONFIG），不加载
+            return {name: cfg for name, cfg in servers.items()
+                    if not name.startswith('_')}
         except Exception as e:
             log_error(f"读取 mcp_servers.json 失败: {e}")
             return {}

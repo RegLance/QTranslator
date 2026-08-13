@@ -420,6 +420,7 @@ try:
     from .core.mcp_client import get_mcp_manager
     from .ui.translate_button import get_translate_button
     from .ui.selection_toolbar import get_selection_toolbar
+    from .ui.word_popup import show_word_popup, is_english_word
     from .ui.chat_window import get_chat_window
     from .ui.tray_icon import get_tray_icon
     from .ui.translator_window import get_translator_window
@@ -449,6 +450,7 @@ except ImportError:
     from src.core.mcp_client import get_mcp_manager
     from src.ui.translate_button import get_translate_button
     from src.ui.selection_toolbar import get_selection_toolbar
+    from src.ui.word_popup import show_word_popup, is_english_word
     from src.ui.chat_window import get_chat_window
     from src.ui.tray_icon import get_tray_icon
     from src.ui.translator_window import get_translator_window
@@ -1158,15 +1160,25 @@ class SettingsDialog(QDialog):
         self._always_on_top_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._always_on_top_hint_label)
 
-        # 划词查词勾选框
-        self._word_popup_check = QCheckBox("启用划词查词")
+        # 划词查词勾选框（应用内：翻译窗口原文/译文框）
+        self._word_popup_check = QCheckBox("启用划词查词（应用内）")
         self._word_popup_check.toggled.connect(self._on_checkbox_toggled)
         translator_window_layout.addWidget(self._word_popup_check)
 
-        self._word_popup_hint_label = QLabel("勾选后，在原文框或译文框中选中英文单词时，自动弹出单词释义和发音弹窗")
+        self._word_popup_hint_label = QLabel("勾选后，在原文框或译文框中选中单个英文单词时，自动弹出单词释义和发音弹窗")
         self._word_popup_hint_label.setProperty("class", "checkbox-hint")
         self._word_popup_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._word_popup_hint_label)
+
+        # 划词查词勾选框（应用外：桌面任意位置）
+        self._word_popup_global_check = QCheckBox("启用划词查词（应用外）")
+        self._word_popup_global_check.toggled.connect(self._on_checkbox_toggled)
+        translator_window_layout.addWidget(self._word_popup_global_check)
+
+        self._word_popup_global_hint_label = QLabel("勾选后，在翻译窗口外的桌面任意位置（如浏览器、文档）选中单个英文单词时，自动弹出单词释义和发音弹窗")
+        self._word_popup_global_hint_label.setProperty("class", "checkbox-hint")
+        self._word_popup_global_hint_label.setWordWrap(True)
+        translator_window_layout.addWidget(self._word_popup_global_hint_label)
 
         scroll_layout.addWidget(self._translator_window_group)
 
@@ -1687,7 +1699,8 @@ class SettingsDialog(QDialog):
                    self._fixed_height_check, self._remember_size_check,
                    self._remember_position_check, self._always_on_top_check,
                    self._polishing_show_diff_check, self._animation_check,
-                   self._word_popup_check, self._disable_update_check,
+                   self._word_popup_check, self._word_popup_global_check,
+                   self._disable_update_check,
                    self._chat_shared_api_check):
             cb.setIcon(self._cached_check_icon if cb.isChecked() else self._cached_uncheck_icon)
         self._applied_theme_signature = self._get_theme_signature()
@@ -2211,9 +2224,11 @@ class SettingsDialog(QDialog):
         always_on_top = self._config.get('translator_window.always_on_top', False)
         self._always_on_top_check.setChecked(always_on_top)
 
-        # 划词查词选项
+        # 划词查词选项（应用内 / 应用外分开）
         word_popup_enabled = self._config.get('word_popup.enabled', True)
         self._word_popup_check.setChecked(word_popup_enabled)
+        word_popup_global_enabled = self._config.get('word_popup.global_enabled', True)
+        self._word_popup_global_check.setChecked(word_popup_global_enabled)
 
         self._auto_start_check.setChecked(self._config.get('startup.auto_start', False))
 
@@ -2598,9 +2613,11 @@ class SettingsDialog(QDialog):
             always_on_top = self._always_on_top_check.isChecked()
             self._config.set('translator_window.always_on_top', always_on_top)
 
-            # 划词查词
+            # 划词查词（应用内 / 应用外分开）
             word_popup_enabled = self._word_popup_check.isChecked()
             self._config.set('word_popup.enabled', word_popup_enabled)
+            word_popup_global_enabled = self._word_popup_global_check.isChecked()
+            self._config.set('word_popup.global_enabled', word_popup_global_enabled)
 
             auto_start = self._auto_start_check.isChecked()
             self._config.set('startup.auto_start', auto_start)
@@ -3994,11 +4011,23 @@ class MainController(QObject):
         mouse_pos = self._selection_detector.get_last_position()
 
         if mouse_pos is None:
-            from PyQt6.QtGui import QCursor
-            cursor = QCursor.pos()
+            # 别名导入：避免遮蔽模块级 QCursor（下方查词分支使用全局 QCursor）
+            from PyQt6.QtGui import QCursor as _QCursorFallback
+            cursor = _QCursorFallback.pos()
             mouse_pos = (cursor.x(), cursor.y())
 
         selected_text = text.strip()
+
+        # 查词优先：单个英文单词直接弹释义弹窗（与翻译窗口内划词查词一致），
+        # 不再弹工具栏/图标按钮；由设置「启用划词查词（应用外）」开关控制。
+        # 锚点取实时鼠标位置（mouse_pos 是选区包围盒左上角，可能离鼠标很远），
+        # 卡片出现在鼠标右下角
+        if self._config.get('word_popup.global_enabled', True) \
+                and is_english_word(selected_text):
+            self._translate_button.hide()
+            self._selection_toolbar.hide_toolbar()
+            show_word_popup(selected_text, QCursor.pos(), None)
+            return
 
         if trigger_mode == 'toolbar':
             # 悬浮工具栏模式（豆包 / Cherry Studio 风格）

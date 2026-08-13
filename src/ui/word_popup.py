@@ -556,10 +556,7 @@ class WordPopup(QFrame):
 
         # === 第 3 步：主题 & 尺寸 & 定位 ===
         self._apply_theme()
-        self.adjustSize()
-        w = max(self._MIN_WIDTH, min(self.sizeHint().width(), self._MAX_WIDTH))
-        self.setFixedWidth(w)
-        self.adjustSize()
+        self._resize_to_content()
         self._anchor_pos = QPoint(global_pos)
         self._position_popup(global_pos)
 
@@ -595,6 +592,27 @@ class WordPopup(QFrame):
 
         # === 第 5 步：后台查询释义（UI 已显示新单词和「查询中…」） ===
         self._start_lookup()
+
+    def _resize_to_content(self):
+        """按内容重算窗口宽度并调整尺寸。
+
+        加载态 sizeHint 可能低估 header 行宽度导致长单词截断，
+        这里用字体度量显式计算单词文本宽度作为下限兜底
+        （两个按钮 60 + 间距 16 + 内容边距 28 = 104px，另加 12px
+        安全余量）。
+        """
+        need_w = 0
+        if self._word:
+            try:
+                need_w = (self._word_label.fontMetrics()
+                          .horizontalAdvance(self._word) + 116)
+            except Exception:
+                need_w = 0
+        self.adjustSize()
+        w = min(self._MAX_WIDTH,
+                max(self._MIN_WIDTH, self.sizeHint().width(), need_w))
+        self.setFixedWidth(w)
+        self.adjustSize()
 
     def _cancel_lookup(self):
         """取消进行中的词典查询（世代递增，旧回调自动丢弃）。"""
@@ -679,10 +697,7 @@ class WordPopup(QFrame):
         else:
             self._mnemonic_label.hide()
 
-        self.adjustSize()
-        w = max(self._MIN_WIDTH, min(self.sizeHint().width(), self._MAX_WIDTH))
-        self.setFixedWidth(w)
-        self.adjustSize()
+        self._resize_to_content()
         if self.isVisible():
             self._position_popup(self._anchor_pos)
 
@@ -692,9 +707,7 @@ class WordPopup(QFrame):
             return
         self._loading_label.hide()
         self._definition_label.setText(f"(查询失败: {error_msg})")
-        self.adjustSize()
-        w = max(self._MIN_WIDTH, min(self.sizeHint().width(), self._MAX_WIDTH))
-        self.setFixedWidth(w)
+        self._resize_to_content()
 
     # ------------------------------------------------------------------
     # 收藏操作
@@ -772,7 +785,9 @@ class WordPopup(QFrame):
                             click_pos = event.globalPos()
 
                         # 弹窗内部 → 不关闭（允许点击收藏按钮等）
-                        if _popup_screen_rect(popup).contains(click_pos):
+                        # globalPosition() 为逻辑坐标，必须配逻辑矩形
+                        _rect = _popup_screen_rect(popup, native=False)
+                        if _rect.contains(click_pos):
                             return False
 
                         # 弹窗外部任意位置 → 关闭
@@ -849,20 +864,26 @@ class _RECT32(ctypes.Structure):
                 ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
 
 
-def _popup_screen_rect(popup):
-    """弹窗实时屏幕矩形：优先 Win32 GetWindowRect（原生窗口为事实来源）。
+try:
+    _user32_gwr = ctypes.windll.user32.GetWindowRect
+    # 必须声明 argtypes/restype：否则 64 位下 HWND 按 32 位传参被截断
+    _user32_gwr.argtypes = [ctypes.c_void_p, ctypes.POINTER(_RECT32)]
+    _user32_gwr.restype = ctypes.c_int
+except Exception:
+    _user32_gwr = None
 
-    layered 窗口尺寸变化后 Qt geometry() 可能与原生窗口失步，
-    点击命中判定必须用原生矩形，否则卡片变大后点击新增区域
-    会被误判为「卡片外」而关闭。"""
-    if sys.platform == 'win32':
+
+def _popup_screen_rect(popup, native=True):
+    """弹窗屏幕矩形。坐标系必须与比较方配对：
+    native=True  → Win32 物理像素（配低级钩子的物理坐标）
+    native=False → Qt 逻辑像素 geometry()（配 QCursor.pos()）
+    混用两种坐标系在系统缩放（125%/150%）下会把卡内点击误判为卡外。"""
+    if native and _user32_gwr is not None:
         try:
             from PyQt6.QtCore import QRect
             r = _RECT32()
-            if ctypes.windll.user32.GetWindowRect(
-                    int(popup.winId()), ctypes.byref(r)):
-                return QRect(r.left, r.top,
-                             r.right - r.left, r.bottom - r.top)
+            if _user32_gwr(int(popup.winId()), ctypes.byref(r)):
+                return QRect(r.left, r.top, r.right - r.left, r.bottom - r.top)
         except Exception:
             pass
     return popup.geometry()
@@ -902,7 +923,8 @@ def _on_global_mouse_event(nCode, wParam, lParam):
                     else:
                         info = _MSLLHOOKSTRUCT.from_address(int(lParam))
                         click_pos = QPoint(info.pt.x, info.pt.y)
-                        if not _popup_screen_rect(popup).contains(click_pos):
+                        _rect = _popup_screen_rect(popup, native=True)
+                        if not _rect.contains(click_pos):
                             # 延迟到事件循环执行，避免在钩子回调里做耗时操作
                             QTimer.singleShot(0, popup.hide_popup)
             except Exception:

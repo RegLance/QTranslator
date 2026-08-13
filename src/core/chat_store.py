@@ -171,6 +171,27 @@ class ChatStore:
             s['updated_at'] = _now_ms()
             self._save()
 
+    def truncate_messages(self, session_id: str, keep_count: int):
+        """回退对话：保留前 keep_count 条消息，删除其后全部。
+        回退点落在摘要覆盖范围内时清空摘要（摘要含被删消息的信息，
+        不清空会让后续上下文残留「未来」内容）"""
+        s = self.get_session(session_id)
+        if not s:
+            return
+        keep = max(0, int(keep_count))
+        msgs = s.get('messages', [])
+        if keep >= len(msgs):
+            return
+        s['messages'] = msgs[:keep]
+        # summary 是前 summary_count 条消息的压缩产物；保留条数不超过
+        # 摘要覆盖数时，摘要必然含被删消息信息，必须一并清空
+        if keep <= int(s.get('summary_count', 0) or 0):
+            s['summary'] = ""
+            s['summary_count'] = 0
+        s['updated_at'] = _now_ms()
+        self._save()
+        log_info(f"对话已回退: {session_id}, 保留 {keep} 条消息")
+
     def get_context_messages(self, session_id: str) -> List[Dict[str, str]]:
         """获取会话的全部上下文消息（不限制条数，超窗口由摘要压缩处理）"""
         s = self.get_session(session_id)

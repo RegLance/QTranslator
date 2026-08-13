@@ -473,6 +473,14 @@ except ImportError:
 
 _startup_log(f"模块导入总计: {(time.time() - _import_t0) * 1000:.0f}ms")
 
+def _auto_start_exe_path() -> str:
+    """当前生效的自启命令：打包版为 exe 路径，开发模式为 python + __main__.py。"""
+    if getattr(sys, 'frozen', False):
+        return sys.executable
+    main_py = Path(__file__).parent.parent / "__main__.py"
+    return f'"{sys.executable}" "{main_py}"'
+
+
 def setup_auto_start(enable: bool):
     """设置开机自启（Windows）"""
     try:
@@ -481,11 +489,7 @@ def setup_auto_start(enable: bool):
         app_id = APP_NAME.replace(" ", "")
         
         if enable:
-            if getattr(sys, 'frozen', False):
-                exe_path = sys.executable
-            else:
-                main_py = Path(__file__).parent.parent / "__main__.py"
-                exe_path = f'"{sys.executable}" "{main_py}"'
+            exe_path = _auto_start_exe_path()
             
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
             winreg.SetValueEx(key, app_id, 0, winreg.REG_SZ, exe_path)
@@ -502,6 +506,34 @@ def setup_auto_start(enable: bool):
     except Exception as e:
         log_error(f"设置开机自启失败: {e}")
         return False
+
+
+def sync_auto_start_path():
+    """开机自启自愈：auto_start 开启时，若注册表中的启动命令与当前
+    不一致（用户替换/移动了 exe，或键值缺失），重写为当前路径，
+    保证更换 exe 后开机自启不失效。"""
+    try:
+        if not get_config().get('startup.auto_start', False):
+            return
+        import winreg
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        app_id = APP_NAME.replace(" ", "")
+        exe_path = _auto_start_exe_path()
+        current = None
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
+                                 winreg.KEY_READ)
+            try:
+                current, _ = winreg.QueryValueEx(key, app_id)
+            except FileNotFoundError:
+                current = None
+            winreg.CloseKey(key)
+        except FileNotFoundError:
+            current = None
+        if current != exe_path:
+            setup_auto_start(True)
+    except Exception as e:
+        log_error(f"开机自启自愈失败: {e}")
 
 
 class SettingsDialog(QDialog):
@@ -4269,6 +4301,9 @@ def main():
     splash = SplashScreen()
     splash.show_splash()
     app.processEvents()
+
+    # 开机自启自愈：exe 被替换/移动后，把注册表自启路径重写为当前路径
+    sync_auto_start_path()
 
     try:
         from .config import APP_ID, APP_NAME

@@ -736,6 +736,46 @@ class _ReserveWidget(QWidget):
         return self.sizeHint().height()
 
 
+class _BubbleRow(QWidget):
+    """消息气泡行：悬停时在右上角显示回退按钮（悬浮定位，不入布局，
+    不影响气泡宽度度量）"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._hover_btn: Optional[QPushButton] = None
+
+    def set_hover_button(self, btn: QPushButton):
+        self._hover_btn = btn
+        btn.setParent(self)
+        btn.hide()
+        self._layout_btn()
+
+    def _layout_btn(self):
+        if self._hover_btn is not None:
+            self._hover_btn.move(
+                max(self.width() - self._hover_btn.width() - 5, 0),
+                max(self.height() - self._hover_btn.height() - 2, 0))
+            self._hover_btn.raise_()
+
+    def enterEvent(self, event):
+        if self._hover_btn is not None:
+            self._hover_btn.show()
+            self._layout_btn()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        # 移入子控件（气泡文字/按钮）同样触发 leave：
+        # 光标真正离开本行区域才隐藏
+        if self._hover_btn is not None and self._hover_btn.isVisible():
+            if not self.rect().contains(self.mapFromGlobal(QCursor.pos())):
+                self._hover_btn.hide()
+        super().leaveEvent(event)
+
+    def resizeEvent(self, event):
+        self._layout_btn()
+        super().resizeEvent(event)
+
+
 class _SmoothWheelScroll(QScrollArea):
     """滚轮平滑滚动：滚轮输入累加为目标偏移，QTimeLine 逐帧缓动推进
     （OutQuad），替代默认阶梯式 singleStep 跳变。动画中再滚轮则从
@@ -2060,7 +2100,7 @@ class ChatWindow(QWidget):
             wl.addWidget(hint)
             self._message_layout.addWidget(wrap)
 
-        for m in messages:
+        for _idx, m in enumerate(messages):
             role = m.get('role')
             content = m.get('content', '')
             if role == 'assistant' and not content and not (m.get('reasoning') or ''):
@@ -2071,8 +2111,11 @@ class ChatWindow(QWidget):
                 # 旧消息存储时未拆分内嵌思考标签：渲染时拆到思考框
                 reasoning, content = _split_think_tags(content)
             if role in ('user', 'assistant'):
+                # 流式生成中不显示回退按钮（此刻数据正在写入）
+                _rw = None if (self._worker and self._worker.isRunning()) else _idx
                 row, _ = self._make_bubble(
-                    role, content, reasoning=reasoning, usable=usable)
+                    role, content, reasoning=reasoning, usable=usable,
+                    rewind_index=_rw)
                 self._message_layout.addWidget(row)
 
         if streaming_extra or streaming_reasoning:
@@ -2140,9 +2183,11 @@ class ChatWindow(QWidget):
 
     def _make_bubble(self, role: str, content: str, reasoning: str = "",
                      html_ready: bool = False, usable: int = 400,
-                     reasoning_plain: bool = False):
+                     reasoning_plain: bool = False,
+                     rewind_index: Optional[int] = None):
         """创建单条消息气泡（返回行容器与正文 QLabel）；
-        带思考过程时思考块作为独立气泡叠在正文气泡上方"""
+        带思考过程时思考块作为独立气泡叠在正文气泡上方；
+        rewind_index 非 None 时悬停显示「回退到此」按钮"""
         text_html = content if html_ready else _format_content(content)
         label = QLabel(text_html)
         label.setTextFormat(Qt.TextFormat.RichText)
@@ -2152,7 +2197,7 @@ class ChatWindow(QWidget):
         # 撑满聊天区可用宽度（不加 maxWidth 会按未换行宽度撑大容器 → 溢出截断）
         label.setMaximumWidth(usable)
 
-        row = QWidget()
+        row = _BubbleRow()
         lay = QVBoxLayout(row)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)  # 思考气泡与正文气泡的间距
@@ -2162,7 +2207,82 @@ class ChatWindow(QWidget):
             lay.addWidget(self._make_reasoning_bubble(reasoning, usable, reasoning_plain))
         label.setObjectName("bubbleUser" if role == 'user' else "bubbleAssistant")
         lay.addWidget(label)  # 占满整行，与聊天区同宽
+        if rewind_index is not None:
+            _bubble_bg = (get_theme()['accent_color'] if role == 'user'
+                          else get_theme()['bg_secondary'])
+            row.set_hover_button(self._make_rewind_btn(rewind_index, _bubble_bg))
+            self._install_rewind_menu(label, rewind_index, content)
         return row, label
+
+    @staticmethod
+    def _contrast_color(hex_color: str) -> str:
+        """给定背景色返回对比前景色（亮度 < 0.5 → 白，否则黑）"""
+        try:
+            h = hex_color.lstrip('#')
+            r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+            lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+            return '#ffffff' if lum < 0.5 else '#000000'
+        except Exception:
+            return '#ffffff'
+
+    def _make_rewind_btn(self, index: int, bubble_bg: str) -> QPushButton:
+        """创建回退按钮（图标色与气泡底色对比，点击回退到第 index 条）"""
+        btn = QPushButton("↵")
+        btn.setObjectName("rewindBtn")
+        btn.setFixedSize(22, 22)
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setToolTip("回退到这条消息（删除之后的对话）")
+        theme = get_theme()
+        # 透明背景无边框；图标色按气泡底色对比（深气泡白/浅气泡黑）
+        icon_color = self._contrast_color(bubble_bg)
+        btn.setStyleSheet(f"""
+            QPushButton#rewindBtn {{
+                background-color: transparent;
+                color: {icon_color};
+                border: none;
+                border-radius: 11px;
+                font-size: 14px;
+            }}
+            QPushButton#rewindBtn:hover {{
+                background-color: {theme['button_hover']};
+                color: {icon_color};
+            }}
+        """)
+        btn.clicked.connect(
+            lambda _=False, i=index: self._rewind_to(i))
+        return btn
+
+    def _install_rewind_menu(self, label, index: int, content: str):
+        """消息气泡右键菜单：回退到这条消息 / 复制消息"""
+        label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        label.customContextMenuRequested.connect(
+            lambda pos, i=index, c=content: self._show_message_menu(
+                i, c, label.mapToGlobal(pos)))
+
+    def _show_message_menu(self, index: int, content: str, global_pos):
+        """消息右键菜单（流式生成中不显示回退项）"""
+        menu = QMenu(self)
+        act_rewind = None
+        if not (self._worker and self._worker.isRunning()):
+            act_rewind = menu.addAction("↵ 回退到这条消息")
+            menu.addSeparator()
+        act_copy = menu.addAction("复制消息")
+        chosen = menu.exec(global_pos)
+        if chosen is act_rewind and act_rewind is not None:
+            self._rewind_to(index)
+        elif chosen is act_copy:
+            QApplication.clipboard().setText(content)
+
+    def _rewind_to(self, index: int):
+        """回退对话到第 index 条消息：保留该条及其之前全部，删除其后对话"""
+        if self._worker and self._worker.isRunning():
+            return  # 流式生成中数据正在写入，禁止回退
+        if not self._current_session_id:
+            return
+        self._store.truncate_messages(self._current_session_id, index + 1)
+        self._render_messages(force_scroll=True)
+        self._input_edit.setFocus()
 
     def _make_reasoning_bubble(self, reasoning: str, usable: int, plain: bool = False) -> QWidget:
         """思考过程独立气泡：浅底 + 虚线边框，与正文气泡视觉区分"""
@@ -2358,6 +2478,12 @@ class ChatWindow(QWidget):
             # 定稿时行已在布局中、视口宽度可信：与流式测量保持同一宽度
             # 基准，避免 width_hint=usable（更宽）少折行导致框高回缩
             self._fit_reasoning_scroll(rs)
+        # 定稿完成后为本行补回退按钮（流式期不创建，避免生成中回退）
+        if isinstance(row, _BubbleRow) and row._hover_btn is None:
+            row.set_hover_button(self._make_rewind_btn(
+                len(messages) - 1, get_theme()['bg_secondary']))
+            self._install_rewind_menu(label, len(messages) - 1,
+                                      last.get('content', ''))
         self._stream_row = None
         self._stream_label = None
         self._stream_reason_label = None

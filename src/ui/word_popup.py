@@ -772,7 +772,7 @@ class WordPopup(QFrame):
                             click_pos = event.globalPos()
 
                         # 弹窗内部 → 不关闭（允许点击收藏按钮等）
-                        if popup.geometry().contains(click_pos):
+                        if _popup_screen_rect(popup).contains(click_pos):
                             return False
 
                         # 弹窗外部任意位置 → 关闭
@@ -844,6 +844,30 @@ _WM_BUTTON_DOWN = (0x0201, 0x0204, 0x0207)  # L/R/M BUTTONDOWN
 _WM_DBLCLK = (0x0203, 0x0206, 0x0209)  # L/R/M BUTTONDBLCLK
 
 
+class _RECT32(ctypes.Structure):
+    _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
+                ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+
+
+def _popup_screen_rect(popup):
+    """弹窗实时屏幕矩形：优先 Win32 GetWindowRect（原生窗口为事实来源）。
+
+    layered 窗口尺寸变化后 Qt geometry() 可能与原生窗口失步，
+    点击命中判定必须用原生矩形，否则卡片变大后点击新增区域
+    会被误判为「卡片外」而关闭。"""
+    if sys.platform == 'win32':
+        try:
+            from PyQt6.QtCore import QRect
+            r = _RECT32()
+            if ctypes.windll.user32.GetWindowRect(
+                    int(popup.winId()), ctypes.byref(r)):
+                return QRect(r.left, r.top,
+                             r.right - r.left, r.bottom - r.top)
+        except Exception:
+            pass
+    return popup.geometry()
+
+
 class _POINT(ctypes.Structure):
     _fields_ = [('x', ctypes.c_long), ('y', ctypes.c_long)]
 
@@ -878,7 +902,7 @@ def _on_global_mouse_event(nCode, wParam, lParam):
                     else:
                         info = _MSLLHOOKSTRUCT.from_address(int(lParam))
                         click_pos = QPoint(info.pt.x, info.pt.y)
-                        if not popup.geometry().contains(click_pos):
+                        if not _popup_screen_rect(popup).contains(click_pos):
                             # 延迟到事件循环执行，避免在钩子回调里做耗时操作
                             QTimer.singleShot(0, popup.hide_popup)
             except Exception:

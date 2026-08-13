@@ -186,9 +186,18 @@ class Translator:
             )
 
             full_text = ""
+            _leading_stripped = False
             for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
+                    if not _leading_stripped:
+                        # 部分模型输出以空行/空白开头，会导致译文框顶部
+                        # 出现空行；在首个可见字符出现前剥离前导空白，
+                        # 正文内部的段落空行不受影响
+                        content = content.lstrip()
+                        if not content:
+                            continue
+                        _leading_stripped = True
                     full_text += content
                     if on_chunk:
                         on_chunk(content)
@@ -472,7 +481,8 @@ Examples:
         # 检查缓存
         cached_result = self._get_cached_result(cache_key)
         if cached_result:
-            yield cached_result.translated_text
+            # 旧缓存可能存有前导空行，yield 前剥离兜底
+            yield cached_result.translated_text.lstrip()
             return
 
         # 执行流式请求

@@ -267,6 +267,7 @@ class StreamingTranslationWorker(QThread):
             from src.core.translator import get_translator
             translator = get_translator()
             full_text = ""
+            _trdbg_n = 0  # [TRDBG] 原始 chunk 计数
 
             # 使用智能翻译（自动检测语言）
             for chunk in translator.translate_stream(self._text, self._target_language, auto_detect=True):
@@ -274,10 +275,18 @@ class StreamingTranslationWorker(QThread):
                     return
 
                 if chunk:
+                    # [TRDBG] 临时排查日志：模型原始输出前 3 个片段
+                    if _trdbg_n < 3:
+                        import sys as _sys
+                        print('[TRDBG] raw chunk#%d=%r' % (_trdbg_n, chunk[:80]), file=_sys.stderr)
+                    _trdbg_n += 1
                     full_text += chunk
                     self.chunk_received.emit(chunk)
 
             if not self._is_cancelled:
+                # [TRDBG] 临时排查日志：worker 汇总结果头部
+                import sys as _sys
+                print('[TRDBG] worker full_text head=%r' % full_text[:120], file=_sys.stderr)
                 self.translation_finished.emit(full_text)
 
         except Exception as e:
@@ -2600,6 +2609,9 @@ class TranslatorWindow(QWidget):
     def _do_translation_finished(self, result: str):
         """实际执行翻译完成操作"""
         try:
+            # [TRDBG] 临时排查日志：最终结果头部（与 worker 对比判断空行来源）
+            import sys as _sys
+            print('[TRDBG] finished result head=%r' % (result or '')[:120], file=_sys.stderr)
             self._is_streaming = False
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)

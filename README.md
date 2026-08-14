@@ -5,7 +5,7 @@
 <h1 align="center">QTranslator</h1>
 
 <p align="center">
-  <strong>Desktop LLM translator — capture, polish, listen. One tray app, infinite contexts.</strong>
+  <strong>Your AI-powered translation companion — capture, translate, polish, converse. One tray app, infinite possibilities.</strong>
 </p>
 
 <p align="center">
@@ -21,90 +21,115 @@
 
 ---
 
-**QTranslator** is a cross‑platform tray utility that plugs your workflow into modern LLM APIs. Select text anywhere or hit a shortcut — translations stream in instantly, while polish, summaries, vocabulary, and TTS sit behind the same minimal surface.
+**QTranslator** is a desktop AI assistant that seamlessly integrates modern LLM capabilities into your daily workflow. Select text anywhere, get instant translations with streaming output, polish your writing with diff highlighting, manage vocabulary, and chat with AI — all without leaving your current window.
 
-Designed for researchers, multilingual teams, and power users who want **IDE‑grade ergonomics** without leaving the active window.
+Built for researchers, content creators, language learners, and power users who demand **professional-grade tools** without the friction of context switching.
 
 <div align="center">
   <img src="Animation.gif" alt="QTranslator demo" width="800" />
 </div>
 
-## Table of contents
+## ✨ Why QTranslator?
 
-- [Highlights](#highlights)
-- [Features](#features)
-- [Quick start](#quick-start)
-- [Usage](#usage)
-- [Configuration](#configuration)
-- [Architecture](#architecture)
-- [Development](#development)
-- [Disclaimer](#disclaimer)
-- [License](#license)
+| Dimension | Experience |
+|-----------|------------|
+| **Flow** | Global hotkeys + smart selection detection + hover button — fewer context switches than a browser tab |
+| **Intelligence** | OpenAI-compatible APIs, streaming replies, phrase-level diff highlighting, AI chat with Skills & MCP tools |
+| **Learning** | Vocabulary management, story generation, word cards with phonetics & examples — turn translations into retention |
+| **Control** | Offline or Edge TTS; local or remote language detection; customizable themes, hotkeys, and behaviors |
 
-## Highlights
+##  Features
 
-| Pillar | What you get |
-|--------|----------------|
-| **Flow** | Global hotkeys + selection detection + optional hover button — less context switching than a browser tab |
-| **Intelligence** | OpenAI‑compatible APIs, streaming replies, polishing with optional diff highlighting, summarization |
-| **Privacy‑aware** | Optional offline or Edge TTS; language detection can stay local or use remote engines with fallback |
+### Core Translation
 
-## Features
+- **Hover Translate** — Select text, click the translate button, get **streaming** results instantly
+- **Selection Translate** — Global shortcut (`Ctrl+Shift+T` by default) captures selection and opens a popup; perfect for **Excel, PowerPoint** where hover button is suppressed
+- **Translator Window** — Standalone window for longer texts; supports Chinese, English, Japanese, Korean, and more
+- **Polish** — Improve wording with optional **phrase-level diff** (soft red removals / soft green additions)
+- **Summarize** — Generate structured summaries for long inputs
+- **Selection Writing** — Translate and replace in place; optional **keep original** below the result
 
-### Core
+### AI Chat
 
-- **Hover translate** — After selection, a translate button can appear; results support **streaming**
-- **Selection translate** — Global shortcut (default **`Ctrl+Shift+T`**) fetches selection and opens a popup; ideal when **Excel / PowerPoint** hide the hover button (see notes below)
-- **Translator window** — Standalone window for longer text; target languages include Chinese / English / Japanese / Korean / etc.
-- **Polish** — Improve wording; optional **phrase‑level diff** (soft red removals / soft green additions)
-- **Summarize** — Structured summaries for long inputs
-- **Selection writing** — Translate and replace in place; optional **keep original** below the result
+- **Multi-session Chat** — Independent chat window with session management (create, rename, delete)
+- **Streaming Output** — Real-time token-by-token responses
+- **Skills** — Inject specialized capabilities via top selector
+- **MCP Tools** — Enable configured MCP tools for extended functionality
+- **Rewind** — Click ↵ on any message (or right-click → rewind) to discard subsequent conversation and restart from that point
+- **Clear Context** — Let AI forget previous conversation with one click
+- **Independent API** — Share translation API config or set separate credentials for chat
 
-### Learning & vocabulary
+### Vocabulary & Learning
 
-- **Starred entries** — Save **source + translation** from the result pane (validated against current translation)
-- **Vocabulary hub** — Tray menu: browse, search, delete, export JSON, **TTS**
-- **Vocabulary stories** — Up to **50** starred terms (by review count) → short generated passages (~160 words) by genre, streaming
+- **Word Cards** — Double-click any English word (in-app or system-wide) to see phonetics, definitions, forms, mnemonics; supports favorites and TTS
+- **Starred Entries** — Save source + translation from result pane (validated against current input)
+- **Vocabulary Hub** — Browse, search, delete, export JSON, TTS from tray menu
+- **Vocabulary Stories** — Up to **50** starred terms (by review count) → generate short passages (~160 words) by genre, streaming output
 
-### Quality of life
+### Quality of Life
 
-- **History** — Persistent translation history
-- **Language detection** — Fixed direction (Chinese→English, others→Chinese); engines: Baidu / Google / Bing (online, with **local fallback**) or **local only**
+- **Translation History** — Persistent history for review and management
+- **Language Detection** — Fixed direction (Chinese→English, others→Chinese); engines: Baidu / Google / Bing (online with **local fallback**) or **local only**
 - **TTS** — System offline or **Edge online** (`edge-tts`, falls back to system)
-- **Word detail** — Definitions, phonetics, examples for word‑level queries
+- **Word Detail** — Definitions, phonetics, examples for word-level queries
 - **Theming** — Dark / light + accent themes (ocean, forest, purple, warm orange, rose, mint, custom)
 - **Hotkeys** — Wake window, writing, selection translate — all **rebindable**
-- **Window behavior** — Optional fixed height, remember position
-- **Default action** — Clicking Translate / Polish / Summarize sets the **default** for **`Enter`**
-- **Launch at login** — Optional autostart
+- **Window Behavior** — Optional fixed height, remember position
+- **Default Action** — Clicking Translate / Polish / Summarize sets the **default** for **Enter**
+- **Launch at Login** — Optional autostart
+- **Selection Blacklist** — Exclude specific apps from hover button to avoid conflicts with built-in toolbars
+- **Update Check** — Auto-detect new versions with title bar notification; disable in settings
 
-## Quick start
+## 🎯 Quick Start
 
-1. **Tray → Settings** — set **API Key**, **Base URL**, and **Model** (OpenAI‑compatible)
-2. Select text in any app, or open the **translator window** from the tray
-3. Prefer **Selection translate** in Office apps when the hover button is suppressed
+1. **Tray → Settings** — configure **API Key**, **Base URL**, and **Model** (OpenAI-compatible)
+2. Select text in any app, or open the **translator window** from tray
+3. Prefer **Selection Translate** (`Ctrl+Shift+T`) in Office apps when hover button is suppressed
 
-## Usage
+##  Usage Guide
 
-### First run
+### First Run
 
-1. Right‑click the tray icon → **Settings**
+1. Right-click tray icon → **Settings**
 2. Configure **API Key**, **Base URL**, and **Model**
-3. Save — you are ready
+3. Save — you're ready
 
-### Hover vs selection
+### Hover vs Selection
 
-In some apps (**Excel**, **PowerPoint**), the hover button may be **disabled by default** to avoid conflicts with built‑in selection UI. **Select text**, then press **Selection translate** (`Ctrl+Shift+T` by default).
+In some apps (**Excel**, **PowerPoint**), the hover button is **disabled by default** to avoid conflicts with built-in selection UI. **Select text**, then press **Selection Translate** (`Ctrl+Shift+T`).
 
-If nothing is captured, try **Ctrl+C**, or ensure focus is inside editable/readable content. Capture paths include editor hooks, UI Automation, `selection‑hook`, and clipboard probing when needed.
+If nothing is captured, try **Ctrl+C** first, or ensure focus is inside editable/readable content. Capture paths include editor hooks, UI Automation, `selection-hook`, and clipboard probing.
 
-### Vocabulary & stories
+### Word Cards
 
-**Vocabulary**: After translating, tap the **star** in the result pane. Open **Vocabulary** from the tray.
+- **In-app**: Settings → Translator Window → enable "Enable word lookup (in-app)", double-click single English word in source/target text
+- **System-wide**: Enable "Enable word lookup (system-wide)", double-click word anywhere on desktop (browser, documents, etc.)
+- Card shows phonetics, definitions, forms, mnemonics; supports favorites and TTS
+- Click outside card to close; double-click new word during lookup switches directly
 
-**Stories**: Pick a genre, **Generate story** — up to 50 terms prioritized by review count; streaming output; optional **stop** and **read aloud**.
+### AI Chat
 
-### Translator window shortcuts
+- **Entry**: Title bar "AI" button in translator window, or tray → AI Chat
+- **Sessions**: Left sidebar supports create, rename, delete; conversations saved locally
+- **Skills**: Top selector injects specialized capabilities
+- **MCP**: Enable configured MCP tools
+- **Rewind**: Hover message → click ↵ (or right-click → rewind) to discard subsequent conversation
+- **Clear Context**: Button to let AI forget previous conversation
+- **API**: Settings → AI Chat → uncheck "Share API config with translation" for separate credentials
+
+### Vocabulary & Stories
+
+**Vocabulary**: After translating, tap the **star** in result pane. Open **Vocabulary** from tray.
+
+**Stories**: Pick genre → **Generate story** — up to 50 terms prioritized by review count; streaming output; optional **stop** and **read aloud**.
+
+### Selection Blacklist
+
+- Blacklisted apps won't show hover button (avoids conflicts with Excel, PowerPoint built-in toolbars)
+- Settings → Selection Blacklist: left = active blacklist (click → to remove), right = removed items (click ← to re-add)
+- Manual entry: type process name directly
+
+### Translator Window Shortcuts
 
 | Action | Default |
 |--------|---------|
@@ -117,9 +142,9 @@ If nothing is captured, try **Ctrl+C**, or ensure focus is inside editable/reada
 
 Customize under **Settings → Hotkeys**.
 
-## Configuration
+## ⚙️ Configuration
 
-Configuration file **`config.yaml`** lives in the app data directory (**Windows**: `%LOCALAPPDATA%\QTranslator`).
+Configuration file **`config.yaml`** lives in app data directory (**Windows**: `%LOCALAPPDATA%\QTranslator`).
 
 ```yaml
 translator:
@@ -163,18 +188,18 @@ startup:
   auto_start: false
 ```
 
-## Architecture
+## 🏗️ Architecture
 
 | Layer | Technology |
-|--------|------------|
+|-------|------------|
 | UI | PyQt6, borderless layouts, rich theming |
-| Translation | OpenAI SDK‑compatible endpoints, SSE streaming |
+| Translation | OpenAI SDK-compatible endpoints, SSE streaming |
 | Selection | `selection-hook` (Node native) + automation / clipboard pipeline |
 | Global shortcuts | `pynput` `GlobalHotKeys` |
 | TTS | pyttsx3 / `edge-tts` |
 | Language ID | Remote APIs + `langdetect` fallback |
 
-## Project layout
+## 📁 Project Layout
 
 ```
 QTranslator/
@@ -188,7 +213,7 @@ QTranslator/
 │   │   ├── translator.py
 │   │   ├── writing.py
 │   │   ├── text_capture.py
-│   │   └── selection_detector.py
+│   │   ── selection_detector.py
 │   ├── utils/
 │   │   ├── theme.py
 │   │   ├── history.py
@@ -199,18 +224,20 @@ QTranslator/
 │       ├── tray_icon.py
 │       ├── translate_button.py
 │       ├── translator_window.py
+│       ├── chat_window.py
+│       ├── word_popup.py
 │       ├── history_window.py
 │       ├── vocabulary_window.py
 │       ├── help_window.py
 │       └── splash_screen.py
 ├── native/
 │   └── selection-service.js
-└── assets/
+── assets/
 ```
 
-## Development
+## 🛠️ Development
 
-**Requirements**: Python **3.13+**, Node.js (for selection‑hook wiring).
+**Requirements**: Python **3.13+**, Node.js (for selection-hook wiring).
 
 ```bash
 pip install -r requirements.txt
@@ -226,15 +253,15 @@ python build.py
 
 Artifacts under **`dist/`**.
 
-## Disclaimer
+## ⚠️ Disclaimer
 
-- You **must supply** valid API credentials; usage is billed by your provider where applicable  
-- Streaming polish, summaries, and vocabulary stories **consume** your configured quota  
-- **Online** language detection may transmit short snippets  
-- **Edge TTS** needs network unless you rely on **system** voice  
-- Outputs are machine‑generated — verify critical content
+- You **must supply** valid API credentials; usage is billed by your provider where applicable
+- Streaming polish, summaries, vocabulary stories, and AI chat **consume** your configured quota
+- **Online** language detection may transmit short snippets
+- **Edge TTS** needs network unless you rely on **system** voice
+- Outputs are machine-generated — verify critical content
 
-## License
+## 📄 License
 
 MIT License
 

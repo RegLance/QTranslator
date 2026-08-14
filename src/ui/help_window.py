@@ -6,8 +6,9 @@ from PyQt6.QtWidgets import (
     QTextEdit
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QUrl
-from PyQt6.QtGui import QFont, QColor, QCursor, QDesktopServices, QMouseEvent
+from PyQt6.QtGui import QFont, QColor, QCursor, QDesktopServices, QMouseEvent, QIcon
 import subprocess
+from pathlib import Path
 
 try:
     from ..config import get_config, APP_NAME, APP_VERSION, BUILD_TIME, CONTACT_URL, UPDATE_INFO_TEXT
@@ -47,7 +48,7 @@ class HelpWindow(QWidget):
 
         # 窗口属性
         # 不常驻置顶：「始终置顶」设置只控制翻译窗口
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         # 用时置顶、切走降级：「始终置顶」设置只控制翻译窗口
         try:
             from ..utils.window_front import install_activation_topmost
@@ -55,6 +56,10 @@ class HelpWindow(QWidget):
             from src.utils.window_front import install_activation_topmost
         install_activation_topmost(self)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        # 任务栏图标
+        self._set_window_icon()
+
         self.setMinimumSize(500, 450)
         self.resize(560, 520)
 
@@ -445,6 +450,12 @@ class HelpWindow(QWidget):
         """)
         label.setWordWrap(True)
         layout.addWidget(label)
+
+    def _set_window_icon(self):
+        """设置窗口图标（任务栏图标）"""
+        icon_path = Path(__file__).parent.parent.parent / "assets" / "icon.png"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
     def mousePressEvent(self, event: QMouseEvent):
         """鼠标按下事件 - 支持标题栏拖动"""

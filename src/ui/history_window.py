@@ -58,7 +58,7 @@ class HistoryWindow(QWidget):
         # 设置无边框窗口属性
         # 不常驻置顶：「始终置顶」设置只控制翻译窗口
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
+            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
         )
         # 用时置顶、切走降级：「始终置顶」设置只控制翻译窗口
         try:

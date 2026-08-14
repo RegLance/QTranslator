@@ -556,7 +556,7 @@ class SettingsDialog(QDialog):
         # 设置无边框窗口属性
         # 不常驻置顶：「始终置顶」设置只控制翻译窗口
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
+            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
         )
         # 用时置顶、切走降级：「始终置顶」设置只控制翻译窗口
         try:
@@ -568,6 +568,9 @@ class SettingsDialog(QDialog):
         self.setMinimumSize(480, 620)
         self.resize(500, 680)
 
+        # 任务栏图标
+        self._set_window_icon()
+
         self._config = get_config()
         self._applied_theme_signature = None
         self._setup_ui()
@@ -578,6 +581,12 @@ class SettingsDialog(QDialog):
         # 居中显示
 
         self._center_window()
+
+    def _set_window_icon(self):
+        """设置窗口图标（任务栏图标）"""
+        icon_path = Path(__file__).parent.parent / "assets" / "icon.png"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
     def _center_window(self):
         """窗口居中显示"""

@@ -125,7 +125,7 @@ class VocabularyWindow(QWidget):
 
         # 不常驻置顶：「始终置顶」设置只控制翻译窗口
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
+            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
         )
         # 用时置顶、切走降级：「始终置顶」设置只控制翻译窗口
         try:
@@ -136,6 +136,9 @@ class VocabularyWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(560, 520)
         self.resize(720, 640)
+
+        # 任务栏图标
+        self._set_window_icon()
 
         self._vocabulary = get_vocabulary()
         self._big_bang_worker: Optional[BigBangWorker] = None
@@ -162,6 +165,12 @@ class VocabularyWindow(QWidget):
         painter.drawPolygon(*triangle)
         painter.end()
         return QIcon(pixmap)
+
+    def _set_window_icon(self):
+        """设置窗口图标（任务栏图标）"""
+        icon_path = Path(__file__).parent.parent.parent / "assets" / "icon.png"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
     def _setup_ui(self) -> None:
         theme = get_theme(self._theme_style)

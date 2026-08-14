@@ -1445,10 +1445,43 @@ class ChatWindow(QWidget):
         return pixmap
 
     def _set_window_icon(self):
-        """设置窗口图标（任务栏图标），与翻译窗口一致"""
-        icon_path = Path(__file__).parent.parent.parent / "assets" / "icon.png"
-        if icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
+        """设置窗口图标（任务栏图标），Win32 API 兜底确保打包后可用"""
+        import sys
+        # 解析资源路径（兼容打包环境）
+        if getattr(sys, 'frozen', False):
+            base = Path(sys._MEIPASS)
+        else:
+            base = Path(__file__).parent.parent.parent
+        icon_png = base / "assets" / "icon.png"
+        icon_ico = base / "assets" / "icon.ico"
+        # Qt 层设置（开发模式通常够用）
+        if icon_png.exists():
+            from PyQt6.QtGui import QIcon
+            self.setWindowIcon(QIcon(str(icon_png)))
+        # Win32 API 兜底：直接加载 ICO 并设置 WM_SETICON
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            LR_LOADFROMFILE = 0x0010
+            IMAGE_ICON = 1
+            WM_SETICON = 0x0080
+            ICON_SMALL = 0
+            ICON_BIG = 1
+            hicon = None
+            # 优先加载 ICO（包含多尺寸，任务栏效果最好）
+            if icon_ico.exists():
+                hicon = ctypes.windll.user32.LoadImageW(
+                    None, str(icon_ico), IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+            # 回退到 PNG
+            if not hicon and icon_png.exists():
+                hicon = ctypes.windll.user32.LoadImageW(
+                    None, str(icon_png), IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+            if hicon:
+                ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon)
+                ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon)
+        except Exception:
+            pass
+
 
     # ------------------------------------------------------------------
     # 窗口显示 / 拖动

@@ -126,6 +126,8 @@ class VocabularyWindow(QWidget):
         # 不常驻置顶：「始终置顶」设置只控制翻译窗口
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
         )
         # 用时置顶、切走降级：「始终置顶」设置只控制翻译窗口
         try:
@@ -133,6 +135,7 @@ class VocabularyWindow(QWidget):
         except ImportError:
             from src.utils.window_front import install_activation_topmost
         install_activation_topmost(self)
+        self._enable_windows_window_management()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(560, 520)
         self.resize(720, 640)
@@ -166,11 +169,72 @@ class VocabularyWindow(QWidget):
         painter.end()
         return QIcon(pixmap)
 
+
+    def _enable_windows_window_management(self):
+        """Windows Win32 样式：确保任务栏图标 + 系统快捷键"""
+        try:
+            if not __import__("sys").platform.startswith("win"):
+                return
+            import ctypes
+            hwnd = int(self.winId())
+            GWL_STYLE = -16
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+            WS_THICKFRAME = 0x00040000
+            WS_MINIMIZEBOX = 0x00020000
+            WS_MAXIMIZEBOX = 0x00010000
+            WS_SYSMENU = 0x00080000
+            new_style = style | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, new_style)
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            ctypes.windll.user32.SetWindowPos(
+                hwnd, 0, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+            )
+        except Exception:
+            pass
+
     def _set_window_icon(self):
-        """设置窗口图标（任务栏图标）"""
-        icon_path = Path(__file__).parent.parent.parent / "assets" / "icon.png"
-        if icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
+        """设置窗口图标（任务栏图标），Win32 API 兜底确保打包后可用"""
+        import sys
+        # 解析资源路径（兼容打包环境）
+        if getattr(sys, 'frozen', False):
+            base = Path(sys._MEIPASS)
+        else:
+            base = Path(__file__).parent.parent.parent
+        icon_png = base / "assets" / "icon.png"
+        icon_ico = base / "assets" / "icon.ico"
+        # Qt 层设置（开发模式通常够用）
+        if icon_png.exists():
+            from PyQt6.QtGui import QIcon
+            self.setWindowIcon(QIcon(str(icon_png)))
+        # Win32 API 兜底：直接加载 ICO 并设置 WM_SETICON
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            LR_LOADFROMFILE = 0x0010
+            IMAGE_ICON = 1
+            WM_SETICON = 0x0080
+            ICON_SMALL = 0
+            ICON_BIG = 1
+            hicon = None
+            # 优先加载 ICO（包含多尺寸，任务栏效果最好）
+            if icon_ico.exists():
+                hicon = ctypes.windll.user32.LoadImageW(
+                    None, str(icon_ico), IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+            # 回退到 PNG
+            if not hicon and icon_png.exists():
+                hicon = ctypes.windll.user32.LoadImageW(
+                    None, str(icon_png), IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+            if hicon:
+                ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon)
+                ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon)
+        except Exception:
+            pass
+
 
     def _setup_ui(self) -> None:
         theme = get_theme(self._theme_style)

@@ -210,13 +210,14 @@ class HelpWindow(QWidget):
 • AI 对话：独立的多会话对话窗口，流式输出，支持 Skills 与 MCP 工具，可回退到历史某句对话
 • 更新检查：自动检测新版本并在标题栏提示，可在设置中关闭
 • 开机自启：可在设置中开启，更换 exe 后启动路径自动修复
+• 划词黑名单：指定程序中不出现划词按钮，避免与软件自带浮动工具栏冲突，支持手动管理
         """, theme)
 
         # 使用方法
         self._add_section(self._help_layout, "使用方法", theme)
         self._add_text(self._help_layout, """
 1. 首次使用
-   右键点击托盘图标 → 设置，配置 API Key、Base URL 和 Model。
+   • 右键点击托盘图标 → 设置，配置 API Key、Base URL 和 Model。
 
 2. 划词翻译
    • 选中文本后会出现翻译按钮
@@ -288,6 +289,11 @@ class HelpWindow(QWidget):
 13. 更新检查与开机自启
    • 检测到新版本时标题栏出现 ⬆️ 按钮，点击即可更新；设置中勾选「禁用更新检查」可关闭
    • 设置中勾选「开机自动启动」后重启自动运行；更换或移动 exe 后下次启动会自动修复启动路径
+
+14. 划词黑名单
+   • 黑名单中的程序不显示划词按钮（避免与 Excel、PowerPoint 等软件自带的浮动工具栏冲突），可改用「选中翻译」快捷键
+   • 设置 → 划词黑名单：左侧为生效中的黑名单，点「→」移出；右侧为已移出的条目，点「←」重新加入
+   • 在下方输入框输入进程名（如 EXCEL.EXE）可手动添加；进程名可在任务管理器「详细信息」页查看
         """, theme)
 
         # 注意事项
@@ -379,13 +385,63 @@ class HelpWindow(QWidget):
         """)
         layout.addWidget(label)
 
+    @staticmethod
+    def _to_rich_text(text: str) -> str:
+        """帮助纯文本转富文本。
+
+        '•' 项目行用两列表格实现悬挂缩进：换行后的第二行从符号
+        右侧位置开始，而不是回到行首；其余行保持原样（行首空格
+        转为不换行空格，防止富文本压缩空白）。
+        """
+        import re as _re
+
+        def _esc(s: str) -> str:
+            return (s.replace('&', '&amp;')
+                     .replace('<', '&lt;')
+                     .replace('>', '&gt;'))
+
+        parts = []
+        _prev_bullet = False  # 上一条非空行是否为 • 子项
+        for raw in text.lstrip('\n').split('\n'):
+            line = raw.rstrip()
+            if not line.strip():
+                parts.append('&nbsp;<br/>')
+                _prev_bullet = False
+                continue
+            m = _re.match(r'^(\s*)•\s*(.*)$', line)
+            if m:
+                indent = '&nbsp;' * len(m.group(1))
+                parts.append(
+                    '<table cellspacing="0" cellpadding="0"><tr>'
+                    '<td valign="top">' + indent + '&bull;&nbsp;</td>'
+                    '<td>' + _esc(m.group(2)) + '</td></tr></table>')
+                _prev_bullet = True
+                continue
+            esc = _esc(line)
+            lead = len(esc) - len(esc.lstrip(' '))
+            # 数字编号条目（如 "2. 划词翻译"）：段首 nbsp 行保证上方空行，
+            # 段尾换行产生下方空行，确保每条使用方法上下都有空行
+            if _re.match(r'^\d+\.\s', line):
+                parts.append('&nbsp;<br/>' + '&nbsp;' * lead
+                             + esc[lead:] + '<br/>')
+            else:
+                # 普通段落紧跟 • 子项后也需要上空行（如更新信息中的版本号）
+                # Qt 会吞掉 table 后的第一个空段落，所以需要两个 &nbsp;<br/>
+                if _prev_bullet:
+                    prefix = '&nbsp;<br/>&nbsp;<br/>'
+                else:
+                    prefix = ''
+                parts.append(prefix + '&nbsp;' * lead + esc[lead:] + '<br/>')
+            _prev_bullet = False
+        return ''.join(parts)
+
     def _add_text(self, layout, text, theme):
-        """添加文本内容"""
-        label = QLabel(text)
+        """添加文本内容（富文本，项目符号行悬挂缩进）"""
+        label = QLabel(self._to_rich_text(text))
+        label.setTextFormat(Qt.TextFormat.RichText)
         label.setStyleSheet(f"""
             color: {theme['text_secondary']};
             font-size: 13px;
-            line-height: 1.6;
         """)
         label.setWordWrap(True)
         layout.addWidget(label)
@@ -573,7 +629,6 @@ class HelpWindow(QWidget):
                         widget.setStyleSheet(f"""
                             color: {theme['text_secondary']};
                             font-size: 13px;
-                            line-height: 1.6;
                         """)
 
 

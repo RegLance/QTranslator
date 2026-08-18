@@ -15,6 +15,9 @@ APP_ID = "com.qtranslator.app"
 APP_VERSION = "2.0.0"
 BUILD_TIME = "2026-04-24"
 
+# 配置文件结构版本号：升级版本时若需对旧配置文件做一次性迁移，递增此值并实现对应迁移逻辑
+CONFIG_VERSION = 1
+
 # 应用 URLs 和服务配置
 CONTACT_URL = "xxxx"
 UPDATE_CHECK_URL = "http://109.105.111.17:5005/update"
@@ -65,11 +68,14 @@ class Config:
 
         # 加载配置
         if self._config_path.exists():
+            raw_version = self._raw_config_version(str(self._config_path))
             self._config = self._load_config(str(self._config_path))
             # 验证加载的配置是否有效（至少包含基本结构）
             if not self._validate_config(self._config):
                 print("配置文件验证失败，尝试从备份恢复", file=sys.stderr)
                 self._restore_from_backup()
+                return
+            self._apply_migrations(raw_version)
         else:
             # 尝试从旧位置迁移
             self._migrate_from_old_location()
@@ -92,10 +98,12 @@ class Config:
         """从备份恢复配置"""
         if self._backup_path.exists():
             try:
+                raw_version = self._raw_config_version(str(self._backup_path))
                 self._config = self._load_config(str(self._backup_path))
                 if self._validate_config(self._config):
                     print("已从备份恢复配置", file=sys.stderr)
-                    # 恢复后重新保存
+                    # 恢复后重新保存（含必要的版本迁移）
+                    self._apply_migrations(raw_version)
                     self.save()
                     return
             except Exception as e:
@@ -116,10 +124,53 @@ class Config:
                 import shutil
                 shutil.copy(str(old_config), str(self._config_path))
                 print(f"已迁移配置文件到: {self._config_path}", file=sys.stderr)
+                raw_version = self._raw_config_version(str(self._config_path))
                 self._config = self._load_config(str(self._config_path))
+                self._apply_migrations(raw_version)
             except Exception as e:
                 print(f"迁移配置文件失败: {e}", file=sys.stderr)
                 self._config = self._get_default_config()
+
+    def _raw_config_version(self, path: str) -> int | None:
+        """读取配置文件中的原始结构版本号（未合并默认值，用于判断是否需要迁移）。"""
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            if not content.strip():
+                return None
+            raw = yaml.safe_load(content)
+            if not isinstance(raw, dict):
+                return None
+            version = raw.get('config_version')
+            return int(version) if version is not None else None
+        except Exception:
+            return None
+
+    def _apply_migrations(self, raw_version: int | None):
+        """按配置文件结构版本执行一次性迁移，执行后写入新版本号避免重复执行。
+
+        迁移只会触发一次：迁移完成后 config_version 写入文件，下次启动时不再执行，
+        因此用户在迁移后手动将条目移回黑名单不会被再次自动改出。
+        """
+        if raw_version is not None and raw_version >= CONFIG_VERSION:
+            return
+
+        changed = False
+        if raw_version is None or raw_version < 1:
+            # v1：旧版本将 Excel / PowerPoint 默认列入黑名单，现默认移出黑名单
+            blacklist = self._config.get('selection', {}).get('blacklist')
+            if isinstance(blacklist, list):
+                for entry in blacklist:
+                    if isinstance(entry, dict) and str(entry.get('exe', '')).strip().lower() in ('excel.exe', 'powerpnt.exe'):
+                        if entry.get('enabled', True):
+                            entry['enabled'] = False
+                            changed = True
+            if raw_version is not None:
+                print("执行配置迁移: v1 划词黑名单（Excel/PowerPoint 移出黑名单）", file=sys.stderr)
+
+        if changed or raw_version is None:
+            self._config['config_version'] = CONFIG_VERSION
+            self.save()
 
     def _load_config(self, path: str) -> Dict[str, Any]:
         """加载配置文件"""
@@ -182,6 +233,7 @@ class Config:
                 'trigger_mode': 'toolbar',  # 划词触发方式：toolbar=悬浮工具栏 / button=翻译图标按钮
                 'custom_actions': {},  # actions/ 目录 .py 扩展的显示开关 {文件名.py: bool}
             },
+            'config_version': CONFIG_VERSION,  # 配置文件结构版本号（用于升级时一次性迁移）
             'writing': {
                 'keep_original': False,  # 保留原文
                 'newline_hotkey': 'enter',  # 换行快捷键：enter / shift+enter / ctrl+enter

@@ -22,7 +22,7 @@ from PyQt6.QtCore import (Qt, QPoint, QRect, QThread, pyqtSignal, QTimer,
 from PyQt6.QtGui import QCursor, QIcon, QPainter, QPen, QColor
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QListWidget, QListWidgetItem, QTextBrowser, QTextEdit, QMenu, QFrame,
+    QListWidget, QListWidgetItem, QTextBrowser, QPlainTextEdit, QMenu, QFrame,
     QToolButton, QInputDialog, QSplitter, QSplitterHandle, QStyle,
     QStyledItemDelegate, QStyleOptionViewItem, QMessageBox, QCheckBox,
     QScrollBar, QScrollArea, QAbstractButton, QAbstractSlider,
@@ -1156,7 +1156,7 @@ class ChatWindow(QWidget):
         # 输入区
         input_bar = QHBoxLayout()
         input_bar.setSpacing(6)
-        self._input_edit = QTextEdit()
+        self._input_edit = QPlainTextEdit()
         self._input_edit.setObjectName("chatInput")
         self._input_edit.setPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行")
         self._input_edit.setFixedHeight(64)
@@ -1372,9 +1372,10 @@ class ChatWindow(QWidget):
         """)
         self._input_edit.setStyleSheet(f"""
             #chatInput {{
-                background-color: {bg2}; color: {text1};
+                background: {bg2}; color: {text1};
                 border: 1px solid {border}; border-radius: 12px;
                 padding: 8px 10px; font-size: {font_size}px;
+                selection-background-color: {accent}; selection-color: #ffffff;
             }}
             #chatInput:focus {{ border: 2px solid {accent}; padding: 7px 9px; }}
             #chatInput QScrollBar:vertical {{
@@ -1682,7 +1683,7 @@ class ChatWindow(QWidget):
         否则贴边的会话列表条目、气泡内边距等会被误拦成窗口缩放"""
         w = self._content_frame.childAt(pos)
         while w is not None and w is not self._content_frame:
-            if isinstance(w, (QAbstractScrollArea, QAbstractButton, QTextEdit)):
+            if isinstance(w, (QAbstractScrollArea, QAbstractButton)):
                 return True
             if isinstance(w, QLabel) and (
                 w.textInteractionFlags()

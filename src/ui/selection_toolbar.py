@@ -92,7 +92,7 @@ class SelectionToolbar(QWidget):
 
         self._apply_theme()
 
-        # 主题切换时立即刷新（含 QToolTip 等窗口级样式）
+        # 主题切换时立即刷新（否则切主题后工具栏仍是旧样式）
         try:
             from ..utils.theme import get_theme_manager
         except ImportError:
@@ -126,18 +126,6 @@ class SelectionToolbar(QWidget):
             QPushButton:hover {{ background-color: {accent}; color: #ffffff; }}
             QPushButton:pressed {{ background-color: {accent_hover}; color: #ffffff; }}
         """
-
-        # Tooltip 是独立顶层控件，需在窗口层级设置（解决深色主题下 tooltip 黑条不可见问题）
-        self.setStyleSheet(f"""
-            QToolTip {{
-                background-color: {theme['bg_secondary']};
-                color: {theme['text_primary']};
-                border: 1px solid {theme['border_color']};
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 12px;
-            }}
-        """)
 
     # ------------------------------------------------------------------
     # 按钮构建

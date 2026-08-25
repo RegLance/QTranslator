@@ -28,10 +28,10 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QFormLayout, QComboBox,
     QCheckBox, QGroupBox, QMessageBox, QSizePolicy, QFrame,
     QGraphicsDropShadowEffect, QScrollArea, QMenu, QWidget,
-    QSpinBox, QKeySequenceEdit, QColorDialog, QSlider, QToolTip,
+    QSpinBox, QKeySequenceEdit, QColorDialog, QSlider,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect, QByteArray, QEvent, QSize
-from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence, QPolygonF, QBrush, QGuiApplication
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect, QByteArray, QEvent
+from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence, QPolygonF, QBrush
 from PyQt6.QtCore import QPointF
 from PyQt6.QtSvg import QSvgRenderer
 
@@ -424,6 +424,7 @@ try:
     from .ui.chat_window import get_chat_window
     from .ui.tray_icon import get_tray_icon
     from .ui.translator_window import get_translator_window
+    from .ui.custom_tooltip import CustomTooltip
     from .ui.history_window import get_history_window
     from .ui.vocabulary_window import get_vocabulary_window
     from .ui.help_window import get_help_window
@@ -454,6 +455,7 @@ except ImportError:
     from src.ui.chat_window import get_chat_window
     from src.ui.tray_icon import get_tray_icon
     from src.ui.translator_window import get_translator_window
+    from src.ui.custom_tooltip import CustomTooltip
     from src.ui.history_window import get_history_window
     from src.ui.vocabulary_window import get_vocabulary_window
     from src.ui.help_window import get_help_window
@@ -553,7 +555,7 @@ class SettingsDialog(QWidget):
         # 主题
         self._theme = get_theme()
 
-        # 主题切换时立即刷新（含 QToolTip 等窗口级样式，否则切主题后设置窗口仍是旧样式）
+        # 主题切换时立即刷新（否则切主题后设置窗口仍是旧样式）
         try:
             from .utils.theme import get_theme_manager
         except ImportError:
@@ -1122,8 +1124,8 @@ class SettingsDialog(QWidget):
         self._chat_api_form_widget = QWidget()
         self._chat_api_form_widget.setObjectName("chatApiFormWidget")
         self._chat_api_form_widget.setAutoFillBackground(False)
-        # 必须带 ID 选择器：无选择器 QSS 在样式链合并时会误匹配 QToolTip，
-        # 把 tooltip 背景覆盖成 transparent（透出黑色）
+        # 必须带 ID 选择器：无选择器 QSS 在样式链合并时会误匹配
+        # 兄弟/后代控件（如弹层气泡），把背景覆盖成 transparent
         self._chat_api_form_widget.setStyleSheet(
             "#chatApiFormWidget { background: transparent; }")
         chat_api_form = QFormLayout(self._chat_api_form_widget)
@@ -1798,19 +1800,6 @@ class SettingsDialog(QWidget):
 
         # 一次性应用合并样式表
         self._content_frame.setStyleSheet(consolidated_style)
-
-        # Tooltip 是独立顶层控件，不能通过 _content_frame 的样式表覆盖，
-        # 需在窗口层级设置（解决深色主题下 tooltip 黑条不可见问题）
-        self.setStyleSheet(f"""
-            QToolTip {{
-                background-color: {t['bg_secondary']};
-                color: {t['text_primary']};
-                border: 1px solid {t['border_color']};
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 12px;
-            }}
-        """)
 
         # 动态样式：颜色选择器按钮（背景色随用户选择变化，需单独设置）
         self._update_color_btn_style(self._accent_color_btn, self._custom_accent)
@@ -4376,33 +4365,48 @@ class SingleInstance:
 
 
 class TranslatorApp(QApplication):
-    """QApplication 子类：为所有 widget 开启非激活窗口 tooltip 显示。
+    """QApplication 子类：自定义 tooltip 实现 + 非激活窗口 tooltip 支持。
 
+    Qt 6 原生 QToolTip 首帧按默认字体渲染、QSS 生效后才重算尺寸，
+    首次显示会「先大后小」；其样式缓存也不随主题切换失效。
+    因此在 notify 中拦截 QEvent.ToolTip，改用 CustomTooltip 显示
+    （首次显示即最终大小，无尺寸动画）。
     Qt 6 默认只在激活窗口显示 tooltip（Qt 5 的 AA_AlwaysShowToolTips 已移除），
     而 QTranslator 常与其他应用并排使用（划词/对照场景），非激活窗口也需弹提示。
     Qt 6 保留的 WA_AlwaysShowToolTips 是 widget 级属性，在 Show 事件时设置，
     覆盖所有窗口与子控件。"""
 
     def notify(self, receiver, event):
-        if event.type() == QEvent.Type.Show and isinstance(receiver, QWidget):
+        if event.type() == QEvent.Type.ToolTip:
+            # 用自定义 tooltip 替代原生 QToolTip。
+            # Qt 6 中 ToolTip 事件文本不再随事件携带（QHelpEvent 无 tip()），
+            # 需从触发控件的 toolTip() 属性读取；无文本的（如 QMenu 菜单项、
+            # 列表项等由 Qt 内部直接取文本的场景）放行原生处理
+            try:
+                _tip = (receiver.toolTip()
+                        if isinstance(receiver, QWidget) else "")
+                if _tip:
+                    CustomTooltip.show_text(_tip, event.globalPos(), receiver)
+                    return True
+            except Exception:
+                pass
+        if event.type() == QEvent.Type.ToolTipChange:
+            # tooltip 文本变化时收起旧气泡，等下一次悬停重新显示
+            CustomTooltip.hide_tip()
+        elif event.type() == QEvent.Type.MouseButtonPress:
+            CustomTooltip.hide_tip()
+        elif event.type() == QEvent.Type.WindowDeactivate:
+            CustomTooltip.hide_tip()
+        elif (event.type() == QEvent.Type.Hide
+                and isinstance(receiver, QWidget)
+                and CustomTooltip.is_shown_for(receiver)):
+            # 触发控件隐藏（如窗口关闭）时收起气泡
+            CustomTooltip.hide_tip()
+        elif event.type() == QEvent.Type.Show and isinstance(receiver, QWidget):
             try:
                 receiver.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, True)
             except Exception:
                 pass
-            if receiver.objectName() == "qtooltip_label":
-                # tooltip 是应用级共享单例，样式缓存不随窗口样式表更新而失效：
-                # 强制重解析（字体/颜色/padding 全部按当前 QSS 生效）后按最终
-                # 样式重算尺寸，首帧即最终大小。resize 与 Qt updateSize 同样
-                # 加 +1px extra，并限制不超过屏幕可用宽（与 Qt 换行逻辑一致）。
-                try:
-                    receiver.style().unpolish(receiver)
-                    receiver.style().polish(receiver)
-                    _new_size = receiver.sizeHint() + QSize(1, 0)
-                    _avail = QGuiApplication.primaryScreen().availableGeometry()
-                    if _new_size.width() <= _avail.width():
-                        receiver.resize(_new_size)
-                except Exception:
-                    pass
         return super().notify(receiver, event)
 
 
@@ -4425,25 +4429,6 @@ def main():
 
     app = TranslatorApp(sys.argv)
     app.setQuitOnLastWindowClosed(False)
-
-    # Tooltip 原生字体与各窗口 QSS 的 font-size: 12px 对齐：
-    # 首次显示的 tooltip 在 QSS 生效前按 QApplication 默认字体定尺寸，
-    # 系统字体偏大时首显会明显偏大；统一 12px 让首显即最终大小
-    try:
-        _tip_font = QFont(app.font())
-        _tip_font.setPointSizeF(-1.0)
-        _tip_font.setPixelSize(12)
-        QToolTip.setFont(_tip_font)
-    except Exception:
-        pass
-
-    # Tooltip 全局 palette 与初始主题对齐：QSS 失效（如系统深色模式）
-    # 时 tooltip 也不会黑底白字，始终跟随应用主题
-    try:
-        from .utils.theme import refresh_tooltip_style
-    except ImportError:
-        from src.utils.theme import refresh_tooltip_style
-    refresh_tooltip_style()
 
     splash = SplashScreen()
     splash.show_splash()

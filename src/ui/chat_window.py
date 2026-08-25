@@ -959,7 +959,7 @@ class ChatWindow(QWidget):
         self._apply_theme()
         self._applied_theme_signature = self._theme_signature()
 
-        # 主题切换时立即刷新（含 QToolTip 等窗口级样式）
+        # 主题切换时立即刷新（否则切主题后窗口仍是旧样式）
         try:
             from ..utils.theme import get_theme_manager
         except ImportError:
@@ -1406,18 +1406,6 @@ class ChatWindow(QWidget):
         self._skill_label.setObjectName("skillLabel")
         self._skill_label.setStyleSheet(
             f"#skillLabel {{ color: {text2}; font-size: 12px; background: transparent; }}")
-
-        # Tooltip 是独立顶层控件，需在窗口层级设置（解决深色主题下 tooltip 黑条不可见问题）
-        self.setStyleSheet(f"""
-            QToolTip {{
-                background-color: {bg2};
-                color: {text1};
-                border: 1px solid {border};
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 12px;
-            }}
-        """)
 
         # 侧栏背景亮度决定的条目文字色（供渲染委托的垃圾桶图标跟随）
         self._session_item_text_color = self._contrast_color(bg2)

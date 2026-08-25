@@ -743,37 +743,6 @@ class ThemeManager(QObject):
     def notify_theme_changed(self):
         """发射主题变更信号"""
         self.theme_changed.emit()
-        refresh_tooltip_style()
-
-
-def refresh_tooltip_style():
-    """主题切换后刷新 QToolTip 全局样式（供启动时与 notify_theme_changed 调用）。
-
-    tooltip 是应用级共享单例：其样式缓存不随各窗口 setStyleSheet 而失效，
-    复用旧单例时仍按旧主题渲染（深色切浅色后 tooltip 仍是黑底）；
-    且 QSS 失效时它退回系统 palette（系统深色模式下黑底白字）。
-    因此同步更新全局 palette 作为兜底，并强制重解析仍存活的 tooltip 单例样式。
-    """
-    try:
-        from PyQt6.QtCore import Qt
-        from PyQt6.QtGui import QColor, QPalette
-        from PyQt6.QtWidgets import QApplication, QToolTip
-
-        t = get_theme()
-        pal = QToolTip.palette()
-        pal.setColor(QPalette.ColorRole.ToolTipBase, QColor(t['bg_secondary']))
-        pal.setColor(QPalette.ColorRole.ToolTipText, QColor(t['text_primary']))
-        QToolTip.setPalette(pal)
-
-        for tw in QApplication.topLevelWidgets():
-            if tw.windowType() == Qt.WindowType.ToolTip:
-                try:
-                    tw.style().unpolish(tw)
-                    tw.style().polish(tw)
-                except Exception:
-                    pass
-    except Exception:
-        pass
 
 
 def get_theme_manager() -> ThemeManager:

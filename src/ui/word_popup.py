@@ -506,18 +506,6 @@ class WordPopup(QFrame):
             }}
         """)
 
-        # Tooltip 是独立顶层控件，需在窗口层级设置（解决深色主题下 tooltip 黑条不可见问题）
-        self.setStyleSheet(f"""
-            QToolTip {{
-                background-color: {t['bg_secondary']};
-                color: {t['text_primary']};
-                border: 1px solid {t['border_color']};
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 12px;
-            }}
-        """)
-
         self._collect_btn.setIcon(self._create_star_icon(self._is_collected))
         self._speak_btn.setIcon(self._create_speak_icon())
 

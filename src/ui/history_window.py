@@ -190,18 +190,6 @@ class HistoryWindow(QWidget):
         """设置UI"""
         theme = get_theme(self._theme_style)
 
-        # 设置全局 QToolTip 样式，解决深色主题下 tooltip 文字不可见的问题
-        self.setStyleSheet(f"""
-            QToolTip {{
-                background-color: {theme['bg_secondary']};
-                color: {theme['text_primary']};
-                border: 1px solid {theme['border_color']};
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 12px;
-            }}
-        """)
-
         # 主布局
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -686,18 +674,6 @@ class HistoryWindow(QWidget):
     def _apply_theme(self):
         """应用主题"""
         theme = get_theme(self._theme_style)
-
-        # 更新全局 QToolTip 样式
-        self.setStyleSheet(f"""
-            QToolTip {{
-                background-color: {theme['bg_secondary']};
-                color: {theme['text_primary']};
-                border: 1px solid {theme['border_color']};
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 12px;
-            }}
-        """)
 
         # 更新内容框架
         self._content_frame.setStyleSheet(f"""

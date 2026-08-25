@@ -1020,18 +1020,6 @@ class VocabularyWindow(QWidget):
         """
         )
 
-        # Tooltip 是独立顶层控件，需在窗口层级设置（解决深色主题下 tooltip 黑条不可见问题）
-        self.setStyleSheet(f"""
-            QToolTip {{
-                background-color: {theme['bg_secondary']};
-                color: {theme['text_primary']};
-                border: 1px solid {theme['border_color']};
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 12px;
-            }}
-        """)
-
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()

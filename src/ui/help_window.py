@@ -113,17 +113,21 @@ class HelpWindow(QWidget):
 
         # 标题栏
         self._title_bar = QFrame()
-        self._title_bar.setStyleSheet("background: transparent;")
+        self._title_bar.setObjectName("helpTitleBar")
+        self._title_bar.setStyleSheet("#helpTitleBar { background: transparent; }")
         title_bar_layout = QHBoxLayout(self._title_bar)
         title_bar_layout.setContentsMargins(0, 0, 0, 0)
 
         # 标题
         self._title_label = QLabel(f"{APP_NAME} - 帮助")
+        self._title_label.setObjectName("helpTitleLabel")
         self._title_label.setStyleSheet(f"""
-            color: {theme['text_primary']};
-            font-size: 18px;
-            font-weight: bold;
-            background: transparent;
+            #helpTitleLabel {{
+                color: {theme['text_primary']};
+                font-size: 18px;
+                font-weight: bold;
+                background: transparent;
+            }}
         """)
 
         # 关闭按钮
@@ -169,11 +173,14 @@ class HelpWindow(QWidget):
 
         self._version_label = QLabel(f"v{APP_VERSION}  |  {BUILD_TIME}  |  by SQAG")
         self._version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._version_label.setObjectName("helpVersionLabel")
         self._version_label.setStyleSheet(f"""
-            color: {theme['text_primary']};
-            font-size: 14px;
-            font-weight: bold;
-            background: transparent;
+            #helpVersionLabel {{
+                color: {theme['text_primary']};
+                font-size: 14px;
+                font-weight: bold;
+                background: transparent;
+            }}
         """)
         version_layout.addWidget(self._version_label)
 
@@ -193,7 +200,8 @@ class HelpWindow(QWidget):
 
         # 帮助内容
         self._help_content = QWidget()
-        self._help_content.setStyleSheet(f"background-color: transparent;")
+        self._help_content.setObjectName("helpContent")
+        self._help_content.setStyleSheet("#helpContent { background-color: transparent; }")
         self._help_layout = QVBoxLayout(self._help_content)
         self._help_layout.setSpacing(12)
         self._help_layout.setContentsMargins(5, 0, 5, 0)
@@ -333,7 +341,8 @@ class HelpWindow(QWidget):
 
         # 底部按钮
         self._btn_bar = QFrame()
-        self._btn_bar.setStyleSheet("background: transparent;")
+        self._btn_bar.setObjectName("helpBtnBar")
+        self._btn_bar.setStyleSheet("#helpBtnBar { background: transparent; }")
         btn_layout = QHBoxLayout(self._btn_bar)
         btn_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -387,11 +396,14 @@ class HelpWindow(QWidget):
     def _add_section(self, layout, title, theme):
         """添加章节标题"""
         label = QLabel(title)
+        label.setObjectName("helpSectionTitle")
         label.setStyleSheet(f"""
-            color: {theme['text_primary']};
-            font-size: 15px;
-            font-weight: bold;
-            padding: 5px 0;
+            #helpSectionTitle {{
+                color: {theme['text_primary']};
+                font-size: 15px;
+                font-weight: bold;
+                padding: 5px 0;
+            }}
         """)
         layout.addWidget(label)
 
@@ -449,9 +461,12 @@ class HelpWindow(QWidget):
         """添加文本内容（富文本，项目符号行悬挂缩进）"""
         label = QLabel(self._to_rich_text(text))
         label.setTextFormat(Qt.TextFormat.RichText)
+        label.setObjectName("helpSectionText")
         label.setStyleSheet(f"""
-            color: {theme['text_secondary']};
-            font-size: 13px;
+            #helpSectionText {{
+                color: {theme['text_secondary']};
+                font-size: 13px;
+            }}
         """)
         label.setWordWrap(True)
         layout.addWidget(label)
@@ -607,10 +622,12 @@ class HelpWindow(QWidget):
 
         # 更新标题
         self._title_label.setStyleSheet(f"""
-            color: {theme['text_primary']};
-            font-size: 18px;
-            font-weight: bold;
-            background: transparent;
+            #helpTitleLabel {{
+                color: {theme['text_primary']};
+                font-size: 18px;
+                font-weight: bold;
+                background: transparent;
+            }}
         """)
 
         # 更新关闭按钮
@@ -638,10 +655,12 @@ class HelpWindow(QWidget):
             }}
         """)
         self._version_label.setStyleSheet(f"""
-            color: {theme['text_primary']};
-            font-size: 14px;
-            font-weight: bold;
-            background: transparent;
+            #helpVersionLabel {{
+                color: {theme['text_primary']};
+                font-size: 14px;
+                font-weight: bold;
+                background: transparent;
+            }}
         """)
 
         # 更新滚动区域
@@ -697,15 +716,19 @@ class HelpWindow(QWidget):
                     font = widget.font()
                     if font.bold():
                         widget.setStyleSheet(f"""
-                            color: {theme['text_primary']};
-                            font-size: 15px;
-                            font-weight: bold;
-                            padding: 5px 0;
+                            #helpSectionTitle {{
+                                color: {theme['text_primary']};
+                                font-size: 15px;
+                                font-weight: bold;
+                                padding: 5px 0;
+                            }}
                         """)
                     else:
                         widget.setStyleSheet(f"""
-                            color: {theme['text_secondary']};
-                            font-size: 13px;
+                            #helpSectionText {{
+                                color: {theme['text_secondary']};
+                                font-size: 13px;
+                            }}
                         """)
 
 

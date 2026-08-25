@@ -259,8 +259,9 @@ class VocabularyWindow(QWidget):
 
         title_bar = QHBoxLayout()
         self._title_label = QLabel("单词收藏")
+        self._title_label.setObjectName("vocTitleLabel")
         self._title_label.setStyleSheet(
-            f"color: {theme['text_primary']}; font-size: 15px; font-weight: bold;"
+            f"#vocTitleLabel {{ color: {theme['text_primary']}; font-size: 15px; font-weight: bold; }}"
         )
         self._close_btn = QPushButton("×")
         self._close_btn.setFixedSize(22, 22)
@@ -431,8 +432,9 @@ class VocabularyWindow(QWidget):
         outer.addLayout(row)
 
         self._bb_title = QLabel("📝 词汇短文")
+        self._bb_title.setObjectName("bbTitle")
         self._bb_title.setStyleSheet(
-            f"color: {theme['text_primary']}; font-size: 13px; font-weight: bold; margin-top: 4px;"
+            f"#bbTitle {{ color: {theme['text_primary']}; font-size: 13px; font-weight: bold; margin-top: 4px; }}"
         )
         self._bb_hint = QLabel(
             "按「复习次数」从高到低取原文，最多 50 条；若总数不足 50，则用当前已有的全部条目。"
@@ -440,12 +442,15 @@ class VocabularyWindow(QWidget):
             "生成不超过约 160 词的短文。"
         )
         self._bb_hint.setWordWrap(True)
-        self._bb_hint.setStyleSheet(f"color: {theme['text_muted']}; font-size: 11px;")
+        self._bb_hint.setObjectName("bbHint")
+        self._bb_hint.setStyleSheet(
+            f"#bbHint {{ color: {theme['text_muted']}; font-size: 11px; }}")
 
         bb_row = QHBoxLayout()
         self._bb_genre_label = QLabel("体裁:")
+        self._bb_genre_label.setObjectName("bbGenreLabel")
         self._bb_genre_label.setStyleSheet(
-            f"color: {theme['text_secondary']}; font-size: 12px; background: transparent;"
+            f"#bbGenreLabel {{ color: {theme['text_secondary']}; font-size: 12px; background: transparent; }}"
         )
         self._bb_article_combo = QComboBox()
         for _id, label, prompt in BIG_BANG_ARTICLE_OPTIONS:
@@ -852,7 +857,7 @@ class VocabularyWindow(QWidget):
             }}
         """)
         self._title_label.setStyleSheet(
-            f"color: {theme['text_primary']}; font-size: 15px; font-weight: bold;"
+            f"#vocTitleLabel {{ color: {theme['text_primary']}; font-size: 15px; font-weight: bold; }}"
         )
         self._list.setStyleSheet(
             f"""
@@ -926,11 +931,13 @@ class VocabularyWindow(QWidget):
             """
             )
         self._bb_title.setStyleSheet(
-            f"color: {theme['text_primary']}; font-size: 13px; font-weight: bold; margin-top: 4px;"
+            f"#bbTitle {{ color: {theme['text_primary']}; font-size: 13px; font-weight: bold; margin-top: 4px; }}"
         )
-        self._bb_hint.setStyleSheet(f"color: {theme['text_muted']}; font-size: 11px;")
+        self._bb_hint.setObjectName("bbHint")
+        self._bb_hint.setStyleSheet(
+            f"#bbHint {{ color: {theme['text_muted']}; font-size: 11px; }}")
         self._bb_genre_label.setStyleSheet(
-            f"color: {theme['text_secondary']}; font-size: 12px; background: transparent;"
+            f"#bbGenreLabel {{ color: {theme['text_secondary']}; font-size: 12px; background: transparent; }}"
         )
         self._bb_article_combo.setStyleSheet(get_combobox_style(theme))
         self._bb_floating_frame.setStyleSheet(

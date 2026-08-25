@@ -28,10 +28,10 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QFormLayout, QComboBox,
     QCheckBox, QGroupBox, QMessageBox, QSizePolicy, QFrame,
     QGraphicsDropShadowEffect, QScrollArea, QMenu, QWidget,
-    QSpinBox, QKeySequenceEdit, QColorDialog, QSlider,
+    QSpinBox, QKeySequenceEdit, QColorDialog, QSlider, QToolTip,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect, QByteArray
-from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence, QPalette, QPolygonF, QBrush
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect, QByteArray, QEvent, QSize
+from PyQt6.QtGui import QFont, QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence, QPolygonF, QBrush, QGuiApplication
 from PyQt6.QtCore import QPointF
 from PyQt6.QtSvg import QSvgRenderer
 
@@ -552,6 +552,13 @@ class SettingsDialog(QWidget):
 
         # 主题
         self._theme = get_theme()
+
+        # 主题切换时立即刷新（含 QToolTip 等窗口级样式，否则切主题后设置窗口仍是旧样式）
+        try:
+            from .utils.theme import get_theme_manager
+        except ImportError:
+            from src.utils.theme import get_theme_manager
+        get_theme_manager().theme_changed.connect(self.update_theme)
 
         # 设置无边框窗口属性
         # 不常驻置顶：「始终置顶」设置只控制翻译窗口
@@ -1113,8 +1120,12 @@ class SettingsDialog(QWidget):
 
         # --- AI 对话独立 API 字段（勾选"共用"时隐藏） ---
         self._chat_api_form_widget = QWidget()
+        self._chat_api_form_widget.setObjectName("chatApiFormWidget")
         self._chat_api_form_widget.setAutoFillBackground(False)
-        self._chat_api_form_widget.setStyleSheet("background: transparent;")
+        # 必须带 ID 选择器：无选择器 QSS 在样式链合并时会误匹配 QToolTip，
+        # 把 tooltip 背景覆盖成 transparent（透出黑色）
+        self._chat_api_form_widget.setStyleSheet(
+            "#chatApiFormWidget { background: transparent; }")
         chat_api_form = QFormLayout(self._chat_api_form_widget)
         chat_api_form.setSpacing(10)
         chat_api_form.setContentsMargins(0, 4, 0, 0)
@@ -4364,6 +4375,37 @@ class SingleInstance:
             self._mutex = None
 
 
+class TranslatorApp(QApplication):
+    """QApplication 子类：为所有 widget 开启非激活窗口 tooltip 显示。
+
+    Qt 6 默认只在激活窗口显示 tooltip（Qt 5 的 AA_AlwaysShowToolTips 已移除），
+    而 QTranslator 常与其他应用并排使用（划词/对照场景），非激活窗口也需弹提示。
+    Qt 6 保留的 WA_AlwaysShowToolTips 是 widget 级属性，在 Show 事件时设置，
+    覆盖所有窗口与子控件。"""
+
+    def notify(self, receiver, event):
+        if event.type() == QEvent.Type.Show and isinstance(receiver, QWidget):
+            try:
+                receiver.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, True)
+            except Exception:
+                pass
+            if receiver.objectName() == "qtooltip_label":
+                # tooltip 是应用级共享单例，样式缓存不随窗口样式表更新而失效：
+                # 强制重解析（字体/颜色/padding 全部按当前 QSS 生效）后按最终
+                # 样式重算尺寸，首帧即最终大小。resize 与 Qt updateSize 同样
+                # 加 +1px extra，并限制不超过屏幕可用宽（与 Qt 换行逻辑一致）。
+                try:
+                    receiver.style().unpolish(receiver)
+                    receiver.style().polish(receiver)
+                    _new_size = receiver.sizeHint() + QSize(1, 0)
+                    _avail = QGuiApplication.primaryScreen().availableGeometry()
+                    if _new_size.width() <= _avail.width():
+                        receiver.resize(_new_size)
+                except Exception:
+                    pass
+        return super().notify(receiver, event)
+
+
 def main():
     """主入口。"""
     _startup_timing('main() 入口')
@@ -4381,8 +4423,27 @@ def main():
         except Exception:
             pass
 
-    app = QApplication(sys.argv)
+    app = TranslatorApp(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+
+    # Tooltip 原生字体与各窗口 QSS 的 font-size: 12px 对齐：
+    # 首次显示的 tooltip 在 QSS 生效前按 QApplication 默认字体定尺寸，
+    # 系统字体偏大时首显会明显偏大；统一 12px 让首显即最终大小
+    try:
+        _tip_font = QFont(app.font())
+        _tip_font.setPointSizeF(-1.0)
+        _tip_font.setPixelSize(12)
+        QToolTip.setFont(_tip_font)
+    except Exception:
+        pass
+
+    # Tooltip 全局 palette 与初始主题对齐：QSS 失效（如系统深色模式）
+    # 时 tooltip 也不会黑底白字，始终跟随应用主题
+    try:
+        from .utils.theme import refresh_tooltip_style
+    except ImportError:
+        from src.utils.theme import refresh_tooltip_style
+    refresh_tooltip_style()
 
     splash = SplashScreen()
     splash.show_splash()

@@ -959,6 +959,13 @@ class ChatWindow(QWidget):
         self._apply_theme()
         self._applied_theme_signature = self._theme_signature()
 
+        # 主题切换时立即刷新（含 QToolTip 等窗口级样式）
+        try:
+            from ..utils.theme import get_theme_manager
+        except ImportError:
+            from src.utils.theme import get_theme_manager
+        get_theme_manager().theme_changed.connect(self._apply_theme)
+
         # 气泡最大宽在渲染时按当时聊天区宽度定死，窗口变宽后防抖重排气泡
         self._last_render_width = 0
         self._relayout_timer = QTimer(self)
@@ -1396,7 +1403,9 @@ class ChatWindow(QWidget):
             #sendBtn:pressed {{ background-color: {accent_hover}; }}
             #sendBtn:disabled {{ background-color: {border}; color: {text2}; }}
         """)
-        self._skill_label.setStyleSheet(f"color: {text2}; font-size: 12px; background: transparent;")
+        self._skill_label.setObjectName("skillLabel")
+        self._skill_label.setStyleSheet(
+            f"#skillLabel {{ color: {text2}; font-size: 12px; background: transparent; }}")
 
         # Tooltip 是独立顶层控件，需在窗口层级设置（解决深色主题下 tooltip 黑条不可见问题）
         self.setStyleSheet(f"""

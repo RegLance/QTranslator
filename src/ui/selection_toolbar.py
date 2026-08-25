@@ -92,6 +92,13 @@ class SelectionToolbar(QWidget):
 
         self._apply_theme()
 
+        # 主题切换时立即刷新（含 QToolTip 等窗口级样式）
+        try:
+            from ..utils.theme import get_theme_manager
+        except ImportError:
+            from src.utils.theme import get_theme_manager
+        get_theme_manager().theme_changed.connect(self._apply_theme)
+
     # ------------------------------------------------------------------
     # 主题
     # ------------------------------------------------------------------
@@ -184,9 +191,11 @@ class SelectionToolbar(QWidget):
 
     def _make_separator(self) -> QFrame:
         line = QFrame()
+        line.setObjectName("toolbarDivider")
         line.setFrameShape(QFrame.Shape.VLine)
         line.setFixedWidth(1)
-        line.setStyleSheet(f"background-color: {self._theme['border_color']}; border: none;")
+        line.setStyleSheet(
+            f"#toolbarDivider {{ background-color: {self._theme['border_color']}; border: none; }}")
         return line
 
     # ------------------------------------------------------------------

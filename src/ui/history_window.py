@@ -447,7 +447,9 @@ class HistoryWindow(QWidget):
 
         # 详情内容容器
         self._detail_container = QWidget()
-        self._detail_container.setStyleSheet(f"background-color: {theme['bg_secondary']};")
+        self._detail_container.setObjectName("detailContainer")
+        self._detail_container.setStyleSheet(
+            f"#detailContainer {{ background-color: {theme['bg_secondary']}; }}")
         detail_layout = QVBoxLayout(self._detail_container)
         detail_layout.setContentsMargins(15, 12, 15, 12)
         detail_layout.setSpacing(10)
@@ -826,7 +828,8 @@ class HistoryWindow(QWidget):
             {get_scrollbar_style(theme)}
         """)
 
-        self._detail_container.setStyleSheet(f"background-color: {theme['bg_secondary']};")
+        self._detail_container.setStyleSheet(
+            f"#detailContainer {{ background-color: {theme['bg_secondary']}; }}")
 
         # 更新详情标题
         self._detail_title.setStyleSheet(f"""
@@ -1187,11 +1190,14 @@ class HistoryWindow(QWidget):
 
         # 标题
         icon_label = QLabel("●")
-        icon_label.setStyleSheet("color: #ff9800; font-size: 20px;")
+        icon_label.setObjectName("confirmIconLabel")
+        icon_label.setStyleSheet("#confirmIconLabel { color: #ff9800; font-size: 20px; }")
         icon_label.setFixedSize(24, 24)
 
         title_label = QLabel("确认清空")
-        title_label.setStyleSheet(f"color: {theme['text_primary']}; font-size: 14px; font-weight: bold;")
+        title_label.setObjectName("confirmTitleLabel")
+        title_label.setStyleSheet(
+            f"#confirmTitleLabel {{ color: {theme['text_primary']}; font-size: 14px; font-weight: bold; }}")
 
         title_layout.addWidget(icon_label)
         title_layout.addWidget(title_label)
@@ -1221,7 +1227,9 @@ class HistoryWindow(QWidget):
 
         # 消息内容
         msg_label = QLabel("确定要清空所有翻译历史吗？\n此操作不可撤销。")
-        msg_label.setStyleSheet(f"color: {theme['text_secondary']}; font-size: 13px;")
+        msg_label.setObjectName("confirmMsgLabel")
+        msg_label.setStyleSheet(
+            f"#confirmMsgLabel {{ color: {theme['text_secondary']}; font-size: 13px; }}")
         msg_label.setWordWrap(True)
         msg_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 

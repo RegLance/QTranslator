@@ -1,0 +1,43 @@
+================================================================
+[ENV]
+python exe: E:\qoder\QTranslator\.venv\Scripts\python.exe
+main.py 路径: E:\qoder\QTranslator\src\main.py
+main.py 含 refresh_tooltip_style: True
+main.py 含 qtooltip_label 修正: True
+系统浅色模式 AppsUseLightTheme: 1 (0=深色系统)
+应用配置主题: light
+  bg_secondary=#ffffff text_primary=#333333
+
+================================================================
+[FONT/PALETTE]
+PyQt6=6.11.0 Qt=6.11.0
+app.font(): Microsoft YaHei UI 9.0pt pixel=-1
+app 字体(QTipLabel): Microsoft YaHei UI 9.0pt pixel=-1
+QToolTip.font(): Microsoft YaHei UI 9.0pt pixel=-1
+QToolTip.palette ToolTipBase=#ffffe1 ToolTipText=#000000
+系统 palette ToolTipBase=#f3f3f3
+DPI: logical=96.0 physical=98.87493577227418 dpr=1.25 可用宽=2048
+已执行 QToolTip.setFont(12px)
+已执行 refresh_tooltip_style()
+修复后 QToolTip.font(): Microsoft YaHei UI -1.0pt pixel=12
+修复后 QToolTip.palette ToolTipBase=#ffffff ToolTipText=#333333
+
+================================================================
+[场景 A] 翻译窗口按钮 tooltip（当前主题）
+[A-first-ai] size=53x20 font=Microsoft YaHei UI pixel=12 bg=#ffffff fg=#333333 ssParent=QPushButton
+[A-first-ai] 截图已保存: E:\qoder\QTranslator\scripts\_diag_out\A-first-ai.png
+[A-first-ai] 实际渲染像素(左上/右上/左下/中心): ['#f1f1f1', '#f8f8f8', '#f1f1f1', '#ffffff']
+[A-reuse-set] size=37x20 font=Microsoft YaHei UI pixel=12 bg=#ffffff fg=#333333 ssParent=QPushButton
+[A-reuse-set] 截图已保存: E:\qoder\QTranslator\scripts\_diag_out\A-reuse-set.png
+[A-reuse-set] 实际渲染像素(左上/右上/左下/中心): ['#f1f1f1', '#f8f8f8', '#f1f1f1', '#ffffff']
+
+================================================================
+[场景 B] 设置窗口「测试连接」按钮 tooltip
+当前主题 light: bg_secondary=#ffffff
+[B-current-theme] size=400x20 font=Microsoft YaHei UI pixel=12 bg=#ffffff fg=#333333 ssParent=QPushButton
+[B-current-theme] 截图已保存: E:\qoder\QTranslator\scripts\_diag_out\B-current-theme.png
+[B-current-theme] 实际渲染像素(左上/右上/左下/中心): ['#f1f1f1', '#f1f1f1', '#f1f1f1', '#ffffff']
+强制浅色主题: bg_secondary=#ffffff
+[B-force-light] size=400x20 font=Microsoft YaHei UI pixel=12 bg=#ffffff fg=#333333 ssParent=QPushButton
+[B-force-light] 截图已保存: E:\qoder\QTranslator\scripts\_diag_out\B-force-light.png
+[B-force-light] 实际渲染像素(左上/右上/左下/中心): ['#f1f1f1', '#f1f1f1', '#f1f1f1', '#ffffff']

@@ -28,7 +28,8 @@ class PulsingIcon(QWidget):
 
         padding = 20
         self.setFixedSize(icon_size + padding, icon_size + padding)
-        self.setStyleSheet("background-color: transparent;")
+        self.setObjectName("pulsingIcon")
+        self.setStyleSheet("#pulsingIcon { background-color: transparent; }")
 
     def set_scale(self, v: float):
         self._scale = v
@@ -109,8 +110,9 @@ class SplashScreen(QWidget):
 
         self._status_label = QLabel()
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._status_label.setObjectName("splashStatusLabel")
         self._status_label.setStyleSheet(
-            "color: #555; font-size: 14px; background-color: transparent;"
+            "#splashStatusLabel { color: #555; font-size: 14px; background-color: transparent; }"
         )
         layout.addWidget(self._status_label)
 

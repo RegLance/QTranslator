@@ -1788,6 +1788,19 @@ class SettingsDialog(QWidget):
         # 一次性应用合并样式表
         self._content_frame.setStyleSheet(consolidated_style)
 
+        # Tooltip 是独立顶层控件，不能通过 _content_frame 的样式表覆盖，
+        # 需在窗口层级设置（解决深色主题下 tooltip 黑条不可见问题）
+        self.setStyleSheet(f"""
+            QToolTip {{
+                background-color: {t['bg_secondary']};
+                color: {t['text_primary']};
+                border: 1px solid {t['border_color']};
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 12px;
+            }}
+        """)
+
         # 动态样式：颜色选择器按钮（背景色随用户选择变化，需单独设置）
         self._update_color_btn_style(self._accent_color_btn, self._custom_accent)
         self._update_color_btn_style(self._bg_color_btn, self._custom_bg)

@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import (Qt, QPoint, QRect, QThread, pyqtSignal, QTimer,
-                          QEvent, QEasingCurve, QTimeLine)
-from PyQt6.QtGui import QCursor, QIcon, QPainter, QPen, QColor
+                          QEvent, QEasingCurve, QTimeLine, QSize)
+from PyQt6.QtGui import (QCursor, QIcon, QPainter, QPen, QColor,
+                         QPainterPath)
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QTextBrowser, QPlainTextEdit, QMenu, QFrame,
@@ -229,18 +230,6 @@ def _format_content(text: str, keep_blanks: bool = False) -> str:
                 f'<pre style="white-space: pre-wrap;">{html.escape(chr(10).join(lines))}</pre>'
             )
     return ''.join(parts)
-
-
-def _hex_to_rgba(hex_color: str, alpha: int) -> str:
-    """#RRGGBB -> rgba()（用于半透明气泡底色），解析失败退回透明灰"""
-    h = (hex_color or '').lstrip('#')
-    try:
-        if len(h) == 3:
-            h = ''.join(ch * 2 for ch in h)
-        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-        return f"rgba({r}, {g}, {b}, {alpha})"
-    except Exception:
-        return f"rgba(128, 128, 128, {alpha})"
 
 
 # ── 上下文压缩策略 ──
@@ -826,6 +815,52 @@ class _SmoothWheelScroll(QScrollArea):
         self._smooth_tl = None
 
 
+class _InputResizeHandle(QFrame):
+    """输入框顶部拖拽条：按住上下拖动调整输入框高度（64~420px）。"""
+
+    _MIN_H = 64
+    _MAX_H = 420
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("inputResizeHandle")
+        self._target: Optional[QPlainTextEdit] = None
+        self._dragging = False
+        self._start_y = 0
+        self._start_h = 0
+
+    def attach(self, target: QPlainTextEdit) -> None:
+        self._target = target
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._target is not None:
+            self._dragging = True
+            self._start_y = e.globalPosition().toPoint().y()
+            self._start_h = self._target.height()
+            self.grabMouse()  # 拖出控件外仍能收到移动与释放
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._dragging and self._target is not None:
+            # 向上拖 → 输入框变高；向下拖 → 变矮
+            delta = self._start_y - e.globalPosition().toPoint().y()
+            new_h = max(self._MIN_H, min(self._start_h + delta, self._MAX_H))
+            self._target.setFixedHeight(new_h)
+            e.accept()
+            return
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if self._dragging:
+            self._dragging = False
+            self.releaseMouse()
+            e.accept()
+            return
+        super().mouseReleaseEvent(e)
+
+
 class _ReasoningScroll(_SmoothWheelScroll):
     """思考框滚动区：流式瞬时长高（平滑动画读起来像「新行滑动」，已停用）"""
 
@@ -1160,22 +1195,42 @@ class ChatWindow(QWidget):
         self._stream_reserve = None  # (占位 spacer, 5行上限高)：思考增长补偿
         right.addWidget(self._message_scroll, 1)
 
-        # 输入区
+        # 输入区：拖拽条 + 输入框 + 右下角浮动发送图标
         input_bar = QHBoxLayout()
         input_bar.setSpacing(6)
+        self._input_box = QWidget()
+        input_box_layout = QVBoxLayout(self._input_box)
+        input_box_layout.setContentsMargins(0, 0, 0, 0)
+        input_box_layout.setSpacing(2)
+
+        # 输入框顶部拖拽条：按住上下拖动调整输入框高度
+        self._input_resize_handle = _InputResizeHandle(self)
+        self._input_resize_handle.setFixedHeight(6)
+        self._input_resize_handle.setCursor(Qt.CursorShape.SizeVerCursor)
+        input_box_layout.addWidget(self._input_resize_handle)
+
         self._input_edit = QPlainTextEdit()
         self._input_edit.setObjectName("chatInput")
-        self._input_edit.setPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行")
-        self._input_edit.setFixedHeight(64)
+        # 显式 IBeam 文本光标（悬停逻辑不覆盖这里，防止被窗口边缘光标切换污染）
+        self._input_edit.setCursor(Qt.CursorShape.IBeamCursor)
+        self._input_edit.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+        # 初始高度 96px：底部 36px 让给右下角发送图标（文本永不与图标重叠），
+        # 可视文本区与原 64px 输入框相当；仍可通过顶部拖拽条在 64~420px 间调整
+        self._input_edit.setFixedHeight(96)
         self._input_edit.installEventFilter(self)
-        input_bar.addWidget(self._input_edit, 1)
+        input_box_layout.addWidget(self._input_edit)
+        self._input_resize_handle.attach(self._input_edit)
 
-        self._send_btn = QPushButton("发送")
+        # 发送图标按钮：浮于输入框右下角（不进布局，Resize 时定位）
+        self._send_btn = QPushButton(self._input_box)
         self._send_btn.setObjectName("sendBtn")
-        self._send_btn.setFixedSize(76, 64)
+        self._send_btn.setFixedSize(30, 30)
         self._send_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._send_btn.setToolTip("发送")
         self._send_btn.clicked.connect(lambda: self.send_message())
-        input_bar.addWidget(self._send_btn)
+        self._input_box.installEventFilter(self)
+
+        input_bar.addWidget(self._input_box, 1)
         right.addLayout(input_bar)
 
         self._splitter.addWidget(right_widget)
@@ -1207,10 +1262,7 @@ class ChatWindow(QWidget):
         text1 = t['text_primary']
         text2 = t['text_secondary']
         accent = t['accent_color']
-        accent_hover = t['accent_hover']
         font_size = self._config.get('font.size', 15)
-        # 思考气泡底色：主题色浅调（约 10% 不透明），与正文气泡区分
-        self._reasoning_tint = _hex_to_rgba(accent, 26)
 
         self._content_frame.setStyleSheet(f"""
             #chatContentFrame {{
@@ -1254,8 +1306,8 @@ class ChatWindow(QWidget):
         """)
         self._splitter.setStyleSheet(f"""
             #chatSplitter::handle {{ background-color: {bg}; }}
-            #chatSplitter::handle:hover {{ background-color: {accent}; }}
-            #chatSplitter::handle:pressed {{ background-color: {accent_hover}; }}
+            #chatSplitter::handle:hover {{ background-color: {text2}; }}
+            #chatSplitter::handle:pressed {{ background-color: {text1}; }}
         """)
         # 条目透明底：文字色按侧栏背景亮度自动选黑/白，避免深色底黑字看不清
         item_text = getattr(self, '_session_item_text_color', None) or self._contrast_color(bg2)
@@ -1282,11 +1334,12 @@ class ChatWindow(QWidget):
         """)
         self._new_session_btn.setStyleSheet(f"""
             #newSessionBtn {{
-                background-color: {accent}; color: #ffffff; border: none;
-                border-radius: 8px; font-size: 13px; font-weight: 600;
+                background-color: transparent; color: {text1};
+                border: 1px solid {border}; border-radius: 8px;
+                font-size: 13px; font-weight: 600;
             }}
-            #newSessionBtn:hover {{ background-color: {accent_hover}; }}
-            #newSessionBtn:pressed {{ background-color: {accent_hover}; }}
+            #newSessionBtn:hover {{ background-color: {t['button_hover']}; }}
+            #newSessionBtn:pressed {{ background-color: {t['button_hover']}; }}
         """)
         self._skill_combo.setStyleSheet(f"""
             #skillBtn {{
@@ -1294,7 +1347,7 @@ class ChatWindow(QWidget):
                 border: 1px solid {border}; border-radius: 14px;
                 padding: 3px 12px; font-size: 12px;
             }}
-            #skillBtn:hover {{ border-color: {accent}; color: {accent}; }}
+            #skillBtn:hover {{ border-color: {text2}; color: {text1}; }}
             #skillBtn::menu-indicator {{ image: none; }}
         """)
         self._mcp_btn.setStyleSheet(f"""
@@ -1303,7 +1356,7 @@ class ChatWindow(QWidget):
                 border: 1px solid {border}; border-radius: 14px;
                 padding: 3px 12px; font-size: 12px;
             }}
-            #mcpBtn:hover {{ border-color: {accent}; color: {accent}; }}
+            #mcpBtn:hover {{ border-color: {text2}; color: {text1}; }}
             #mcpBtn::menu-indicator {{ image: none; }}
         """)
         self._clear_ctx_btn.setStyleSheet(f"""
@@ -1312,7 +1365,7 @@ class ChatWindow(QWidget):
                 border: 1px solid {border}; border-radius: 14px;
                 padding: 3px 12px; font-size: 12px;
             }}
-            #clearCtxBtn:hover {{ color: {text1}; border-color: {accent}; }}
+            #clearCtxBtn:hover {{ color: {text1}; border-color: {text2}; }}
         """)
         self._message_scroll.setStyleSheet(f"""
             #messageView {{
@@ -1331,9 +1384,9 @@ class ChatWindow(QWidget):
             #messageView QScrollBar:vertical:disabled {{ background: transparent; }}
             #messageView QScrollBar::handle:vertical:disabled {{ background: transparent; }}
             #bubbleUser {{
-                background-color: {accent}; color: #ffffff;
-                border-radius: 12px; padding: 8px 12px;
-                font-size: {font_size}px;
+                background-color: transparent; color: {text1};
+                border: 1px solid {border}; border-radius: 12px;
+                padding: 8px 12px; font-size: {font_size}px;
             }}
             #bubbleAssistant {{
                 background-color: {bg2}; color: {text1};
@@ -1347,7 +1400,7 @@ class ChatWindow(QWidget):
             }}
             #bubbleAssistant QLabel {{ background: transparent; }}
             #bubbleReasoning {{
-                background-color: {self._reasoning_tint};
+                background-color: transparent;
                 border: 1px dashed {border};
                 border-radius: 12px;
             }}
@@ -1370,9 +1423,6 @@ class ChatWindow(QWidget):
             #reasoningScroll QScrollBar::handle:vertical:hover {{ background: {text2}; }}
             #reasoningScroll QScrollBar::add-line:vertical, #reasoningScroll QScrollBar::sub-line:vertical {{ height: 0; }}
             #reasoningScroll QScrollBar::add-page:vertical, #reasoningScroll QScrollBar::sub-page:vertical {{ background: transparent; }}
-            #emptyHint {{
-                color: {text2}; font-size: 13px; background: transparent;
-            }}
             #emptyTitle {{
                 color: {text1}; font-size: 20px; font-weight: 700; background: transparent;
             }}
@@ -1381,10 +1431,10 @@ class ChatWindow(QWidget):
             #chatInput {{
                 background: {bg2}; color: {text1};
                 border: 1px solid {border}; border-radius: 12px;
-                padding: 8px 10px; font-size: {font_size}px;
+                padding: 8px 10px 36px 10px; font-size: {font_size}px;
                 selection-background-color: {accent}; selection-color: #ffffff;
             }}
-            #chatInput:focus {{ border: 2px solid {accent}; padding: 7px 9px; }}
+            #chatInput:focus {{ border: 2px solid {text2}; padding: 7px 9px 35px 9px; }}
             #chatInput QScrollBar:vertical {{
                 background: transparent; width: 6px; margin: 2px;
             }}
@@ -1396,13 +1446,24 @@ class ChatWindow(QWidget):
         """)
         self._send_btn.setStyleSheet(f"""
             #sendBtn {{
-                background-color: {accent}; color: #ffffff; border: none;
-                border-radius: 12px; font-size: 14px; font-weight: 600;
+                background-color: transparent; border: none;
+                border-radius: 15px;
             }}
-            #sendBtn:hover {{ background-color: {accent_hover}; }}
-            #sendBtn:pressed {{ background-color: {accent_hover}; }}
-            #sendBtn:disabled {{ background-color: {border}; color: {text2}; }}
+            #sendBtn:hover {{ background-color: {t['button_hover']}; }}
+            #sendBtn:pressed {{ background-color: {t['button_hover']}; }}
+            #sendBtn:disabled {{ background-color: transparent; }}
         """)
+        self._input_resize_handle.setStyleSheet(f"""
+            #inputResizeHandle {{ background: transparent; }}
+            #inputResizeHandle:hover {{ background: {border}; border-radius: 3px; }}
+        """)
+        # 纸飞机发送图标随主题重建：常态用主文字色，禁用态用边框色变淡
+        self._send_icon = self._make_send_icon(text1)
+        self._send_icon_disabled = self._make_send_icon(border)
+        self._send_btn.setIconSize(QSize(18, 18))
+        self._send_btn.setIcon(
+            self._send_icon if self._send_btn.isEnabled() else self._send_icon_disabled)
+        self._position_send_btn()
         self._skill_label.setObjectName("skillLabel")
         self._skill_label.setStyleSheet(
             f"#skillLabel {{ color: {text2}; font-size: 12px; background: transparent; }}")
@@ -1777,13 +1838,25 @@ class ChatWindow(QWidget):
         super().mouseDoubleClickEvent(event)
 
     def eventFilter(self, obj, event):
+        # 发送图标跟随输入区尺寸变化固定在右下角
+        if obj is self._input_box and event.type() == QEvent.Type.Resize:
+            self._position_send_btn()
         is_child = (
             isinstance(obj, QWidget)
             and obj is not self._input_edit
             and not isinstance(obj, QSplitterHandle)
             and self._content_frame.isAncestorOf(obj)
         )
-        is_hover_target = is_child or obj is self._input_edit
+        # 悬停光标切换跳过带专用光标的控件：输入框及其 viewport 保留
+        # IBeam 文本光标、发送按钮保留手型、拖拽条保留上下调整光标
+        has_own_cursor = (
+            isinstance(obj, QWidget)
+            and (self._input_edit.isAncestorOf(obj)
+                 or obj is self._input_edit
+                 or obj is self._send_btn
+                 or obj is self._input_resize_handle)
+        )
+        is_hover_target = (is_child or obj is self._input_edit) and not has_own_cursor
 
         # 子控件（内容容器及其后代）上的边缘按下：子控件占满窗口，
         # 不拦截的话边缘按下事件到不了窗口，缩放无法启动
@@ -1826,6 +1899,44 @@ class ChatWindow(QWidget):
                 self.send_message()
                 return True
         return super().eventFilter(obj, event)
+
+    # ------------------------------------------------------------------
+    # 发送图标按钮
+    # ------------------------------------------------------------------
+    def _position_send_btn(self):
+        """发送图标按钮固定在输入框右下角"""
+        w = self._input_box.width()
+        h = self._input_box.height()
+        bw = self._send_btn.width()
+        bh = self._send_btn.height()
+        self._send_btn.move(w - bw - 8, h - bh - 6)
+        self._send_btn.raise_()
+
+    def _make_send_icon(self, color: str) -> QIcon:
+        """自绘纸飞机发送图标（QPainterPath，随主题色重建）"""
+        from PyQt6.QtGui import QPixmap
+        pm = QPixmap(64, 64)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(color))
+        path = QPainterPath()
+        path.moveTo(12, 32)   # 左尖
+        path.lineTo(52, 14)   # 上翼
+        path.lineTo(38, 32)   # 内凹
+        path.lineTo(52, 50)   # 下翼
+        path.closeSubpath()
+        p.drawPath(path)
+        p.end()
+        return QIcon(pm)
+
+    def _set_send_enabled(self, enabled: bool):
+        """发送按钮启用/禁用（图标随状态切换，禁用态变淡）"""
+        self._send_btn.setEnabled(enabled)
+        if hasattr(self, '_send_icon'):
+            self._send_btn.setIcon(
+                self._send_icon if enabled else self._send_icon_disabled)
 
     # ------------------------------------------------------------------
     # 会话管理
@@ -2135,12 +2246,7 @@ class ChatWindow(QWidget):
             title.setObjectName("emptyTitle")
             title.setAlignment(Qt.AlignmentFlag.AlignCenter)
             title.setMaximumWidth(usable)
-            hint = QLabel("直接输入问题，或划词后从工具栏选择「AI 对话」，\n选中的内容会自动带入这里。")
-            hint.setObjectName("emptyHint")
-            hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hint.setMaximumWidth(usable)
             wl.addWidget(title)
-            wl.addWidget(hint)
             self._message_layout.addWidget(wrap)
 
         for _idx, m in enumerate(messages):
@@ -2750,7 +2856,7 @@ class ChatWindow(QWidget):
         self._reasoning_buffer = ""
         self._reason_follow = True
         self._main_follow = True
-        self._send_btn.setEnabled(False)
+        self._set_send_enabled(False)
         # 不渲染 "…" 占位气泡：发送后先只显示用户消息，思考框随首个
         # 思考 chunk 出现，正文框随首个正文 chunk 出现
         self._render_messages(force_scroll=True)
@@ -2863,7 +2969,7 @@ class ChatWindow(QWidget):
             self._store.remove_trailing_empty_assistant(self._current_session_id)
         self._stream_buffer = ""
         self._reasoning_buffer = ""
-        self._send_btn.setEnabled(True)
+        self._set_send_enabled(True)
         self._reload_session_list()
         # 原地把流式行换成完成气泡（不全量重建）：重建会瞬间把滚动范围
         # 归零、value 回 0，视觉上先闪到顶部再跳回底部
@@ -2886,7 +2992,7 @@ class ChatWindow(QWidget):
         self._flush_timer.stop()
         self._stream_buffer = ""
         self._reasoning_buffer = ""
-        self._send_btn.setEnabled(True)
+        self._set_send_enabled(True)
         if self._current_session_id:
             # 清理本轮的空 assistant 占位，失败不残留空消息
             self._store.remove_trailing_empty_assistant(self._current_session_id)
@@ -2919,7 +3025,7 @@ class ChatWindow(QWidget):
                 worker.finished.connect(
                     lambda: self._zombie_workers.remove(worker)
                     if worker in self._zombie_workers else None)
-        self._send_btn.setEnabled(True)
+        self._set_send_enabled(True)
         if self._current_session_id:
             self._store.remove_trailing_empty_assistant(self._current_session_id)
         self._stream_buffer = ""

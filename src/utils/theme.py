@@ -671,18 +671,23 @@ def get_spinbox_style(theme: Dict[str, Any]) -> str:
 
 
 def get_hidden_scrollbar_style(theme: Dict[str, Any]) -> str:
-    """获取隐藏滚动条的样式（用于流式输出时）"""
+    """获取隐藏滚动条的样式（用于流式输出时）。
+
+    仅把滚动条组件透明化、保持与 get_scrollbar_style 相同的宽度占位，
+    不把宽度设为 0：滚动条出现/消失会引起视口宽度变化→文本重排，
+    重排后底部截断行的渲染缓存可能残留（同设置窗口滚动区修复模式）。
+    """
     return f"""
         QScrollBar:vertical {{
             background-color: transparent;
-            width: 0px;
+            width: 8px;
             border: none;
             margin: 0px;
         }}
         QScrollBar::handle:vertical {{
             background-color: transparent;
             border: none;
-            min-height: 0px;
+            min-height: 20px;
         }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
             height: 0px;
@@ -695,14 +700,14 @@ def get_hidden_scrollbar_style(theme: Dict[str, Any]) -> str:
         }}
         QScrollBar:horizontal {{
             background-color: transparent;
-            height: 0px;
+            height: 8px;
             border: none;
             margin: 0px;
         }}
         QScrollBar::handle:horizontal {{
             background-color: transparent;
             border: none;
-            min-width: 0px;
+            min-width: 20px;
         }}
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
             width: 0px;

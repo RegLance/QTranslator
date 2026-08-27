@@ -480,6 +480,10 @@ class TranslatorWindow(QWidget):
         self._edit_repaint_timer.setInterval(80)
         self._edit_repaint_timer.timeout.connect(self._force_edit_viewport_repaint)
 
+        # 文本框滚动条视觉状态缓存（仅透明/显示切换，宽度占位恒定）
+        self._sb_input_visual_shown = True
+        self._sb_output_visual_shown = True
+
         # 最近一次弹出查询的单词：用于防止卡片被关闭后，失活等事件
         # 再次触发 selectionChanged 导致同一单词重复弹窗
         self._last_popup_word = ""
@@ -1211,13 +1215,17 @@ class TranslatorWindow(QWidget):
 
         self._input_text = QTextEdit(self._input_container)
         self._input_text.setPlaceholderText("输入要翻译的文本...")
+        # 滚动条常显：滚动条出现/消失会改变视口宽度导致文本重排，
+        # 底部截断行状态变化后滚动易残留（同设置窗口滚动区修复模式）
+        self._input_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self._input_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._input_text.setFont(self._create_text_font())
         self._input_text.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {theme['bg_secondary']};
                 color: {theme['text_primary']};
                 border: 1px solid {theme['border_color']};
-                border-radius: 4px;
+                /* 不设 border-radius：QSS 圆角生成裁剪遮罩，高度调整后滚动产生截断行残影 */
                 padding: 8px;
                 font-family: {self._FONT_FAMILY_CSS};
                 font-size: {self._font_size}px;
@@ -1233,6 +1241,9 @@ class TranslatorWindow(QWidget):
         self._input_text.installEventFilter(self)  # 安装事件过滤器以处理回车键
         # 高度调整后短时间内的滚动需全量重绘，清除被裁剪行残留
         self._input_text.verticalScrollBar().valueChanged.connect(self._on_edit_scrolled)
+        # 内容长度变化时同步滚动条视觉（空内容透明、可滚动时显示，占位恒定）
+        self._input_text.verticalScrollBar().rangeChanged.connect(
+            lambda *_: self._refresh_edit_scrollbar_visuals())
         self._input_text.selectionChanged.connect(
             lambda: self._on_text_selection_changed(self._input_text)
         )
@@ -1325,6 +1336,10 @@ class TranslatorWindow(QWidget):
         self._output_text = QTextEdit()
         self._output_text.setParent(self._output_container)
         self._output_text.setReadOnly(True)
+        # 滚动条常显：滚动条出现/消失会改变视口宽度导致文本重排，
+        # 底部截断行状态变化后滚动易残留（同设置窗口滚动区修复模式）
+        self._output_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self._output_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._output_text.setFont(self._create_text_font())
         self._output_text.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse |
@@ -1336,7 +1351,7 @@ class TranslatorWindow(QWidget):
                 background-color: {theme['bg_secondary']};
                 color: {theme['text_primary']};
                 border: 1px solid {theme['border_color']};
-                border-radius: 4px;
+                /* 不设 border-radius：QSS 圆角生成裁剪遮罩，高度调整后滚动产生截断行残影 */
                 padding: 8px;
                 font-family: {self._FONT_FAMILY_CSS};
                 font-size: {self._font_size}px;
@@ -1349,9 +1364,15 @@ class TranslatorWindow(QWidget):
         self._output_text.installEventFilter(self)
         # 高度调整后短时间内的滚动需全量重绘，清除被裁剪行残留
         self._output_text.verticalScrollBar().valueChanged.connect(self._on_edit_scrolled)
+        # 内容长度变化时同步滚动条视觉（空内容透明、可滚动时显示，占位恒定）
+        self._output_text.verticalScrollBar().rangeChanged.connect(
+            lambda *_: self._refresh_edit_scrollbar_visuals())
         self._output_text.selectionChanged.connect(
             lambda: self._on_text_selection_changed(self._output_text)
         )
+
+        # 初始状态内容为空：滚动条透明化（占位保留），视觉上等同无滚动条
+        self._refresh_edit_scrollbar_visuals()
 
         # 悬浮按钮容器（右下角）- 完全透明，无边框
         self._floating_buttons_frame = QFrame()
@@ -2131,7 +2152,7 @@ class TranslatorWindow(QWidget):
                 background-color: {theme['bg_secondary']};
                 color: {theme['text_primary']};
                 border: 1px solid {theme['border_color']};
-                border-radius: 4px;
+                /* 不设 border-radius：QSS 圆角生成裁剪遮罩，高度调整后滚动产生截断行残影 */
                 padding: 8px;
                 font-family: {self._FONT_FAMILY_CSS};
                 font-size: {self._font_size}px;
@@ -2161,13 +2182,16 @@ class TranslatorWindow(QWidget):
                 background-color: {theme['bg_secondary']};
                 color: {theme['text_primary']};
                 border: 1px solid {theme['border_color']};
-                border-radius: 4px;
+                /* 不设 border-radius：QSS 圆角生成裁剪遮罩，高度调整后滚动产生截断行残影 */
                 padding: 8px;
                 font-family: {self._FONT_FAMILY_CSS};
                 font-size: {self._font_size}px;
             }}
             {get_scrollbar_style(theme)}
         """)
+
+        # 滚动条自身样式优先级高于文本框 QSS，主题切换后强制同步视觉状态
+        self._refresh_edit_scrollbar_visuals(force=True)
 
         # 更新悬浮按钮容器样式 - 完全透明，无边框
         self._floating_buttons_frame.setStyleSheet(f"""
@@ -3432,6 +3456,38 @@ class TranslatorWindow(QWidget):
         if time.monotonic() - self._edit_resize_time < 0.5:
             self._force_edit_viewport_repaint()
 
+    def _refresh_edit_scrollbar_visuals(self, force: bool = False):
+        """按内容长度同步文本框滚动条视觉：空内容透明、可滚动时显示。
+
+        滚动条策略恒为 AlwaysOn（宽度占位不变 → 视口宽度恒定，避免
+        文本重排引发截断行残影），这里只切换视觉：内容不足一页时滚动
+        条透明化，视觉上等同「没有滚动条」，但 8px 占位始终保留。
+        """
+        for edit_name, flag_name, streaming_blocked in (
+            ("_input_text", "_sb_input_visual_shown", False),
+            ("_output_text", "_sb_output_visual_shown", True),
+        ):
+            edit = getattr(self, edit_name, None)
+            if edit is None:
+                continue
+            try:
+                sb = edit.verticalScrollBar()
+            except RuntimeError:
+                continue
+            show = sb.maximum() > 0
+            if streaming_blocked and self._scrollbar_hidden:
+                show = False  # 流式输出期间强制透明
+            if show == getattr(self, flag_name) and not force:
+                continue  # 状态未变，跳过避免频繁重设样式
+            try:
+                theme = get_theme(self._theme_style)
+            except Exception:
+                theme = get_theme()
+            setattr(self, flag_name, show)
+            sb.setStyleSheet(
+                get_scrollbar_style(theme) if show
+                else get_hidden_scrollbar_style(theme))
+
     def _update_output_layout(self):
         """更新输出区域的布局（文本框和悬浮按钮位置）"""
         try:
@@ -4510,46 +4566,19 @@ class TranslatorWindow(QWidget):
         return self._pending_original_text
 
     def _hide_output_scrollbar(self):
-        """隐藏译文框滚动条（流式输出开始时）"""
+        """隐藏译文框滚动条（流式输出开始时）：透明化但保留宽度占位，
+        不改变视口宽度，避免文本重排引发截断行残影。"""
         try:
-            theme = get_theme(self._theme_style)
-            # 使用隐藏滚动条的样式
-            self._output_text.setStyleSheet(f"""
-                QTextEdit {{
-                    background-color: {theme['bg_secondary']};
-                    color: {theme['text_primary']};
-                    border: 1px solid {theme['border_color']};
-                    border-radius: 4px;
-                    padding: 8px;
-                    font-family: {self._FONT_FAMILY_CSS};
-                    font-size: {self._font_size}px;
-                }}
-                {get_hidden_scrollbar_style(theme)}
-            """)
             self._scrollbar_hidden = True
-        except RuntimeError:
-            pass
+            self._refresh_edit_scrollbar_visuals()
         except Exception:
             pass
 
     def _show_output_scrollbar(self):
-        """显示译文框滚动条（流式输出结束后）"""
+        """恢复译文框滚动条（流式输出结束后）：按内容长度决定显示"""
         try:
-            theme = get_theme(self._theme_style)
-            # 恢复正常的滚动条样式
-            self._output_text.setStyleSheet(f"""
-                QTextEdit {{
-                    background-color: {theme['bg_secondary']};
-                    color: {theme['text_primary']};
-                    border: 1px solid {theme['border_color']};
-                    border-radius: 4px;
-                    padding: 8px;
-                    font-family: {self._FONT_FAMILY_CSS};
-                    font-size: {self._font_size}px;
-                }}
-                {get_scrollbar_style(theme)}
-            """)
             self._scrollbar_hidden = False
+            self._refresh_edit_scrollbar_visuals()
 
             # 流式输出结束后，恢复原文框高度约束和分割条拉伸因子
             if not self._is_streaming:

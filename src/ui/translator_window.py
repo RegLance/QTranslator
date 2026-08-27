@@ -1,6 +1,7 @@
 """独立翻译窗口模块 - QTranslator（无边框风格，支持主题切换、纯文本显示）"""
 import sys
 import math
+import time
 import webbrowser
 from datetime import datetime
 from typing import Optional
@@ -470,6 +471,14 @@ class TranslatorWindow(QWidget):
         self._word_selection_timer.setSingleShot(True)
         self._word_selection_timer.setInterval(300)
         self._word_selection_timer.timeout.connect(self._check_word_selection)
+
+        # 文本框残影修复：分割器调整高度后强制全量重绘视口（立即 + 防抖），
+        # 防止被裁剪行的半行像素在后续滚动中残留
+        self._edit_resize_time = 0.0  # 最近一次文本框 resize 时间戳
+        self._edit_repaint_timer = QTimer(self)
+        self._edit_repaint_timer.setSingleShot(True)
+        self._edit_repaint_timer.setInterval(80)
+        self._edit_repaint_timer.timeout.connect(self._force_edit_viewport_repaint)
 
         # 最近一次弹出查询的单词：用于防止卡片被关闭后，失活等事件
         # 再次触发 selectionChanged 导致同一单词重复弹窗
@@ -1222,6 +1231,8 @@ class TranslatorWindow(QWidget):
         self._input_text.customContextMenuRequested.connect(self._show_input_context_menu)
         self._input_text.setAcceptRichText(False)  # 禁用富文本
         self._input_text.installEventFilter(self)  # 安装事件过滤器以处理回车键
+        # 高度调整后短时间内的滚动需全量重绘，清除被裁剪行残留
+        self._input_text.verticalScrollBar().valueChanged.connect(self._on_edit_scrolled)
         self._input_text.selectionChanged.connect(
             lambda: self._on_text_selection_changed(self._input_text)
         )
@@ -1336,6 +1347,8 @@ class TranslatorWindow(QWidget):
         self._output_text.customContextMenuRequested.connect(self._show_output_context_menu)
         self._output_text.setAcceptRichText(False)  # 禁用富文本
         self._output_text.installEventFilter(self)
+        # 高度调整后短时间内的滚动需全量重绘，清除被裁剪行残留
+        self._output_text.verticalScrollBar().valueChanged.connect(self._on_edit_scrolled)
         self._output_text.selectionChanged.connect(
             lambda: self._on_text_selection_changed(self._output_text)
         )
@@ -3350,6 +3363,14 @@ class TranslatorWindow(QWidget):
             self._update_input_layout()
             return False
 
+        # 文本框自身高度变化（分割器拖动导致）：强制全量重绘视口，
+        # 清除底部被裁剪行的残留像素（Qt 滚动区域 resize 后可能复用旧缓存）
+        if (event.type() == event.Type.Resize
+                and hasattr(self, '_output_text')
+                and obj in (self._output_text, self._input_text)):
+            self._on_edit_resized()
+            return False
+
         # 处理内容框架的 resize 事件（更新版本标签位置）
         if hasattr(self, '_version_label') and obj == self._content_frame and event.type() == event.Type.Resize:
             self._update_version_label_position()
@@ -3387,6 +3408,29 @@ class TranslatorWindow(QWidget):
             obj.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
         return super().eventFilter(obj, event)
+
+    def _on_edit_resized(self):
+        """文本框高度被调整后：立即 + 防抖全量重绘视口。
+
+        Qt 滚动区域在 resize 后可能复用旧的视口缓存，底部被裁剪的
+        半行文字会在后续滚动中残留成残影；全量重绘保证缓存与内容一致。
+        """
+        self._edit_resize_time = time.monotonic()
+        self._force_edit_viewport_repaint()
+        self._edit_repaint_timer.start()  # 拖动结束后的最终状态再刷一次
+
+    def _force_edit_viewport_repaint(self):
+        """全量重绘原文/译文框视口（update 为异步合并，频繁调用无额外开销）"""
+        try:
+            self._input_text.viewport().update()
+            self._output_text.viewport().update()
+        except RuntimeError:
+            pass  # 窗口销毁过程中触发，忽略
+
+    def _on_edit_scrolled(self, _value):
+        """resize 后短时间内的滚动：每步强制全量重绘，防止残影随滚动保留"""
+        if time.monotonic() - self._edit_resize_time < 0.5:
+            self._force_edit_viewport_repaint()
 
     def _update_output_layout(self):
         """更新输出区域的布局（文本框和悬浮按钮位置）"""

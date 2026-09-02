@@ -1214,9 +1214,8 @@ class ChatWindow(QWidget):
         # 显式 IBeam 文本光标（悬停逻辑不覆盖这里，防止被窗口边缘光标切换污染）
         self._input_edit.setCursor(Qt.CursorShape.IBeamCursor)
         self._input_edit.viewport().setCursor(Qt.CursorShape.IBeamCursor)
-        # 初始高度 96px：底部 36px 让给右下角发送图标（文本永不与图标重叠），
-        # 可视文本区与原 64px 输入框相当；仍可通过顶部拖拽条在 64~420px 间调整
-        self._input_edit.setFixedHeight(96)
+        # 初始高度 64px（与原设计一致）；发送图标悬浮覆盖右下角，不预留专属空间
+        self._input_edit.setFixedHeight(64)
         self._input_edit.installEventFilter(self)
         input_box_layout.addWidget(self._input_edit)
         self._input_resize_handle.attach(self._input_edit)
@@ -1431,10 +1430,10 @@ class ChatWindow(QWidget):
             #chatInput {{
                 background: {bg2}; color: {text1};
                 border: 1px solid {border}; border-radius: 12px;
-                padding: 8px 10px 36px 10px; font-size: {font_size}px;
+                padding: 8px 10px; font-size: {font_size}px;
                 selection-background-color: {accent}; selection-color: #ffffff;
             }}
-            #chatInput:focus {{ border: 2px solid {text2}; padding: 7px 9px 35px 9px; }}
+            #chatInput:focus {{ border: 2px solid {text2}; padding: 7px 9px; }}
             #chatInput QScrollBar:vertical {{
                 background: transparent; width: 6px; margin: 2px;
             }}

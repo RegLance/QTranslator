@@ -1193,6 +1193,15 @@ class ChatWindow(QWidget):
         self._stream_reason_scroll: Optional[QScrollArea] = None
         self._stream_row: Optional[QWidget] = None  # 流式输出所在的行容器
         self._stream_reserve = None  # (占位 spacer, 5行上限高)：思考增长补偿
+
+        # 气泡文本拖动选择自动滚动：选中文字拖出消息区视口边缘时持续滚动
+        # （气泡是 QLabel 而非 QTextEdit，无原生边缘自动滚动，需手动实现）
+        self._selection_scroll_timer = QTimer(self)
+        self._selection_scroll_timer.setInterval(25)
+        self._selection_scroll_timer.timeout.connect(self._bubble_autoscroll_tick)
+        self._selection_scroll_dir = 0   # 0 停止 / -1 向上 / +1 向下
+        self._selection_scroll_step = 0  # 每 tick 滚动像素
+
         right.addWidget(self._message_scroll, 1)
 
         # 输入区：拖拽条 + 输入框 + 右下角浮动发送图标
@@ -1675,6 +1684,7 @@ class ChatWindow(QWidget):
         self._resize_start_geo = None
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         self.releaseMouse()
+        self._stop_bubble_autoscroll()  # 隐藏时停掉气泡选择自动滚动
         super().hideEvent(event)
 
     def changeEvent(self, event):
@@ -1840,6 +1850,14 @@ class ChatWindow(QWidget):
         # 发送图标跟随输入区尺寸变化固定在右下角
         if obj is self._input_box and event.type() == QEvent.Type.Resize:
             self._position_send_btn()
+        # 气泡文本拖动选择：拖出消息区视口边缘时自动滚动（QLabel 无原生行为）
+        if obj.property("chatBubble") and event.type() == QEvent.Type.MouseMove \
+                and event.buttons() & Qt.MouseButton.LeftButton:
+            self._update_bubble_autoscroll(event)
+            return False
+        if obj.property("chatBubble") and event.type() == QEvent.Type.MouseButtonRelease:
+            self._stop_bubble_autoscroll()
+            return False
         is_child = (
             isinstance(obj, QWidget)
             and obj is not self._input_edit
@@ -1910,6 +1928,45 @@ class ChatWindow(QWidget):
         bh = self._send_btn.height()
         self._send_btn.move(w - bw - 8, h - bh - 6)
         self._send_btn.raise_()
+
+    # ------------------------------------------------------------------
+    # 气泡拖动选择自动滚动
+    # ------------------------------------------------------------------
+    def _update_bubble_autoscroll(self, event):
+        """气泡选中文字拖出消息区视口边缘：按超出量持续自动滚动"""
+        vp = self._message_scroll.viewport()
+        y = vp.mapFromGlobal(event.globalPosition().toPoint()).y()
+        vp_h = vp.height()
+        if y < 0:
+            direction = -1
+            over = -y
+        elif y > vp_h:
+            direction = 1
+            over = y - vp_h
+        else:
+            self._stop_bubble_autoscroll()
+            return
+        self._selection_scroll_dir = direction
+        # 越靠外越快：4~48px/25ms，手感接近 QTextEdit 边缘拖动选择
+        self._selection_scroll_step = max(4, min(48, over // 4))
+        self._selection_scroll_timer.start()
+
+    def _stop_bubble_autoscroll(self):
+        """停止气泡拖动选择的自动滚动"""
+        self._selection_scroll_dir = 0
+        self._selection_scroll_timer.stop()
+
+    def _bubble_autoscroll_tick(self):
+        """自动滚动定时器每 tick：按方向滚动消息区（先停平滑动画防拉回）"""
+        if self._selection_scroll_dir == 0:
+            self._selection_scroll_timer.stop()
+            return
+        bar = self._message_scroll.verticalScrollBar()
+        self._message_scroll.stopSmooth()
+        target = bar.value() + self._selection_scroll_dir * self._selection_scroll_step
+        target = max(bar.minimum(), min(bar.maximum(), target))
+        if target != bar.value():
+            bar.setValue(target)
 
     def _make_send_icon(self, color: str) -> QIcon:
         """自绘纸飞机发送图标（QPainterPath，随主题色重建）"""
@@ -2344,6 +2401,9 @@ class ChatWindow(QWidget):
         label.setMinimumWidth(40)
         # 撑满聊天区可用宽度（不加 maxWidth 会按未换行宽度撑大容器 → 溢出截断）
         label.setMaximumWidth(usable)
+        # 气泡标记：eventFilter 据此处理拖动选择边缘自动滚动
+        label.setProperty("chatBubble", True)
+        label.installEventFilter(self)
 
         row = _BubbleRow()
         lay = QVBoxLayout(row)
@@ -2538,6 +2598,9 @@ class ChatWindow(QWidget):
             rlabel.setText(_format_content(reasoning, keep_blanks=True))
         rlabel.setWordWrap(True)
         rlabel.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # 气泡标记：eventFilter 据此处理拖动选择边缘自动滚动
+        rlabel.setProperty("chatBubble", True)
+        rlabel.installEventFilter(self)
         # 以与 QSS（#reasoningContent）一致的字号度量行高，
         # 否则按默认字体度量会让折叠高度不足实际的 6 行
         _fs = max(int(self._config.get('font.size', 15)) - 1, 12)

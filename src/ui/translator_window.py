@@ -2562,10 +2562,12 @@ class TranslatorWindow(QWidget):
         if not self._fixed_height_mode:
             self._hide_output_scrollbar()
 
-        # 禁用按钮（按钮文字保持不变，通过禁用状态表示正在处理）
-        self._translate_btn.setEnabled(False)
-        self._polishing_btn.setEnabled(False)
-        self._summarize_btn.setEnabled(False)
+        # 流式期间保持三个按钮可点击：用户可随时点「翻译/润色/总结」中断当前任务
+        # 并从头重启（上方已 cancel 旧 worker、断开信号、清空输出再起新任务），
+        # 分隔线动画即表示「正在处理」，不再用禁用态。
+        self._translate_btn.setEnabled(True)
+        self._polishing_btn.setEnabled(True)
+        self._summarize_btn.setEnabled(True)
 
         # 启动分隔线动画（指示正在翻译）
         self._splitter.start_animation()
@@ -2797,10 +2799,12 @@ class TranslatorWindow(QWidget):
         if not self._fixed_height_mode:
             self._hide_output_scrollbar()
 
-        # 禁用所有操作按钮（按钮文字保持不变，通过禁用状态表示正在处理）
-        self._translate_btn.setEnabled(False)
-        self._polishing_btn.setEnabled(False)
-        self._summarize_btn.setEnabled(False)
+        # 流式期间保持三个按钮可点击：用户可随时点「翻译/润色/总结」中断当前任务
+        # 并从头重启（上方已 cancel 旧 worker、断开信号、清空输出再起新任务），
+        # 分隔线动画即表示「正在处理」，不再用禁用态。
+        self._translate_btn.setEnabled(True)
+        self._polishing_btn.setEnabled(True)
+        self._summarize_btn.setEnabled(True)
 
         # 启动分隔线动画（指示正在润色）
         self._splitter.start_animation()
@@ -2947,10 +2951,12 @@ class TranslatorWindow(QWidget):
         if not self._fixed_height_mode:
             self._hide_output_scrollbar()
 
-        # 禁用所有操作按钮（按钮文字保持不变，通过禁用状态表示正在处理）
-        self._translate_btn.setEnabled(False)
-        self._polishing_btn.setEnabled(False)
-        self._summarize_btn.setEnabled(False)
+        # 流式期间保持三个按钮可点击：用户可随时点「翻译/润色/总结」中断当前任务
+        # 并从头重启（上方已 cancel 旧 worker、断开信号、清空输出再起新任务），
+        # 分隔线动画即表示「正在处理」，不再用禁用态。
+        self._translate_btn.setEnabled(True)
+        self._polishing_btn.setEnabled(True)
+        self._summarize_btn.setEnabled(True)
 
         # 启动分隔线动画（指示正在总结）
         self._splitter.start_animation()

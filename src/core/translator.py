@@ -1,4 +1,5 @@
 """翻译服务模块 - OpenAI API 封装（支持流式翻译、智能语言检测）"""
+import base64
 import hashlib
 import threading
 import traceback
@@ -150,11 +151,14 @@ class Translator:
     def __init__(self):
         """初始化翻译服务"""
         self._client: Optional[OpenAI] = None
+        self._vision_client: Optional[OpenAI] = None
         self._cache: OrderedDict[str, TranslationResult] = OrderedDict()
         self._cache_lock = threading.RLock()
         self._last_error: Optional[str] = None
         self._load_api_config()
         self._init_client()
+        self._load_vision_config()
+        self._init_vision_client()
 
     def _load_api_config(self):
         """从配置文件加载 API 配置"""
@@ -673,6 +677,96 @@ Examples:
                 target_language=target_lang
             )
 
+    def _load_vision_config(self):
+        """从配置文件加载识图 API 配置。"""
+        config = get_config()
+        self._vision_use_shared = config.get('vision.use_shared_model', False)
+        self._vision_api_key = config.get('vision.api_key', '')
+        self._vision_base_url = config.get('vision.base_url', '')
+        self._vision_model = config.get('vision.model', '')
+        self._vision_timeout = config.get('vision.timeout', 60)
+
+    def _init_vision_client(self):
+        """初始化识图客户端（勾选「与翻译模型相同」时不创建独立客户端）。"""
+        if self._vision_use_shared:
+            self._vision_client = None
+            return
+        try:
+            self._vision_client = OpenAI(
+                api_key=self._vision_api_key,
+                base_url=self._vision_base_url,
+                timeout=self._vision_timeout,
+            )
+        except Exception as e:
+            log_error(f"初始化识图客户端失败: {e}")
+            self._vision_client = None
+
+    def _resolve_vision(self) -> Tuple[Optional[OpenAI], str, str]:
+        """解析识图客户端与模型。
+
+        Returns:
+            (client, model, error)：error 非空表示配置缺失或客户端不可用。
+        """
+        if self._vision_use_shared:
+            # 与翻译共用：复用翻译客户端与模型
+            if not self._ensure_client():
+                return None, "", "API 客户端初始化失败"
+            return self._client, self._model, ""
+
+        if self._vision_client is None:
+            self._init_vision_client()
+        if self._vision_client is None:
+            return None, "", "识图 API 客户端初始化失败"
+        if not self._vision_base_url.strip():
+            return None, "", "未配置识图 Base URL，请在设置中填写"
+        if not self._vision_model.strip():
+            return None, "", "未配置识图模型，请在设置中填写识图模型或勾选「识图模型与翻译模型相同」"
+        return self._vision_client, self._vision_model, ""
+
+    def recognize_image(self, image_bytes: bytes, mime: str = "image/png") -> Tuple[Optional[str], Optional[str]]:
+        """识别图片中的文字（同步，供工作线程调用）。
+
+        识图 API 配置独立于翻译：勾选「与翻译模型相同」时复用翻译的 URL/Key/模型，
+        否则使用 vision 段配置的 Base URL、API Key 与模型。
+
+        Returns:
+            (识别的文本, 错误信息)：成功时错误信息为 None；失败时文本为 None。
+        """
+        client, model, err = self._resolve_vision()
+        if err:
+            return None, err
+
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        data_url = f"data:{mime};base64,{b64}"
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an OCR engine. Extract all text from the image exactly as it appears, "
+                            "preserving line breaks and layout. Output only the text, no explanations."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "请识别图片中的文字，保持原有换行与排版，只输出文字内容："},
+                            {"type": "image_url", "image_url": {"url": data_url}},
+                        ],
+                    },
+                ],
+                temperature=0,
+            )
+
+            raw = response.choices[0].message.content or ""
+            text = strip_think_tags(raw).strip()
+            return text, None
+
+        except Exception as e:
+            return None, self._classify_error(e, "识图失败")
+
     def clear_cache(self):
         """清除翻译缓存"""
         with self._cache_lock:
@@ -682,6 +776,8 @@ Examples:
         """重新初始化客户端（配置变更后）"""
         self._load_api_config()
         self._init_client()
+        self._load_vision_config()
+        self._init_vision_client()
 
 
 # 全局翻译器实例

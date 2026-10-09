@@ -11,8 +11,8 @@ from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QComboBox, QFrame,
     QGraphicsDropShadowEffect, QApplication, QSplitter, QSplitterHandle
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect, QRectF, QPointF, QTimer, QPropertyAnimation, QEasingCurve, QSize
-from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QKeySequence, QIcon, QFont, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QPolygonF
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect, QRectF, QPointF, QTimer, QPropertyAnimation, QEasingCurve, QSize, QBuffer, QByteArray, QIODevice
+from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QKeySequence, QIcon, QFont, QPixmap, QImage, QPainter, QPen, QBrush, QLinearGradient, QPolygonF
 
 try:
     from ..utils.theme import (
@@ -390,6 +390,59 @@ class UpdateCheckWorker(QThread):
             self.check_error.emit()
 
 
+class ImageInputTextEdit(QTextEdit):
+    """支持粘贴图片的原文输入框：粘贴图片时发出 image_pasted 信号（不插入富文本）。"""
+
+    image_pasted = pyqtSignal(object)  # 参数为 QImage
+
+    def canInsertFromMimeData(self, source):
+        if source.hasImage():
+            return True
+        return super().canInsertFromMimeData(source)
+
+    def insertFromMimeData(self, source):
+        if source.hasImage():
+            image = source.imageData()
+            if isinstance(image, QImage) and not image.isNull():
+                self.image_pasted.emit(image)
+                return
+            if isinstance(image, QPixmap) and not image.isNull():
+                self.image_pasted.emit(image.toImage())
+                return
+        super().insertFromMimeData(source)
+
+
+class VisionOCRWorker(QThread):
+    """识图工作线程：调用识图模型识别图片中的文字。"""
+
+    ocr_finished = pyqtSignal(str)  # 识别出的文字
+    ocr_error = pyqtSignal(str)     # 错误信息
+
+    def __init__(self, image_bytes: bytes):
+        super().__init__()
+        self._image_bytes = image_bytes
+        self._is_cancelled = False
+
+    def run(self):
+        try:
+            from src.core.translator import get_translator
+            translator = get_translator()
+            text, err = translator.recognize_image(self._image_bytes, "image/png")
+            if self._is_cancelled:
+                return
+            if err:
+                self.ocr_error.emit(err)
+            else:
+                self.ocr_finished.emit(text or "")
+        except Exception as e:
+            if not self._is_cancelled:
+                self.ocr_error.emit(str(e))
+
+    def cancel(self):
+        """取消识图"""
+        self._is_cancelled = True
+
+
 class TranslatorWindow(QWidget):
     """独立翻译窗口（无边框，支持调整大小、主题切换、纯文本显示）
 
@@ -491,6 +544,11 @@ class TranslatorWindow(QWidget):
         # 当前译文所对应的原文（新增收藏时校验，避免输入已改却仍配对旧译文）
         self._output_paired_source_text = ""
         self._pending_operation_source_text = ""
+
+        # 识图：原文框粘贴的图片（识别后写回文本并清空）
+        self._input_image: Optional[QImage] = None
+        self._IMAGE_PLACEHOLDER = "[图片]"
+        self._pending_function_after_ocr: Optional[str] = None
 
         # 润色差异：勾选「显示润色差异」时由客户端做词/短语级 diff，模型只返回纯文本
         self._polishing_diff_mode = False
@@ -1213,7 +1271,7 @@ class TranslatorWindow(QWidget):
         input_min_height = 180 if self._fixed_height_mode else 120
         self._input_container.setMinimumHeight(input_min_height)
 
-        self._input_text = QTextEdit(self._input_container)
+        self._input_text = ImageInputTextEdit(self._input_container)
         self._input_text.setPlaceholderText("输入要翻译的文本...")
         # 滚动条常显：滚动条出现/消失会改变视口宽度导致文本重排，
         # 底部截断行状态变化后滚动易残留（同设置窗口滚动区修复模式）
@@ -1238,6 +1296,7 @@ class TranslatorWindow(QWidget):
         self._input_text.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._input_text.customContextMenuRequested.connect(self._show_input_context_menu)
         self._input_text.setAcceptRichText(False)  # 禁用富文本
+        self._input_text.image_pasted.connect(self._on_image_pasted)
         self._input_text.installEventFilter(self)  # 安装事件过滤器以处理回车键
         # 高度调整后短时间内的滚动需全量重绘，清除被裁剪行残留
         self._input_text.verticalScrollBar().valueChanged.connect(self._on_edit_scrolled)
@@ -1503,6 +1562,7 @@ class TranslatorWindow(QWidget):
         self._apply_default_function_style()
 
         self._input_text.textChanged.connect(self._schedule_collect_refresh)
+        self._input_text.textChanged.connect(self._on_input_text_changed)
         self._output_text.textChanged.connect(self._schedule_collect_refresh)
         self._lang_combo.currentTextChanged.connect(self._schedule_collect_refresh)
         self._refresh_collect_button_state()
@@ -2422,6 +2482,8 @@ class TranslatorWindow(QWidget):
         # 4. 清空输入和输出文本框
         self._input_text.clear()
         self._output_text.clear()
+        self._input_image = None
+        self._pending_function_after_ocr = None
         self._ensure_output_plain_mode()
         self._clear_polish_diff_snapshot()
         self._output_paired_source_text = ""
@@ -2455,7 +2517,8 @@ class TranslatorWindow(QWidget):
             return
         for signal_name in ['chunk_received', 'translation_finished', 'translation_error',
                             'polishing_finished', 'polishing_error',
-                            'summarize_finished', 'summarize_error']:
+                            'summarize_finished', 'summarize_error',
+                            'ocr_finished', 'ocr_error']:
             try:
                 getattr(self._current_worker, signal_name).disconnect()
             except (TypeError, RuntimeError, AttributeError):
@@ -2521,8 +2584,141 @@ class TranslatorWindow(QWidget):
         self.raise_()
         self.activateWindow()
 
+    def _on_image_pasted(self, image: QImage):
+        """原文框粘贴图片：保存图片并显示占位标记。"""
+        if image is None or image.isNull():
+            return
+        # 先写占位文本，再记录图片：setPlainText 触发的 textChanged
+        # 会在 _input_image 仍为 None 时执行，不会误清刚记录的图片
+        self._input_text.setPlainText(self._IMAGE_PLACEHOLDER)
+        self._input_image = image
+        self._schedule_collect_refresh()
+
+    def _on_input_text_changed(self):
+        """原文文本变化时，若占位标记被改动则清除已粘贴的图片。"""
+        if self._input_image is not None and \
+                self._input_text.toPlainText().strip() != self._IMAGE_PLACEHOLDER:
+            self._input_image = None
+
+    @staticmethod
+    def _image_to_png_bytes(image: QImage) -> Optional[bytes]:
+        """QImage 转 PNG 字节（用于识图请求）。"""
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        if not buf.open(QIODevice.OpenModeFlag.WriteOnly):
+            return None
+        try:
+            if not image.save(buf, "PNG"):
+                return None
+            return bytes(ba)
+        finally:
+            buf.close()
+
+    def _maybe_start_ocr(self, function_name: str) -> bool:
+        """原文框若已粘贴图片，则先启动识图流程；返回 True 表示已接管（识图完成后再执行操作）。"""
+        if getattr(self, '_input_image', None) is None:
+            return False
+
+        image = self._input_image
+        try:
+            image_bytes = self._image_to_png_bytes(image)
+        except Exception:
+            image_bytes = None
+        if not image_bytes:
+            self._input_image = None
+            self._output_text.setPlainText("识图失败: 图片数据无效")
+            return True
+
+        self._stop_tts_playback()
+
+        # 取消之前的任务并断开旧信号，防止残留信号污染
+        if self._current_worker and self._current_worker.isRunning():
+            self._current_worker.cancel()
+            self._current_worker.wait(1000)
+        self._disconnect_worker_signals()
+        self._current_worker = None
+
+        # 清空输出并给出识别中提示
+        self._output_text.clear()
+        self._ensure_output_plain_mode()
+        self._clear_polish_diff_snapshot()
+        self._streaming_text = ""
+        self._output_text.setPlainText("正在识别图片文字…")
+
+        # 重置流式状态
+        self._is_streaming = False
+        self._char_queue.clear()
+        self._char_timer.stop()
+        self._pending_finish_callback = None
+        self._scrollbar_hidden = False
+
+        self._translate_btn.setEnabled(True)
+        self._polishing_btn.setEnabled(True)
+        self._summarize_btn.setEnabled(True)
+        self._splitter.start_animation()
+
+        self._pending_function_after_ocr = function_name
+        self._current_worker = VisionOCRWorker(image_bytes)
+        self._current_worker.ocr_finished.connect(self._on_ocr_finished)
+        self._current_worker.ocr_error.connect(self._on_ocr_error)
+        self._current_worker.start()
+        return True
+
+    def _on_ocr_finished(self, text: str):
+        """识图完成 - 切回主线程处理"""
+        if self.sender() is not self._current_worker:
+            return
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._do_ocr_finished(text))
+
+    def _do_ocr_finished(self, text: str):
+        """识图完成：将识别文字写回原文框，再按纯文本流程执行对应操作。"""
+        try:
+            function_name = getattr(self, '_pending_function_after_ocr', 'translate') or 'translate'
+            self._pending_function_after_ocr = None
+            self._input_image = None
+            self._current_worker = None
+            self._splitter.stop_animation()
+
+            recognized = (text or "").strip()
+            if not recognized:
+                self._output_text.setPlainText("识图失败: 未识别到图片中的文字")
+                return
+
+            # 识别文字写回原文框（更新历史原文与收藏配对），随后执行操作
+            self._input_text.setPlainText(recognized)
+            if function_name == 'polishing':
+                self._start_polishing()
+            elif function_name == 'summarize':
+                self._start_summarize()
+            else:
+                self._start_translation()
+        except RuntimeError:
+            # 窗口已被销毁，忽略
+            pass
+
+    def _on_ocr_error(self, error: str):
+        """识图失败 - 切回主线程处理"""
+        if self.sender() is not self._current_worker:
+            return
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._do_ocr_error(error))
+
+    def _do_ocr_error(self, error: str):
+        """识图失败：在译文框打印错误信息（保留图片，用户可修复配置后重试）。"""
+        try:
+            self._pending_function_after_ocr = None
+            self._current_worker = None
+            self._splitter.stop_animation()
+            self._output_text.setPlainText(f"识图失败: {error}")
+        except RuntimeError:
+            # 窗口已被销毁，忽略
+            pass
+
     def _start_translation(self):
         """开始翻译"""
+        if self._maybe_start_ocr('translate'):
+            return
         text = self._input_text.toPlainText().strip()
         if not text:
             return
@@ -2757,6 +2953,8 @@ class TranslatorWindow(QWidget):
 
     def _start_polishing(self):
         """开始润色"""
+        if self._maybe_start_ocr('polishing'):
+            return
         text = self._input_text.toPlainText().strip()
         if not text:
             return
@@ -2912,6 +3110,8 @@ class TranslatorWindow(QWidget):
 
     def _start_summarize(self):
         """开始总结"""
+        if self._maybe_start_ocr('summarize'):
+            return
         text = self._input_text.toPlainText().strip()
         if not text:
             return

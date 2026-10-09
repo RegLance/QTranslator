@@ -202,6 +202,13 @@ class Config:
                 'timeout': 60,  # 请求超时时间（秒）
                 'no_proxy': '109.105.111.17',  # 不使用代理的地址，多个用逗号分隔
             },
+            'vision': {
+                'use_shared_model': False,  # 勾选：识图模型与翻译模型相同（共用翻译的 URL、Key 与模型）
+                'api_key': '',  # 识图专用 API Key（use_shared_model=False 时生效）
+                'base_url': '',  # 识图专用 Base URL
+                'model': '',  # 识图模型名称
+                'timeout': 60,  # 识图请求超时时间（秒）
+            },
             'language_detection': {
                 'engine': 'local',  # local=本地 langdetect；baidu | google | bing（联网失败自动回退本地）
                 'timeout': 3,  # 联网检测超时（秒），限制在 3～60

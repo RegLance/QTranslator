@@ -773,6 +773,39 @@ class SettingsDialog(QWidget):
         self._model_hint_label.setWordWrap(True)
         api_layout.addRow("", self._model_hint_label)
 
+        # 识图模型设置
+        self._vision_shared_check = QCheckBox("识图模型与翻译模型相同")
+        self._vision_shared_check.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._vision_shared_check.toggled.connect(self._on_vision_shared_toggled)
+        api_layout.addRow(self._vision_shared_check)
+
+        self._vision_hint_label = QLabel(
+            "取消勾选后可独立配置识图模型的 Base URL、API Key 与 Model；"
+            "在翻译窗口原文框粘贴图片后，点「翻译/润色/总结」会先识别图片文字。"
+        )
+        self._vision_hint_label.setProperty("class", "hint")
+        self._vision_hint_label.setWordWrap(True)
+        api_layout.addRow("", self._vision_hint_label)
+
+        self._vision_api_url_edit = QLineEdit()
+        self._vision_api_url_edit.setMinimumHeight(32)
+        self._vision_api_url_edit.setPlaceholderText("https://api.openai.com/v1")
+        self._vision_api_url_label = QLabel("识图 Base URL:")
+        api_layout.addRow(self._vision_api_url_label, self._vision_api_url_edit)
+
+        self._vision_api_key_edit = QLineEdit()
+        self._vision_api_key_edit.setMinimumHeight(32)
+        self._vision_api_key_edit.setPlaceholderText("sk-...")
+        self._vision_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._vision_api_key_label = QLabel("识图 API Key:")
+        api_layout.addRow(self._vision_api_key_label, self._vision_api_key_edit)
+
+        self._vision_model_edit = QLineEdit()
+        self._vision_model_edit.setMinimumHeight(32)
+        self._vision_model_edit.setPlaceholderText("如 qwen-vl-plus")
+        self._vision_model_label = QLabel("识图模型:")
+        api_layout.addRow(self._vision_model_label, self._vision_model_edit)
+
         self._no_proxy_edit = QLineEdit()
         self._no_proxy_edit.setMinimumHeight(32)
         self._no_proxy_edit.setPlaceholderText("localhost,127.0.0.1")
@@ -1819,7 +1852,8 @@ class SettingsDialog(QWidget):
                    self._polishing_show_diff_check, self._animation_check,
                    self._word_popup_check, self._word_popup_global_check,
                    self._disable_update_check,
-                   self._chat_shared_api_check):
+                   self._chat_shared_api_check,
+                   self._vision_shared_check):
             cb.setIcon(self._cached_check_icon if cb.isChecked() else self._cached_uncheck_icon)
         self._applied_theme_signature = self._get_theme_signature()
 
@@ -2195,6 +2229,14 @@ class SettingsDialog(QWidget):
         self._model_edit.setText(self._config.get('translator.model', ''))
         self._no_proxy_edit.setText(self._config.get('translator.no_proxy', '109.105.120.122'))
 
+        # 识图模型配置
+        use_shared_vision = self._config.get('vision.use_shared_model', False)
+        self._vision_shared_check.setChecked(use_shared_vision)
+        self._vision_api_url_edit.setText(self._config.get('vision.base_url', ''))
+        self._vision_api_key_edit.setText(self._config.get('vision.api_key', ''))
+        self._vision_model_edit.setText(self._config.get('vision.model', ''))
+        self._on_vision_shared_toggled(use_shared_vision)
+
         ld_eng = self._config.get('language_detection.engine', 'local') or 'local'
         _ldi = self._lang_detect_combo.findData(ld_eng)
         _lfallback = self._lang_detect_combo.findData('local')
@@ -2485,6 +2527,19 @@ class SettingsDialog(QWidget):
         self._tts_rate_value_label.setEnabled(edge)
         self._tts_volume_value_label.setEnabled(edge)
 
+    def _on_vision_shared_toggled(self, checked: bool):
+        """勾选「识图模型与翻译模型相同」时置灰识图独立配置字段"""
+        if hasattr(self, '_cached_check_icon'):
+            cb = self._vision_shared_check
+            cb.setIcon(self._cached_check_icon if checked else self._cached_uncheck_icon)
+        enabled = not checked
+        self._vision_api_url_edit.setEnabled(enabled)
+        self._vision_api_url_label.setEnabled(enabled)
+        self._vision_api_key_edit.setEnabled(enabled)
+        self._vision_api_key_label.setEnabled(enabled)
+        self._vision_model_edit.setEnabled(enabled)
+        self._vision_model_label.setEnabled(enabled)
+
     def _on_chat_shared_api_toggled(self, checked: bool):
         """勾选'与翻译共用 API'时置灰 AI 对话独立 API 字段"""
         if hasattr(self, '_cached_check_icon'):
@@ -2658,6 +2713,10 @@ class SettingsDialog(QWidget):
             self._config.set('translator.api_key', self._api_key_edit.text().strip())
             self._config.set('translator.model', self._model_edit.text().strip())
             self._config.set('translator.no_proxy', self._no_proxy_edit.text().strip())
+            self._config.set('vision.use_shared_model', bool(self._vision_shared_check.isChecked()))
+            self._config.set('vision.base_url', self._vision_api_url_edit.text().strip())
+            self._config.set('vision.api_key', self._vision_api_key_edit.text().strip())
+            self._config.set('vision.model', self._vision_model_edit.text().strip())
             _lde = self._lang_detect_combo.currentData()
             self._config.set('language_detection.engine', str(_lde or 'local'))
 

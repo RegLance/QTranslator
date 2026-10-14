@@ -27,22 +27,23 @@ def _virtual_geometry() -> QRect:
 
 
 def _grab_virtual_desktop(virtual: QRect, dpr: float) -> QPixmap:
-    """逐屏抓取并拼成一张覆盖虚拟桌面的底图（设备像素坐标）。
+    """逐屏抓取并拼成一张覆盖虚拟桌面的底图（设备像素 = 逻辑尺寸 × dpr）。
 
-    以主屏 devicePixelRatio 作为整体缩放系数：多屏 DPR 一致时精确，
-    DPR 混用（不同缩放比例）时按主屏近似，属已知边界。
+    在「逻辑坐标」里拼图：每个屏幕按其 geometry() 的逻辑矩形贴到画布上，
+    Qt 按画布的 devicePixelRatio 自动换算到设备像素。这样无论各屏缩放
+    比例（DPR）是否一致，对齐都正确，不会出现偏移 / 黑边。
     """
     result = QPixmap(int(virtual.width() * dpr), int(virtual.height() * dpr))
+    result.setDevicePixelRatio(dpr)
     result.fill(Qt.GlobalColor.black)
     painter = QPainter(result)
     for s in QGuiApplication.screens():
         geo = s.geometry()
         pix = s.grabWindow(0)
-        x = int((geo.left() - virtual.left()) * dpr)
-        y = int((geo.top() - virtual.top()) * dpr)
-        w = int(geo.width() * dpr)
-        h = int(geo.height() * dpr)
-        painter.drawPixmap(x, y, w, h, pix)
+        # 目标矩形 = 该屏在虚拟桌面中的逻辑位置；把抓到的原始分辨率图像
+        # 缩放到这个逻辑矩形（drawPixmap 自动按 dpr 上采样，各屏 DPR 无关）
+        target = QRect(geo.topLeft() - virtual.topLeft(), geo.size())
+        painter.drawPixmap(target, pix)
     painter.end()
     return result
 

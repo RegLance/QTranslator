@@ -137,6 +137,14 @@ class Logger:
     def exception(self, msg: str):
         """记录异常（包含堆栈信息）"""
         self._logger.exception(msg)
+
+    def flush(self):
+        """立即把缓冲的日志写入磁盘（调试关键时序时调用，避免进程被强杀丢失日志）"""
+        for handler in self._logger.handlers:
+            try:
+                handler.flush()
+            except Exception:
+                pass
         
     def log_translation(self, original: str, translated: str, target_lang: str):
         """记录翻译历史"""
@@ -189,6 +197,11 @@ def log_error(msg: str):
 def log_exception(msg: str):
     """记录异常"""
     get_logger().exception(msg)
+
+
+def log_flush():
+    """立即刷新日志到磁盘"""
+    get_logger().flush()
 
 
 def log_translation(original: str, translated: str, target_lang: str):

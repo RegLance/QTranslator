@@ -2102,8 +2102,8 @@ class SettingsDialog(QWidget):
                 None,
             )
             if _dup_label:
-                QMessageBox.warning(
-                    self, "快捷键冲突",
+                self._show_modal_message_box(
+                    QMessageBox.Icon.Warning, "快捷键冲突",
                     f"「{hotkey}」已被「{_dup_label}」使用，请换一个组合。")
                 _orig_value, _orig_btn, _ = _all_hotkeys[_target]
                 self._set_hotkey_btn_text(_orig_btn, _orig_value)
@@ -2558,8 +2558,10 @@ class SettingsDialog(QWidget):
         base = self._chat_api_url_edit.text().strip()
         key = self._chat_api_key_edit.text().strip()
         model = self._chat_model_edit.text().strip()
+        log_info(f"[settings] _on_test_chat_api 点击 base={base!r} model={model!r}")
         if not base or not model:
-            QMessageBox.warning(self, "测试失败", "请先填写 Base URL 和 Model。")
+            self._show_modal_message_box(
+                QMessageBox.Icon.Warning, "测试失败", "请先填写 Base URL 和 Model。")
             return
         if self._chat_api_test_worker is not None \
                 and self._chat_api_test_worker.isRunning():
@@ -2572,25 +2574,28 @@ class SettingsDialog(QWidget):
         self._chat_api_test_worker.fail.connect(self._on_chat_api_test_fail)
         self._chat_api_test_worker.finished.connect(self._on_chat_api_test_done)
         self._chat_api_test_worker.start()
+        log_info("[settings] _on_test_chat_api worker 已启动")
 
     def _on_chat_api_test_ok(self, tokens: int):
         """测试通过：更新最大上下文 token（随设置保存生效）"""
+        log_info(f"[settings] _on_chat_api_test_ok tokens={tokens}")
         if tokens >= 4096:
             self._ctx_limit_spin.setValue(min(max(tokens, 4096), 1048576))
-            QMessageBox.information(
-                self, "测试通过",
+            self._show_modal_message_box(
+                QMessageBox.Icon.Information, "测试通过",
                 f"API 连接正常，模型上下文长度已更新为 {tokens} tokens。\n"
                 f"点击保存后生效。")
         else:
-            QMessageBox.information(
-                self, "测试通过",
+            self._show_modal_message_box(
+                QMessageBox.Icon.Information, "测试通过",
                 "API 连接正常。未能自动探测到该模型的上下文长度，\n"
                 "将沿用当前上下文长度设置。")
 
     def _on_chat_api_test_fail(self, error: str):
         """测试不通：提示用户，回退继续用和翻译一样的模型配置"""
-        QMessageBox.warning(
-            self, "测试失败",
+        log_info(f"[settings] _on_chat_api_test_fail error={error!r}")
+        self._show_modal_message_box(
+            QMessageBox.Icon.Warning, "测试失败",
             f"无法连接该 API：\n{error}\n\n"
             f"对话将继续使用与翻译相同的模型配置。")
         # 回退到"与翻译共用 API"（toggled 会自动置灰独立 API 字段）
@@ -2940,6 +2945,17 @@ class SettingsDialog(QWidget):
         except ImportError:
             from src.utils.window_front import bring_to_front_once
         bring_to_front_once(self)
+
+    def _show_modal_message_box(self, icon, title, text):
+        """置顶显示模态消息框，避免被「始终置顶」的翻译窗口盖住导致应用锁死。"""
+        log_info(f"[settings] _show_modal_message_box title={title!r}")
+        try:
+            from .utils.window_front import show_modal_message_box
+        except ImportError:
+            from src.utils.window_front import show_modal_message_box
+        ret = show_modal_message_box(self, icon, title, text)
+        log_info(f"[settings] _show_modal_message_box 返回 ret={ret}")
+        return ret
 
     def closeEvent(self, event):
         """隐藏而非销毁，保持单例可用"""

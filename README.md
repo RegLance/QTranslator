@@ -47,6 +47,7 @@ Built for researchers, content creators, language learners, and power users who 
 - **Translator Window** — Standalone window for longer texts; supports Chinese, English, Japanese, Korean, and more
 - **Polish** — Improve wording with optional **phrase-level diff** (soft red removals / soft green additions)
 - **Summarize** — Generate structured summaries for long inputs
+- **Image Recognition** — Screenshot or paste an image into the source box; the text is OCR'd first, then translated / polished / summarized
 - **Selection Writing** — Translate and replace in place; optional **keep original** below the result
 
 ### AI Chat
@@ -99,6 +100,15 @@ Built for researchers, content creators, language learners, and power users who 
 In some apps (**Excel**, **PowerPoint**), the hover button is **disabled by default** to avoid conflicts with built-in selection UI. **Select text**, then press **Selection Translate** (`Ctrl+Shift+T`).
 
 If nothing is captured, try **Ctrl+C** first, or ensure focus is inside editable/readable content. Capture paths include editor hooks, UI Automation, `selection-hook`, and clipboard probing.
+
+### Image Recognition (Screenshot / Paste)
+
+Recognize text from an image, then translate, polish, or summarize it — two ways:
+
+- **In-app screenshot**: Click the **screenshot** button in the bottom-right of the source box → drag to select a region → confirm with **Enter / double-click / ✓** (cancel with **Esc / ✗**) → the source box shows `[image]`
+- **Paste an image**: Copy an image first (screenshot to clipboard, or copy an image file), then **Ctrl+V** into the source box → shows `[image]`
+
+Once the image is in the source box, click **Translate / Polish / Summarize** (or press **Enter**) — the app **OCR's the image first**, then runs the action.
 
 ### Word Cards
 

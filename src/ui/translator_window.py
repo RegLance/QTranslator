@@ -812,6 +812,35 @@ class TranslatorWindow(QWidget):
 
         return QIcon(pixmap)
 
+    def _create_screenshot_icon(self, theme: dict) -> QIcon:
+        """截图图标（四角括角，示意框选屏幕区域）"""
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(QColor(0, 0, 0, 0))
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        icon_color = QColor(theme.get('text_muted', '#888888'))
+        pen = QPen(icon_color, 1.6, Qt.PenStyle.SolidLine,
+                   Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        # 四角括角（crop 图标）
+        l = 5
+        painter.drawLine(QPointF(3, 3), QPointF(3 + l, 3))
+        painter.drawLine(QPointF(3, 3), QPointF(3, 3 + l))
+        painter.drawLine(QPointF(15, 3), QPointF(15 - l, 3))
+        painter.drawLine(QPointF(15, 3), QPointF(15, 3 + l))
+        painter.drawLine(QPointF(3, 15), QPointF(3 + l, 15))
+        painter.drawLine(QPointF(3, 15), QPointF(3, 15 - l))
+        painter.drawLine(QPointF(15, 15), QPointF(15 - l, 15))
+        painter.drawLine(QPointF(15, 15), QPointF(15, 15 - l))
+
+        painter.end()
+
+        return QIcon(pixmap)
+
     def _create_star_icon(self, theme: dict, collected: bool) -> QIcon:
         """收藏星标。空心与实心共用同一多边形，实心另加同色细描边，避免「填色后变小」。"""
         sz = 24
@@ -1376,7 +1405,30 @@ class TranslatorWindow(QWidget):
         self._collect_output_btn.clicked.connect(self._on_collect_output_clicked)
         ic_layout.addWidget(self._collect_output_btn)
 
-        self._input_collect_frame.setFixedSize(66, 34)
+        # 截图按钮（与朗读/收藏同栏，截图结果走粘贴识图流程）
+        self._screenshot_btn = QPushButton()
+        self._screenshot_btn.setObjectName("screenshotBtn")
+        self._screenshot_btn.setFixedSize(28, 28)
+        self._screenshot_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._screenshot_btn.setToolTip("截图识别")
+        self._screenshot_btn.setIcon(self._create_screenshot_icon(theme))
+        self._screenshot_btn.setStyleSheet(f"""
+            QPushButton#screenshotBtn {{
+                background-color: transparent;
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton#screenshotBtn:hover {{
+                background-color: rgba(0, 0, 0, 0.1);
+            }}
+            QPushButton#screenshotBtn:pressed {{
+                background-color: rgba(0, 0, 0, 0.2);
+            }}
+        """)
+        self._screenshot_btn.clicked.connect(self._on_screenshot_clicked)
+        ic_layout.addWidget(self._screenshot_btn)
+
+        self._input_collect_frame.setFixedSize(96, 34)
         self._input_collect_frame.raise_()
 
         self._splitter.addWidget(self._input_container)
@@ -1768,6 +1820,12 @@ class TranslatorWindow(QWidget):
 
     def _update_always_on_top(self):
         """动态切换窗口置顶属性（运行时配置变更时调用）"""
+        try:
+            from ..utils.logger import log_info
+        except ImportError:
+            from src.utils.logger import log_info
+        log_info(f"[trans_window] _update_always_on_top always_on_top={self._always_on_top} "
+                 f"visible={self.isVisible()}")
         was_visible = self.isVisible()
         flags = (
             Qt.WindowType.Window |
@@ -1822,6 +1880,12 @@ class TranslatorWindow(QWidget):
 
     def bring_to_front(self):
         """将窗口唤醒到最顶层（使用 Win32 API 确保可靠地获取前台焦点）"""
+        try:
+            from ..utils.logger import log_info
+        except ImportError:
+            from src.utils.logger import log_info
+        log_info(f"[trans_window] bring_to_front always_on_top={self._always_on_top} "
+                 f"visible={self.isVisible()} minimized={self.isMinimized()}")
         if self.isMinimized():
             self.restore_from_minimized()
             return
@@ -2593,6 +2657,20 @@ class TranslatorWindow(QWidget):
         self._input_text.setPlainText(self._IMAGE_PLACEHOLDER)
         self._input_image = image
         self._schedule_collect_refresh()
+
+    def _on_screenshot_clicked(self):
+        """截图并识图：框选屏幕区域，结果复用粘贴图片的识图流程。"""
+        if self._current_worker and self._current_worker.isRunning():
+            return
+        if self._is_streaming:
+            return
+        try:
+            from .screenshot import capture_region
+        except ImportError:
+            from src.ui.screenshot import capture_region
+        image = capture_region(hide_windows=[self])
+        if image is not None and not image.isNull():
+            self._on_image_pasted(image)
 
     def _on_input_text_changed(self):
         """原文文本变化时，若占位标记被改动则清除已粘贴的图片。"""
@@ -3857,9 +3935,12 @@ class TranslatorWindow(QWidget):
             self._polishing_btn.setStyleSheet(normal_style)
             self._summarize_btn.setStyleSheet(selected_style)
 
-        # 仅当默认功能为「翻译」时在原文框显示单词收藏按钮
-        show_collect = self._default_function == 'translate'
-        self._input_collect_frame.setVisible(show_collect)
+        # 单词收藏按钮仅「翻译」模式显示；截图/朗读按钮始终可见
+        is_translate = self._default_function == 'translate'
+        self._collect_output_btn.setVisible(is_translate)
+        self._input_collect_frame.setVisible(True)
+        # 按钮数量随收藏按钮显隐变化，宽度自适应（3 个 96，2 个 66）
+        self._input_collect_frame.setFixedSize(96 if is_translate else 66, 34)
         self._update_input_layout()
 
     def _execute_default_function(self):

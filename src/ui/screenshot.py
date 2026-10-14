@@ -16,33 +16,48 @@ from PyQt6.QtGui import QColor, QGuiApplication, QIcon, QImage, QPainter, QPen, 
 from PyQt6.QtWidgets import QApplication, QDialog, QPushButton
 
 
-def _virtual_geometry() -> QRect:
-    """所有显示器的虚拟桌面包围盒（逻辑坐标）。"""
-    screens = QGuiApplication.screens()
-    left = min(s.geometry().left() for s in screens)
-    top = min(s.geometry().top() for s in screens)
-    right = max(s.geometry().right() for s in screens)
-    bottom = max(s.geometry().bottom() for s in screens)
+def _corrected_screen_rects(dpr: float) -> List[QRect]:
+    """返回各屏在虚拟桌面中的「真实」逻辑矩形（修正 Windows 高 DPI 位置偏移）。
+
+    坑：Windows 高 DPI 下，Qt 的 geometry() 会把「尺寸」按逻辑像素返回，
+    但把「位置」按物理像素返回（未除回缩放比）。副屏位置因此被放大 dpr 倍，
+    导致多屏之间出现虚假缝隙（黑边）。这里把偏移量除回 dpr，得到贴合坐标。
+    """
+    rects = []
+    for s in QGuiApplication.screens():
+        geo = s.geometry()
+        x = round(geo.x() / dpr)
+        y = round(geo.y() / dpr)
+        rects.append(QRect(x, y, geo.width(), geo.height()))
+    return rects
+
+
+def _virtual_geometry(dpr: float) -> QRect:
+    """所有显示器的虚拟桌面包围盒（修正后的逻辑坐标）。"""
+    rects = _corrected_screen_rects(dpr)
+    left = min(r.left() for r in rects)
+    top = min(r.top() for r in rects)
+    right = max(r.right() for r in rects)
+    bottom = max(r.bottom() for r in rects)
     return QRect(left, top, right - left + 1, bottom - top + 1)
 
 
 def _grab_virtual_desktop(virtual: QRect, dpr: float) -> QPixmap:
     """逐屏抓取并拼成一张覆盖虚拟桌面的底图（设备像素 = 逻辑尺寸 × dpr）。
 
-    在「逻辑坐标」里拼图：每个屏幕按其 geometry() 的逻辑矩形贴到画布上，
-    Qt 按画布的 devicePixelRatio 自动换算到设备像素。这样无论各屏缩放
-    比例（DPR）是否一致，对齐都正确，不会出现偏移 / 黑边。
+    在「逻辑坐标」里拼图：每个屏幕按修正后的逻辑矩形贴到画布上，Qt 按
+    画布的 devicePixelRatio 自动换算到设备像素，各屏 DPR 无关，对齐正确。
     """
     result = QPixmap(int(virtual.width() * dpr), int(virtual.height() * dpr))
     result.setDevicePixelRatio(dpr)
     result.fill(Qt.GlobalColor.black)
     painter = QPainter(result)
-    for s in QGuiApplication.screens():
-        geo = s.geometry()
+    screens = QGuiApplication.screens()
+    for s, rect in zip(screens, _corrected_screen_rects(dpr)):
         pix = s.grabWindow(0)
         # 目标矩形 = 该屏在虚拟桌面中的逻辑位置；把抓到的原始分辨率图像
-        # 缩放到这个逻辑矩形（drawPixmap 自动按 dpr 上采样，各屏 DPR 无关）
-        target = QRect(geo.topLeft() - virtual.topLeft(), geo.size())
+        # 缩放到这个逻辑矩形（drawPixmap 自动按 dpr 上采样）
+        target = QRect(rect.topLeft() - virtual.topLeft(), rect.size())
         painter.drawPixmap(target, pix)
     painter.end()
     return result
@@ -238,8 +253,8 @@ def capture_region(hide_windows: Optional[List] = None) -> Optional[QImage]:
     time.sleep(0.2)
 
     try:
-        virtual = _virtual_geometry()
         dpr = QGuiApplication.primaryScreen().devicePixelRatio()
+        virtual = _virtual_geometry(dpr)
         background = _grab_virtual_desktop(virtual, dpr)
         if background.isNull():
             return None

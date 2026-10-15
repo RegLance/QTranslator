@@ -4,74 +4,62 @@
 PyQt6 原生、零额外依赖。关键点：不能用 QRubberBand 的 grab 结果（会得到
 透明空白图），必须用框选坐标到已抓取的「全屏底图」上裁剪。
 
+多屏 / 高 DPI 处理：Windows 下 Qt 的 geometry() 会把「尺寸」按逻辑像素给、
+「位置」按物理像素给；因此每块屏的物理矩形 = geometry().topLeft() 作为位置、
+geometry().size() × devicePixelRatio 作为尺寸。按物理坐标逐屏拼接、逐屏裁剪，
+无论各屏缩放比例（DPR）是否一致，都不会出现黑边或错位。
+
 参考来源：
 - Qt 论坛 "Save mouse-selected area"（规范的全屏遮罩 + 框选 + grabWindow 用法）
 - tik_manager4 的 ui/widgets/screenshot.py（最小 ScreenShot 结构）
 """
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from PyQt6.QtCore import QPointF, QRect, QSize, Qt
 from PyQt6.QtGui import QColor, QGuiApplication, QIcon, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QApplication, QDialog, QPushButton
 
 
-def _corrected_screen_rects(dpr: float) -> List[QRect]:
-    """返回各屏在虚拟桌面中的「真实」逻辑矩形（修正 Windows 高 DPI 位置偏移）。
+def _screen_captures() -> List[Tuple[QRect, QRect, float, QPixmap]]:
+    """抓取每块屏，返回 (逻辑矩形, 物理矩形, DPR, 抓图)。
 
-    坑：Windows 高 DPI 下，Qt 的 geometry() 会把「尺寸」按逻辑像素返回，
-    但把「位置」按物理像素返回（未除回缩放比）。副屏位置因此被放大 dpr 倍，
-    导致多屏之间出现虚假缝隙（黑边）。这里把偏移量除回 dpr，得到贴合坐标。
+    逻辑矩形 = s.geometry()（供叠加层定位 / 鼠标坐标，含 Qt 的逻辑缝隙）；
+    物理矩形 = geometry().topLeft() 位置 + geometry().size() × DPR 尺寸；
+    抓图 = 该屏原生分辨率（物理像素）。
     """
-    rects = []
+    caps = []
     for s in QGuiApplication.screens():
         geo = s.geometry()
-        x = round(geo.x() / dpr)
-        y = round(geo.y() / dpr)
-        rects.append(QRect(x, y, geo.width(), geo.height()))
-    return rects
+        dpr = s.devicePixelRatio()
+        logical = QRect(geo)
+        physical = QRect(geo.x(), geo.y(),
+                         round(geo.width() * dpr), round(geo.height() * dpr))
+        grab = s.grabWindow(0)
+        caps.append((logical, physical, dpr, grab))
+    return caps
 
 
-def _virtual_geometry(dpr: float) -> QRect:
-    """所有显示器的虚拟桌面包围盒（修正后的逻辑坐标）。"""
-    rects = _corrected_screen_rects(dpr)
-    left = min(r.left() for r in rects)
-    top = min(r.top() for r in rects)
-    right = max(r.right() for r in rects)
-    bottom = max(r.bottom() for r in rects)
+def _virtual_logical_bbox(caps: List[Tuple[QRect, QRect, float, QPixmap]]) -> QRect:
+    """叠加层需要覆盖的逻辑包围盒（所有屏 geometry() 的并集）。"""
+    left = min(r.left() for r, _, _, _ in caps)
+    top = min(r.top() for r, _, _, _ in caps)
+    right = max(r.right() for r, _, _, _ in caps)
+    bottom = max(r.bottom() for r, _, _, _ in caps)
     return QRect(left, top, right - left + 1, bottom - top + 1)
 
 
-def _grab_virtual_desktop(virtual: QRect, dpr: float) -> QPixmap:
-    """逐屏抓取并拼成一张覆盖虚拟桌面的底图（设备像素 = 逻辑尺寸 × dpr）。
-
-    在「逻辑坐标」里拼图：每个屏幕按修正后的逻辑矩形贴到画布上，Qt 按
-    画布的 devicePixelRatio 自动换算到设备像素，各屏 DPR 无关，对齐正确。
-    """
-    result = QPixmap(int(virtual.width() * dpr), int(virtual.height() * dpr))
-    result.setDevicePixelRatio(dpr)
-    result.fill(Qt.GlobalColor.black)
-    painter = QPainter(result)
-    screens = QGuiApplication.screens()
-    for s, rect in zip(screens, _corrected_screen_rects(dpr)):
-        pix = s.grabWindow(0)
-        # 目标矩形 = 该屏在虚拟桌面中的逻辑位置；把抓到的原始分辨率图像
-        # 缩放到这个逻辑矩形（drawPixmap 自动按 dpr 上采样）
-        target = QRect(rect.topLeft() - virtual.topLeft(), rect.size())
-        painter.drawPixmap(target, pix)
-    painter.end()
-    return result
-
-
 class ScreenshotOverlay(QDialog):
-    """全屏遮罩框选窗口：暗色蒙层 + 选区高亮，Esc 取消 / 回车或双击确认。"""
+    """全屏遮罩框选窗口：暗色蒙层 + 选区高亮，Esc 取消 / 回车或双击确认。
 
-    def __init__(self, background: QPixmap, virtual: QRect, dpr: float):
+    多屏不同 DPR 时按物理坐标逐屏绘制与裁剪，保证选区与最终截图一致。
+    """
+
+    def __init__(self, caps: List[Tuple[QRect, QRect, float, QPixmap]], virtual: QRect):
         super().__init__()
-        self._background = background
-        self._dpr = dpr
-        self._origin = None  # QPoint，拖拽起点
-        self._selection: Optional[QRect] = None
+        self._caps = caps  # [(logical, physical, dpr, grab), ...]
+        self._origin = None  # QPoint，拖拽起点（逻辑坐标）
+        self._selection: Optional[QRect] = None  # 逻辑坐标
         self._result_image: Optional[QImage] = None
 
         self.setWindowFlags(
@@ -160,16 +148,23 @@ class ScreenshotOverlay(QDialog):
     # ---- 绘制 ----
     def paintEvent(self, event):
         painter = QPainter(self)
-        # 底图铺满整个虚拟桌面
-        painter.drawPixmap(self.rect(), self._background)
+        # 逐屏绘制底图（逻辑坐标），Qt 按各屏 DPR 渲染到物理像素
+        for logical, _physical, _dpr, grab in self._caps:
+            painter.drawPixmap(logical, grab)
         # 全屏暗色蒙层
         painter.fillRect(self.rect(), QColor(0, 0, 0, 120))
 
         if self._selection is not None \
                 and self._selection.width() > 0 and self._selection.height() > 0:
-            # 选中区域显示原图（明亮），并从底图裁剪对应设备坐标
-            src = self._to_device_rect(self._selection)
-            painter.drawPixmap(self._selection, self._background, src)
+            # 选中区域显示原图（明亮）
+            for logical, _physical, dpr, grab in self._caps:
+                inter = logical.intersected(self._selection)
+                if inter.isEmpty():
+                    continue
+                off = inter.topLeft() - logical.topLeft()
+                src = QRect(round(off.x() * dpr), round(off.y() * dpr),
+                            round(inter.width() * dpr), round(inter.height() * dpr))
+                painter.drawPixmap(inter, grab, src)
             pen = QPen(QColor(0, 122, 255), 1.5)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -183,11 +178,6 @@ class ScreenshotOverlay(QDialog):
             "拖动选择截图区域　Esc 取消　回车 / 双击 确认",
         )
         painter.end()
-
-    def _to_device_rect(self, rect: QRect) -> QRect:
-        d = self._dpr
-        return QRect(int(rect.left() * d), int(rect.top() * d),
-                     int(rect.width() * d), int(rect.height() * d))
 
     # ---- 交互 ----
     def mousePressEvent(self, event):
@@ -227,9 +217,38 @@ class ScreenshotOverlay(QDialog):
     def _confirm(self):
         if self._selection is not None \
                 and self._selection.width() > 1 and self._selection.height() > 1:
-            src = self._to_device_rect(self._selection)
-            self._result_image = self._background.copy(src).toImage()
+            self._result_image = self._crop(self._selection)
         self.accept()
+
+    def _crop(self, selection: QRect) -> Optional[QImage]:
+        """把逻辑选区逐屏映射到物理坐标并裁剪，拼成一张最终图（物理像素）。"""
+        parts = []  # (物理全局矩形, 裁剪出的 QPixmap)
+        for logical, physical, dpr, grab in self._caps:
+            inter = logical.intersected(selection)
+            if inter.isEmpty():
+                continue
+            off = inter.topLeft() - logical.topLeft()
+            px = physical.x() + round(off.x() * dpr)
+            py = physical.y() + round(off.y() * dpr)
+            pw = round(inter.width() * dpr)
+            ph = round(inter.height() * dpr)
+            # 在 grab（物理像素）里的裁剪矩形
+            crop = grab.copy(QRect(px - physical.x(), py - physical.y(), pw, ph))
+            parts.append((QRect(px, py, pw, ph), crop))
+        if not parts:
+            return None
+        left = min(r.left() for r, _ in parts)
+        top = min(r.top() for r, _ in parts)
+        right = max(r.right() for r, _ in parts)
+        bottom = max(r.bottom() for r, _ in parts)
+        result = QImage(right - left + 1, bottom - top + 1,
+                        QImage.Format.Format_ARGB32)
+        result.fill(Qt.GlobalColor.black)
+        painter = QPainter(result)
+        for r, crop in parts:
+            painter.drawPixmap(r.left() - left, r.top() - top, crop)
+        painter.end()
+        return result
 
     def result_image(self) -> Optional[QImage]:
         return self._result_image
@@ -253,13 +272,11 @@ def capture_region(hide_windows: Optional[List] = None) -> Optional[QImage]:
     time.sleep(0.2)
 
     try:
-        dpr = QGuiApplication.primaryScreen().devicePixelRatio()
-        virtual = _virtual_geometry(dpr)
-        background = _grab_virtual_desktop(virtual, dpr)
-        if background.isNull():
+        caps = _screen_captures()
+        if not caps:
             return None
-
-        overlay = ScreenshotOverlay(background, virtual, dpr)
+        virtual = _virtual_logical_bbox(caps)
+        overlay = ScreenshotOverlay(caps, virtual)
         overlay.exec()
         return overlay.result_image()
     finally:

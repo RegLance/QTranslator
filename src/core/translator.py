@@ -180,10 +180,14 @@ class Translator:
                 log_debug(f"已设置 NO_PROXY: {self._no_proxy}")
 
             # 创建客户端
+            # max_retries=0：翻译/识图请求慢且非幂等，SDK 默认 2 次自动重试会在
+            # 超时/短暂失败时把请求重复发出 3 次，服务端重复跑（重复计费、可能重复
+            # 输出）。改为失败即报错，由用户手动重试。
             self._client = OpenAI(
                 api_key=self._api_key,
                 base_url=self._base_url,
                 timeout=self._timeout,
+                max_retries=0,
             )
             self._last_error = None
             log_info(f"翻译客户端已初始化: base_url={self._base_url}, model={self._model}")
@@ -696,6 +700,7 @@ Examples:
                 api_key=self._vision_api_key,
                 base_url=self._vision_base_url,
                 timeout=self._vision_timeout,
+                max_retries=0,  # 与翻译客户端一致：识图请求不自动重试，避免「识别三遍」
             )
         except Exception as e:
             log_error(f"初始化识图客户端失败: {e}")

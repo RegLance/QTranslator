@@ -27,11 +27,6 @@ import sys
 from PyQt6.QtCore import QEvent, QObject, Qt
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
-try:
-    from .logger import log_info, log_warning, log_flush
-except ImportError:
-    from src.utils.logger import log_info, log_warning, log_flush
-
 # Win32 常量
 _HWND_TOPMOST = -1
 _HWND_NOTOPMOST = -2
@@ -63,15 +58,10 @@ def _set_topmost(widget: QWidget, on: bool) -> None:
         u = _user32()
         hwnd = int(widget.winId())
         insert_after = _HWND_TOPMOST if on else _HWND_NOTOPMOST
-        log_info(f"[window_front] _set_topmost hwnd={hwnd} on={on} "
-                 f"cls={type(widget).__name__} title={getattr(widget, 'windowTitle', lambda: '')()!r}")
         u.SetWindowPos(hwnd, insert_after, 0, 0, 0, 0,
                        _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE)
-        log_info(f"[window_front] _set_topmost done hwnd={hwnd} on={on} "
-                 f"now_topmost={_is_topmost(widget)}")
-    except Exception as e:
-        log_warning(f"[window_front] _set_topmost 失败 hwnd={hwnd if 'hwnd' in dir() else '?'} "
-                    f"on={on} err={e}")
+    except Exception:
+        pass
 
 
 def _is_topmost(widget: QWidget) -> bool:
@@ -93,8 +83,6 @@ def _demote_if_topmost(widget: QWidget) -> None:
     普通带顶端，反而盖住刚被点击激活的目标窗口（正是"切不走"的时序竞态根源）。
     """
     was_topmost = _is_topmost(widget)
-    log_info(f"[window_front] _demote_if_topmost cls={type(widget).__name__} "
-             f"was_topmost={was_topmost}")
     if was_topmost:
         _set_topmost(widget, False)
 
@@ -113,10 +101,8 @@ def _translator_always_on_top() -> bool:
         from src.config import get_config
     try:
         val = bool(get_config().get('translator_window.always_on_top', False))
-        log_info(f"[window_front] _translator_always_on_top={val}")
         return val
-    except Exception as e:
-        log_warning(f"[window_front] _translator_always_on_top 读取失败: {e}")
+    except Exception:
         return False
 
 
@@ -131,13 +117,10 @@ class _ActivationTopMostFilter(QObject):
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.WindowDeactivate:
-            log_info(f"[window_front] WindowDeactivate cls={type(obj).__name__} "
-                     f"active_window={obj.window() is obj}")
             # 模态消息框打开期间不降级：消息框是设置窗口的 owned window，Windows
             # 会让 owned window 跟随 owner 的 z 序——此时降级设置窗口会把消息框
             # 一并拖出置顶带，导致它被「始终置顶」的翻译窗口盖住、应用锁死。
             if getattr(obj, "_modal_box_active", False):
-                log_info("[window_front] WindowDeactivate 跳过降级（模态消息框打开中）")
                 return super().eventFilter(obj, event)
             _demote_if_topmost(obj)
         return super().eventFilter(obj, event)
@@ -163,7 +146,6 @@ def bring_to_front_once(widget: QWidget) -> None:
       （普通带窗口永远盖不过置顶带窗口，此时立即降级会掉到翻译窗口下方）；待本窗口
       失焦时由 install_activation_topmost 的过滤器降级，翻译窗口随之自然回到顶层。
     """
-    log_info(f"[window_front] bring_to_front_once cls={type(widget).__name__}")
     widget.raise_()
     widget.activateWindow()
     _set_topmost(widget, True)   # 抢前台：强制拉到最前（含盖过常驻置顶的翻译窗口）
@@ -189,10 +171,6 @@ def show_modal_message_box(
     消息框关闭后，父窗口已被降级到普通带；这里再把它拉回前台（翻译窗口常驻置顶
     时 bring_to_front_once 会重新放回置顶带），否则父窗口会留在翻译窗口下方。
     """
-    log_info(f"[window_front] show_modal_message_box 开始 title={title!r} "
-             f"parent={type(parent).__name__ if parent else None} "
-             f"parent_topmost={_is_topmost(parent) if parent else 'N/A'} "
-             f"trans_always_on_top_cfg={_translator_always_on_top()}")
     box = QMessageBox(parent)
     box.setIcon(icon)
     box.setWindowTitle(title)
@@ -208,8 +186,6 @@ def show_modal_message_box(
     box.activateWindow()
     # 进入置顶带：确保盖过「始终置顶」的翻译窗口（show 之后 winId 才有效）
     _set_topmost(box, True)
-    log_info(f"[window_front] show_modal_message_box 进入 exec，box_topmost={_is_topmost(box)}")
-    log_flush()
 
     # 模态打开期间标记父窗口：其失焦降级会把 owned 的消息框一并拖出置顶带，
     # 这里让过滤器跳过降级，保持父窗口（连同消息框）停留在置顶带
@@ -222,8 +198,6 @@ def show_modal_message_box(
             parent._modal_box_active = False
     box.deleteLater()
 
-    log_info(f"[window_front] show_modal_message_box exec 返回 result={int(result)}")
-    log_flush()
     if parent is not None:
         bring_to_front_once(parent)
     return result

@@ -1,22 +1,24 @@
-"""截图模块：全屏框选截图，返回选中区域的 QImage。
+"""截图模块：获取框选区域的 QImage。
 
-采用 Qt 通行标准做法（全屏遮罩 + 鼠标框选 + QScreen.grabWindow 裁剪），
-PyQt6 原生、零额外依赖。关键点：不能用 QRubberBand 的 grab 结果（会得到
-透明空白图），必须用框选坐标到已抓取的「全屏底图」上裁剪。
+Windows 下主用系统自带截图工具（Win+Shift+S）：微软原生适配多屏、不同 DPI 缩放，
+可彻底规避 Qt 自绘遮罩在混合缩放下的黑边/错位问题。框选确认后结果自动写入剪贴板，
+这里监听剪贴板拿图回调。
 
-多屏 / 高 DPI 处理：Windows 下 Qt 的 geometry() 会把「尺寸」按逻辑像素给、
-「位置」按物理像素给；因此每块屏的物理矩形 = geometry().topLeft() 作为位置、
-geometry().size() × devicePixelRatio 作为尺寸。按物理坐标逐屏拼接、逐屏裁剪，
-无论各屏缩放比例（DPR）是否一致，都不会出现黑边或错位。
+非 Windows 平台回退到内置的自绘框选（全屏遮罩 + 鼠标框选 + QScreen.grabWindow
+裁剪，PyQt6 原生零额外依赖）。关键点：不能用 QRubberBand 的 grab 结果（会得到
+透明空白图），必须用框选坐标到已抓取的「全屏底图」上裁剪；多屏高 DPI 时按物理
+像素（geometry().topLeft() 为位置、geometry().size() × devicePixelRatio 为尺寸）
+逐屏拼接、逐屏裁剪。
 
 参考来源：
 - Qt 论坛 "Save mouse-selected area"（规范的全屏遮罩 + 框选 + grabWindow 用法）
 - tik_manager4 的 ui/widgets/screenshot.py（最小 ScreenShot 结构）
 """
+import sys
 import time
 from typing import List, Optional, Tuple
 
-from PyQt6.QtCore import QPointF, QRect, QSize, Qt
+from PyQt6.QtCore import QPointF, QRect, QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QGuiApplication, QIcon, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QApplication, QDialog, QPushButton
 
@@ -287,3 +289,76 @@ def capture_region(hide_windows: Optional[List] = None) -> Optional[QImage]:
                 w.activateWindow()
             except RuntimeError:
                 pass  # 窗口已被销毁，忽略
+
+
+def _trigger_win_shift_s():
+    """模拟按下 Win+Shift+S，调起 Windows 系统截图工具（截图并自动写入剪贴板）。
+
+    Windows 自带的截图工具已正确适配多屏、不同 DPI 缩放，可彻底规避自绘遮罩在
+    混合缩放下的黑边/错位问题。
+    """
+    import ctypes
+    user32 = ctypes.windll.user32
+    vk_lwin = 0x5B
+    vk_shift = 0x10
+    vk_s = 0x53
+    keyup = 0x0002
+
+    user32.keybd_event(vk_lwin, 0, 0, 0)
+    user32.keybd_event(vk_shift, 0, 0, 0)
+    user32.keybd_event(vk_s, 0, 0, 0)
+    time.sleep(0.05)
+    user32.keybd_event(vk_s, 0, keyup, 0)
+    user32.keybd_event(vk_shift, 0, keyup, 0)
+    user32.keybd_event(vk_lwin, 0, keyup, 0)
+
+
+def trigger_system_screenshot(callback, timeout_ms: int = 60000):
+    """调起系统截图，完成后把结果 QImage 回调给 callback（在主线程执行）。
+
+    Windows：模拟 Win+Shift+S 打开系统截图工具，用户框选确认后结果自动写入剪贴板，
+    这里监听剪贴板 dataChanged 拿图回调；取消或超时回调 None。
+    非 Windows：回退到内置的自绘框选截图（capture_region）。
+
+    callback 签名：callback(image: Optional[QImage])
+    """
+    if sys.platform != "win32":
+        callback(capture_region())
+        return
+
+    clipboard = QApplication.clipboard()
+    timer = QTimer()
+    timer.setSingleShot(True)
+    timer.setInterval(timeout_ms)
+    settled = False
+
+    def _cleanup():
+        try:
+            clipboard.dataChanged.disconnect(_on_data_changed)
+        except (TypeError, RuntimeError):
+            pass
+        timer.stop()
+
+    def _on_data_changed():
+        nonlocal settled
+        if settled:
+            return
+        if clipboard.mimeData().hasImage():
+            image = clipboard.image()
+            if image is not None and not image.isNull():
+                settled = True
+                _cleanup()
+                callback(image)
+
+    def _on_timeout():
+        nonlocal settled
+        if settled:
+            return
+        settled = True
+        _cleanup()
+        callback(None)
+
+    timer.timeout.connect(_on_timeout)
+    clipboard.dataChanged.connect(_on_data_changed)
+    timer.start()
+    _trigger_win_shift_s()

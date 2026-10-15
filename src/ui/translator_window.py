@@ -2659,16 +2659,19 @@ class TranslatorWindow(QWidget):
         self._schedule_collect_refresh()
 
     def _on_screenshot_clicked(self):
-        """截图并识图：框选屏幕区域，结果复用粘贴图片的识图流程。"""
+        """截图并识图：调起系统截图，结果复用粘贴图片的识图流程。"""
         if self._current_worker and self._current_worker.isRunning():
             return
         if self._is_streaming:
             return
         try:
-            from .screenshot import capture_region
+            from .screenshot import trigger_system_screenshot
         except ImportError:
-            from src.ui.screenshot import capture_region
-        image = capture_region(hide_windows=[self])
+            from src.ui.screenshot import trigger_system_screenshot
+        trigger_system_screenshot(self._on_system_screenshot_done)
+
+    def _on_system_screenshot_done(self, image: Optional[QImage]):
+        """系统截图完成回调：拿到图片则走粘贴识图流程，取消/超时则忽略。"""
         if image is not None and not image.isNull():
             self._on_image_pasted(image)
 

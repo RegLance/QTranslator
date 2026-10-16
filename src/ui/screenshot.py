@@ -1,26 +1,27 @@
 """截图模块：获取框选区域的 QImage。
 
-统一走「自绘全屏遮罩 + python-mss 采集」的方案：
+采集与框选分离：
 
-- 采集用 python-mss（MIT，纯 ctypes，Windows 走 GDI）：它直接给出每块屏的
+- 采集用 python-mss（MIT，纯 ctypes，Windows 走 GDI）：直接给出每块屏的
   真实物理像素矩形（left/top/width/height），从根本上解决多屏、不同 DPI 缩放
-  下的「黑边/错位」问题——之前把 QScreen.geometry() 的逻辑坐标直接当物理坐标
-  用，在混合缩放下必然错位。
-- 框选用自绘遮罩（ScreenshotOverlay，逻辑坐标），确认后把逻辑选区按每块屏的
-  devicePixelRatio 映射回物理坐标，再从 mss 抓的物理底图上裁剪拼接。
-- mss 不可用（未安装/抓取失败）时回退到 QScreen.grabWindow 的旧实现
-  （单屏 / 均一缩放下仍正确）。
+  下的「黑边/错位」——之前把 QScreen.geometry() 的逻辑坐标直接当物理坐标用，
+  在混合缩放下必然错位。
+- 框选用「每块屏一个遮罩窗口」（ScreenshotOverlay）。单个 QWidget 跨多块不同
+  缩放比例的屏幕时，Qt 只会按其中一块屏的 DPR 渲染整窗、导致副屏错位，所以必须
+  一块屏一个窗口、各自按本屏 DPR 渲染。遮罩不再画截图底图，而是「半透明蒙层 +
+  选区擦除亮显」直接透出真实屏幕，既省性能又不会错位。
+- 确认后按每块屏的 devicePixelRatio 把逻辑选区映射回物理坐标，从 mss 抓的
+  物理底图上裁剪拼接。mss 不可用时回退到 QScreen.grabWindow 的旧实现。
 
 关键点：不能用 QRubberBand 的 grab 结果（会得到透明空白图），必须用框选坐标到
 已抓取的「全屏底图」上裁剪。
 """
-import sys
 import time
 from typing import List, Optional, Tuple
 
-from PyQt6.QtCore import QPointF, QRect, QSize, Qt
+from PyQt6.QtCore import QEventLoop, QPoint, QPointF, QRect, QSize, Qt
 from PyQt6.QtGui import QColor, QGuiApplication, QIcon, QImage, QPainter, QPen, QPixmap
-from PyQt6.QtWidgets import QApplication, QDialog, QPushButton
+from PyQt6.QtWidgets import QApplication, QPushButton, QWidget
 
 
 def _log(msg: str) -> None:
@@ -136,49 +137,64 @@ def _screen_captures_qt() -> List[Tuple[QRect, QRect, float, QPixmap]]:
     return caps
 
 
-def _virtual_logical_bbox(caps: List[Tuple[QRect, QRect, float, QPixmap]]) -> QRect:
-    """叠加层需要覆盖的逻辑包围盒（所有屏 geometry() 的并集）。"""
-    left = min(r.left() for r, _, _, _ in caps)
-    top = min(r.top() for r, _, _, _ in caps)
-    right = max(r.right() for r, _, _, _ in caps)
-    bottom = max(r.bottom() for r, _, _, _ in caps)
-    return QRect(left, top, right - left + 1, bottom - top + 1)
+class ScreenshotSession:
+    """跨屏共享的框选状态与结果（选区坐标均为虚拟桌面逻辑坐标）。"""
+
+    def __init__(self):
+        self.caps: List[Tuple[QRect, QRect, float, QPixmap]] = []
+        self.overlays: List["ScreenshotOverlay"] = []
+        self.loop: Optional[QEventLoop] = None
+        self.origin: Optional[QPoint] = None
+        self.selection: Optional[QRect] = None
+        self.result_selection: Optional[QRect] = None
+
+    def set_selection(self, rect: QRect):
+        self.selection = rect
+        for ov in self.overlays:
+            ov.update()
+            ov._update_toolbar()
+
+    def active_overlay(self) -> Optional["ScreenshotOverlay"]:
+        """选区右下角落在哪块屏，确认/取消按钮就显示在哪块屏的遮罩上。"""
+        if self.selection is not None:
+            br = self.selection.bottomRight()
+            for ov in self.overlays:
+                if ov._logical.contains(br):
+                    return ov
+        return self.overlays[-1] if self.overlays else None
+
+    def finish(self, selection: Optional[QRect]):
+        self.result_selection = selection
+        if self.loop is not None:
+            self.loop.quit()
 
 
-class ScreenshotOverlay(QDialog):
-    """全屏遮罩框选窗口：暗色蒙层 + 选区高亮，Esc 取消 / 回车或双击确认。
+class ScreenshotOverlay(QWidget):
+    """单个显示器上的遮罩窗口：半透明蒙层 + 选区擦除亮显。
 
-    多屏不同 DPR 时按物理坐标逐屏绘制与裁剪，保证选区与最终截图一致。
+    每个屏一个实例、覆盖该屏的「逻辑矩形」，Qt 会按本屏 DPR 正确渲染，避免
+    单窗跨屏时的缩放错位。
     """
 
-    def __init__(self, caps: List[Tuple[QRect, QRect, float, QPixmap]], virtual: QRect):
+    def __init__(self, session: ScreenshotSession, logical_rect: QRect):
         super().__init__()
-        self._caps = caps  # [(logical, physical, dpr, grab), ...]
-        self._origin = None  # QPoint，拖拽起点（逻辑坐标）
-        self._selection: Optional[QRect] = None  # 逻辑坐标
-        self._result_image: Optional[QImage] = None
-
+        self._session = session
+        self._logical = QRect(logical_rect)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setMouseTracking(True)
-        self.setGeometry(virtual)
+        self.setGeometry(self._logical)
 
         # 选区右下角的确认/取消按钮（框选完成后显示）
         self._tool_confirm = self._make_tool_button(True)
         self._tool_cancel = self._make_tool_button(False)
         self._tool_confirm.hide()
         self._tool_cancel.hide()
-
-    def showEvent(self, event):
-        """显示后确保获得键盘焦点（Esc/回车 才有效）。"""
-        super().showEvent(event)
-        self.activateWindow()
-        self.raise_()
-        self.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
 
     def _make_tool_button(self, confirm: bool) -> QPushButton:
         """确认（对勾）/取消（叉号）小按钮。"""
@@ -196,7 +212,7 @@ class ScreenshotOverlay(QDialog):
             QPushButton:hover { background-color: rgba(70, 70, 70, 0.95); }
             QPushButton:pressed { background-color: rgba(25, 25, 25, 0.95); }
         """)
-        btn.clicked.connect(self._confirm if confirm else self.reject)
+        btn.clicked.connect(self._confirm if confirm else self._cancel)
         return btn
 
     @staticmethod
@@ -220,20 +236,30 @@ class ScreenshotOverlay(QDialog):
         return QIcon(pixmap)
 
     def _update_toolbar(self):
-        """把确认/取消按钮放到选区右下角（越界则挪到选区内部）。"""
-        if self._selection is None \
-                or self._selection.width() <= 1 or self._selection.height() <= 1:
+        """把确认/取消按钮放到选区右下角（仅显示在当前活动遮罩上）。"""
+        active = self._session.active_overlay()
+        if active is not self:
             self._tool_confirm.hide()
             self._tool_cancel.hide()
             return
-        s = self._selection
+        sel = self._session.selection
+        if sel is None or sel.width() <= 1 or sel.height() <= 1:
+            self._tool_confirm.hide()
+            self._tool_cancel.hide()
+            return
+        inter = self._logical.intersected(sel)
+        if inter.isEmpty():
+            self._tool_confirm.hide()
+            self._tool_cancel.hide()
+            return
+        local = inter.translated(-self._logical.x(), -self._logical.y())
         gap = 4
         w = self._tool_confirm.width()
         total = w * 2 + gap
-        x = max(0, s.right() - total)
-        y = s.bottom() + 6
+        x = max(0, local.right() - total)
+        y = local.bottom() + 6
         if y + w > self.height():
-            y = s.bottom() - w - 6
+            y = local.bottom() - w - 6
         self._tool_cancel.move(x, y)
         self._tool_confirm.move(x + w + gap, y)
         self._tool_cancel.show()
@@ -244,35 +270,20 @@ class ScreenshotOverlay(QDialog):
     # ---- 绘制 ----
     def paintEvent(self, event):
         painter = QPainter(self)
-        # 逐屏绘制底图（逻辑坐标），Qt 按各屏 DPR 渲染到物理像素
-        for logical, _physical, _dpr, grab in self._caps:
-            painter.drawPixmap(logical, grab)
-        # 全屏暗色蒙层
+        # 半透明暗色蒙层，透出真实屏幕
         painter.fillRect(self.rect(), QColor(0, 0, 0, 120))
-
-        if self._selection is not None \
-                and self._selection.width() > 0 and self._selection.height() > 0:
-            # 选中区域显示原图（明亮）
-            for logical, _physical, dpr, grab in self._caps:
-                inter = logical.intersected(self._selection)
-                if inter.isEmpty():
-                    continue
-                off = inter.topLeft() - logical.topLeft()
-                src = QRect(round(off.x() * dpr), round(off.y() * dpr),
-                            round(inter.width() * dpr), round(inter.height() * dpr))
-                painter.drawPixmap(inter, grab, src)
-            pen = QPen(QColor(0, 122, 255), 1.5)
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRect(self._selection)
-
-        # 底部居中提示
-        painter.setPen(QColor(255, 255, 255, 220))
-        painter.drawText(
-            self.rect().adjusted(0, 0, 0, -14),
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
-            "拖动选择截图区域　Esc 取消　回车 / 双击 确认",
-        )
+        sel = self._session.selection
+        if sel is not None and sel.width() > 0 and sel.height() > 0:
+            inter = self._logical.intersected(sel)
+            if not inter.isEmpty():
+                local = inter.translated(-self._logical.x(), -self._logical.y())
+                # 擦除选区蒙层，露出真实屏幕（明亮）
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+                painter.fillRect(local, QColor(0, 0, 0, 0))
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+                painter.setPen(QPen(QColor(0, 122, 255), 1.5))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(local)
         painter.end()
 
     # ---- 交互 ----
@@ -280,23 +291,25 @@ class ScreenshotOverlay(QDialog):
         if event.button() == Qt.MouseButton.LeftButton:
             self._tool_confirm.hide()
             self._tool_cancel.hide()
-            self._origin = event.position().toPoint()
-            self._selection = QRect(self._origin, self._origin)
-            self.update()
+            self._session.origin = event.globalPosition().toPoint()
+            self._session.set_selection(QRect(self._session.origin, self._session.origin))
+            self.grabMouse()
+            self.activateWindow()
+            self.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
 
     def mouseMoveEvent(self, event):
-        if self._origin is not None:
-            self._selection = QRect(
-                self._origin, event.position().toPoint()).normalized()
-            self.update()
+        if self._session.origin is not None:
+            rect = QRect(self._session.origin,
+                         event.globalPosition().toPoint()).normalized()
+            self._session.set_selection(rect)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._origin is not None:
-            self._selection = QRect(
-                self._origin, event.position().toPoint()).normalized()
-            self._origin = None
-            self._update_toolbar()
-            self.update()
+        if event.button() == Qt.MouseButton.LeftButton and self._session.origin is not None:
+            rect = QRect(self._session.origin,
+                         event.globalPosition().toPoint()).normalized()
+            self._session.origin = None
+            self._session.set_selection(rect)
+            self.releaseMouse()
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -304,50 +317,52 @@ class ScreenshotOverlay(QDialog):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
-            self.reject()
+            self._cancel()
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self._confirm()
         else:
             super().keyPressEvent(event)
 
     def _confirm(self):
-        if self._selection is not None \
-                and self._selection.width() > 1 and self._selection.height() > 1:
-            self._result_image = self._crop(self._selection)
-        self.accept()
+        sel = self._session.selection
+        if sel is not None and sel.width() > 1 and sel.height() > 1:
+            self._session.finish(sel)
+        else:
+            self._session.finish(None)
 
-    def _crop(self, selection: QRect) -> Optional[QImage]:
-        """把逻辑选区逐屏映射到物理坐标并裁剪，拼成一张最终图（物理像素）。"""
-        parts = []  # (物理全局矩形, 裁剪出的 QPixmap)
-        for logical, physical, dpr, grab in self._caps:
-            inter = logical.intersected(selection)
-            if inter.isEmpty():
-                continue
-            off = inter.topLeft() - logical.topLeft()
-            px = physical.x() + round(off.x() * dpr)
-            py = physical.y() + round(off.y() * dpr)
-            pw = round(inter.width() * dpr)
-            ph = round(inter.height() * dpr)
-            # 在 grab（物理像素）里的裁剪矩形
-            crop = grab.copy(QRect(px - physical.x(), py - physical.y(), pw, ph))
-            parts.append((QRect(px, py, pw, ph), crop))
-        if not parts:
-            return None
-        left = min(r.left() for r, _ in parts)
-        top = min(r.top() for r, _ in parts)
-        right = max(r.right() for r, _ in parts)
-        bottom = max(r.bottom() for r, _ in parts)
-        result = QImage(right - left + 1, bottom - top + 1,
-                        QImage.Format.Format_ARGB32)
-        result.fill(Qt.GlobalColor.black)
-        painter = QPainter(result)
-        for r, crop in parts:
-            painter.drawPixmap(r.left() - left, r.top() - top, crop)
-        painter.end()
-        return result
+    def _cancel(self):
+        self._session.finish(None)
 
-    def result_image(self) -> Optional[QImage]:
-        return self._result_image
+
+def _crop_selection(caps: List[Tuple[QRect, QRect, float, QPixmap]],
+                    selection: QRect) -> Optional[QImage]:
+    """把逻辑选区逐屏映射到物理坐标并裁剪，拼成一张最终图（物理像素）。"""
+    parts = []  # (物理全局矩形, 裁剪出的 QPixmap)
+    for logical, physical, dpr, grab in caps:
+        inter = logical.intersected(selection)
+        if inter.isEmpty():
+            continue
+        off = inter.topLeft() - logical.topLeft()
+        px = physical.x() + round(off.x() * dpr)
+        py = physical.y() + round(off.y() * dpr)
+        pw = round(inter.width() * dpr)
+        ph = round(inter.height() * dpr)
+        crop = grab.copy(QRect(px - physical.x(), py - physical.y(), pw, ph))
+        parts.append((QRect(px, py, pw, ph), crop))
+    if not parts:
+        return None
+    left = min(r.left() for r, _ in parts)
+    top = min(r.top() for r, _ in parts)
+    right = max(r.right() for r, _ in parts)
+    bottom = max(r.bottom() for r, _ in parts)
+    result = QImage(right - left + 1, bottom - top + 1,
+                    QImage.Format.Format_ARGB32)
+    result.fill(Qt.GlobalColor.black)
+    painter = QPainter(result)
+    for r, crop in parts:
+        painter.drawPixmap(r.left() - left, r.top() - top, crop)
+    painter.end()
+    return result
 
 
 def capture_region(hide_windows: Optional[List] = None) -> Optional[QImage]:
@@ -368,21 +383,44 @@ def capture_region(hide_windows: Optional[List] = None) -> Optional[QImage]:
     QApplication.processEvents()
     time.sleep(0.2)
 
+    overlays: List[ScreenshotOverlay] = []
     try:
         caps = _screen_captures()
         if not caps:
             _log("未抓到任何屏幕，取消")
             return None
-        virtual = _virtual_logical_bbox(caps)
-        overlay = ScreenshotOverlay(caps, virtual)
-        overlay.exec()
-        result = overlay.result_image()
+
+        session = ScreenshotSession()
+        session.caps = caps
+        for logical, _p, _d, _g in caps:
+            overlays.append(ScreenshotOverlay(session, logical))
+        session.overlays = overlays
+
+        loop = QEventLoop()
+        session.loop = loop
+        for ov in overlays:
+            ov.show()
+        if overlays:
+            overlays[0].raise_()
+            overlays[0].activateWindow()
+            overlays[0].setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+
+        loop.exec()
+
+        sel = session.result_selection
+        result = _crop_selection(caps, sel) if sel is not None else None
         has = result is not None and not result.isNull()
         _log(f"框选完成: {'有图' if has else '取消'}"
              + (f"，尺寸={result.width()}x{result.height()}" if has else ""))
         _flush_log()
         return result
     finally:
+        for ov in overlays:
+            try:
+                ov.releaseMouse()
+                ov.close()
+            except RuntimeError:
+                pass
         for w in hidden:
             try:
                 w.show()

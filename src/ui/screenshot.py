@@ -1,35 +1,130 @@
 """截图模块：获取框选区域的 QImage。
 
-Windows 下主用系统自带截图工具（Win+Shift+S）：微软原生适配多屏、不同 DPI 缩放，
-可彻底规避 Qt 自绘遮罩在混合缩放下的黑边/错位问题。框选确认后结果自动写入剪贴板，
-这里监听剪贴板拿图回调。
+统一走「自绘全屏遮罩 + python-mss 采集」的方案：
 
-非 Windows 平台回退到内置的自绘框选（全屏遮罩 + 鼠标框选 + QScreen.grabWindow
-裁剪，PyQt6 原生零额外依赖）。关键点：不能用 QRubberBand 的 grab 结果（会得到
-透明空白图），必须用框选坐标到已抓取的「全屏底图」上裁剪；多屏高 DPI 时按物理
-像素（geometry().topLeft() 为位置、geometry().size() × devicePixelRatio 为尺寸）
-逐屏拼接、逐屏裁剪。
+- 采集用 python-mss（MIT，纯 ctypes，Windows 走 GDI）：它直接给出每块屏的
+  真实物理像素矩形（left/top/width/height），从根本上解决多屏、不同 DPI 缩放
+  下的「黑边/错位」问题——之前把 QScreen.geometry() 的逻辑坐标直接当物理坐标
+  用，在混合缩放下必然错位。
+- 框选用自绘遮罩（ScreenshotOverlay，逻辑坐标），确认后把逻辑选区按每块屏的
+  devicePixelRatio 映射回物理坐标，再从 mss 抓的物理底图上裁剪拼接。
+- mss 不可用（未安装/抓取失败）时回退到 QScreen.grabWindow 的旧实现
+  （单屏 / 均一缩放下仍正确）。
 
-参考来源：
-- Qt 论坛 "Save mouse-selected area"（规范的全屏遮罩 + 框选 + grabWindow 用法）
-- tik_manager4 的 ui/widgets/screenshot.py（最小 ScreenShot 结构）
+关键点：不能用 QRubberBand 的 grab 结果（会得到透明空白图），必须用框选坐标到
+已抓取的「全屏底图」上裁剪。
 """
 import sys
 import time
 from typing import List, Optional, Tuple
 
-from PyQt6.QtCore import QPointF, QRect, QSize, Qt, QTimer
+from PyQt6.QtCore import QPointF, QRect, QSize, Qt
 from PyQt6.QtGui import QColor, QGuiApplication, QIcon, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QApplication, QDialog, QPushButton
 
 
-def _screen_captures() -> List[Tuple[QRect, QRect, float, QPixmap]]:
-    """抓取每块屏，返回 (逻辑矩形, 物理矩形, DPR, 抓图)。
+def _log(msg: str) -> None:
+    """写截图相关日志（懒加载 logger，避免模块导入顺序/循环问题）。"""
+    try:
+        from ..utils.logger import log_debug
+    except ImportError:
+        from src.utils.logger import log_debug
+    log_debug(f"[screenshot] {msg}")
 
-    逻辑矩形 = s.geometry()（供叠加层定位 / 鼠标坐标，含 Qt 的逻辑缝隙）；
-    物理矩形 = geometry().topLeft() 位置 + geometry().size() × DPR 尺寸；
-    抓图 = 该屏原生分辨率（物理像素）。
+
+def _log_exception(msg: str) -> None:
+    try:
+        from ..utils.logger import log_exception
+    except ImportError:
+        from src.utils.logger import log_exception
+    log_exception(f"[screenshot] {msg}")
+
+
+def _flush_log() -> None:
+    try:
+        from ..utils.logger import log_flush
+    except ImportError:
+        from src.utils.logger import log_flush
+    log_flush()
+
+
+def _mss_to_qpixmap(shot) -> QPixmap:
+    """mss 抓图（BGRA 原始字节）→ QPixmap（物理像素）。
+
+    mss 的 shot.bgra 是 [B,G,R,A] 顺序的 32 位字节流；QImage.Format_RGB32 的
+    内存布局恰为 [B,G,R,0xff]，两者对齐，颜色正确且不透明。
+
+    关键：QImage(bytes, ...) 只是「包装」mss 的字节缓冲区、并不复制，一旦 shot
+    和 mss 上下文释放，这块内存就是野指针，后续 copy()/drawPixmap() 会段错误
+    （即「闪退」）。必须立即 .copy() 深拷贝脱离该缓冲区。
     """
+    img = QImage(shot.bgra, shot.width, shot.height, shot.width * 4,
+                 QImage.Format.Format_RGB32)
+    return QPixmap.fromImage(img.copy())
+
+
+def _screen_captures() -> List[Tuple[QRect, QRect, float, QPixmap]]:
+    """抓取每块屏，返回 (逻辑矩形, 物理矩形, DPR, 抓图)。优先 mss，失败回退 Qt。"""
+    try:
+        return _screen_captures_mss()
+    except Exception:
+        _log_exception("mss 抓屏失败，回退 QScreen.grabWindow")
+        return _screen_captures_qt()
+
+
+def _screen_captures_mss() -> List[Tuple[QRect, QRect, float, QPixmap]]:
+    """用 mss 逐屏抓取：逻辑矩形来自 Qt，物理矩形/像素来自 mss。"""
+    import mss
+
+    screens = sorted(QGuiApplication.screens(),
+                     key=lambda s: (s.geometry().x(), s.geometry().y()))
+    caps: List[Tuple[QRect, QRect, float, QPixmap]] = []
+    with mss.mss() as sct:
+        monitors = sorted(sct.monitors[1:], key=lambda m: (m["left"], m["top"]))
+        _log(f"mss 屏数={len(monitors)}，Qt 屏数={len(screens)}")
+        for s, mon in _pair_screens(screens, monitors):
+            geo = s.geometry()
+            dpr = s.devicePixelRatio()
+            logical = QRect(geo)
+            if mon is None:
+                # 配对失败：用逻辑原点 × DPR 近似（单屏/均一缩放下正确）
+                pw = round(geo.width() * dpr)
+                ph = round(geo.height() * dpr)
+                mon = {"left": round(geo.x() * dpr), "top": round(geo.y() * dpr),
+                       "width": pw, "height": ph}
+            physical = QRect(mon["left"], mon["top"], mon["width"], mon["height"])
+            shot = sct.grab({"left": mon["left"], "top": mon["top"],
+                             "width": mon["width"], "height": mon["height"]})
+            caps.append((logical, physical, dpr, _mss_to_qpixmap(shot)))
+    return caps
+
+
+def _pair_screens(screens, monitors):
+    """按位置顺序配对 Qt 屏幕与 mss 物理显示器；数量不符时退化为物理尺寸匹配。
+
+    两侧都按 (x, y) 升序排列后，物理/逻辑的左右上下相对顺序一致，逐位配对即可
+    正确处理同尺寸、不同 DPI 的多屏。
+    """
+    if len(screens) == len(monitors):
+        return list(zip(screens, monitors))
+    pairs = []
+    remaining = list(monitors)
+    for s in screens:
+        geo = s.geometry()
+        dpr = s.devicePixelRatio()
+        pw = round(geo.width() * dpr)
+        ph = round(geo.height() * dpr)
+        matched = None
+        for i, m in enumerate(remaining):
+            if m["width"] == pw and m["height"] == ph:
+                matched = remaining.pop(i)
+                break
+        pairs.append((s, matched))
+    return pairs
+
+
+def _screen_captures_qt() -> List[Tuple[QRect, QRect, float, QPixmap]]:
+    """回退实现：QScreen.grabWindow（单屏/均一缩放下正确）。"""
     caps = []
     for s in QGuiApplication.screens():
         geo = s.geometry()
@@ -37,8 +132,7 @@ def _screen_captures() -> List[Tuple[QRect, QRect, float, QPixmap]]:
         logical = QRect(geo)
         physical = QRect(geo.x(), geo.y(),
                          round(geo.width() * dpr), round(geo.height() * dpr))
-        grab = s.grabWindow(0)
-        caps.append((logical, physical, dpr, grab))
+        caps.append((logical, physical, dpr, s.grabWindow(0)))
     return caps
 
 
@@ -262,6 +356,7 @@ def capture_region(hide_windows: Optional[List] = None) -> Optional[QImage]:
     hide_windows：截屏前先隐藏的窗口（如翻译窗口，避免其出现在截图中），
     截屏结束后统一恢复显示并置前。
     """
+    _log("开始框选截图")
     hidden = []
     if hide_windows:
         for w in hide_windows:
@@ -276,11 +371,17 @@ def capture_region(hide_windows: Optional[List] = None) -> Optional[QImage]:
     try:
         caps = _screen_captures()
         if not caps:
+            _log("未抓到任何屏幕，取消")
             return None
         virtual = _virtual_logical_bbox(caps)
         overlay = ScreenshotOverlay(caps, virtual)
         overlay.exec()
-        return overlay.result_image()
+        result = overlay.result_image()
+        has = result is not None and not result.isNull()
+        _log(f"框选完成: {'有图' if has else '取消'}"
+             + (f"，尺寸={result.width()}x{result.height()}" if has else ""))
+        _flush_log()
+        return result
     finally:
         for w in hidden:
             try:
@@ -289,76 +390,3 @@ def capture_region(hide_windows: Optional[List] = None) -> Optional[QImage]:
                 w.activateWindow()
             except RuntimeError:
                 pass  # 窗口已被销毁，忽略
-
-
-def _trigger_win_shift_s():
-    """模拟按下 Win+Shift+S，调起 Windows 系统截图工具（截图并自动写入剪贴板）。
-
-    Windows 自带的截图工具已正确适配多屏、不同 DPI 缩放，可彻底规避自绘遮罩在
-    混合缩放下的黑边/错位问题。
-    """
-    import ctypes
-    user32 = ctypes.windll.user32
-    vk_lwin = 0x5B
-    vk_shift = 0x10
-    vk_s = 0x53
-    keyup = 0x0002
-
-    user32.keybd_event(vk_lwin, 0, 0, 0)
-    user32.keybd_event(vk_shift, 0, 0, 0)
-    user32.keybd_event(vk_s, 0, 0, 0)
-    time.sleep(0.05)
-    user32.keybd_event(vk_s, 0, keyup, 0)
-    user32.keybd_event(vk_shift, 0, keyup, 0)
-    user32.keybd_event(vk_lwin, 0, keyup, 0)
-
-
-def trigger_system_screenshot(callback, timeout_ms: int = 60000):
-    """调起系统截图，完成后把结果 QImage 回调给 callback（在主线程执行）。
-
-    Windows：模拟 Win+Shift+S 打开系统截图工具，用户框选确认后结果自动写入剪贴板，
-    这里监听剪贴板 dataChanged 拿图回调；取消或超时回调 None。
-    非 Windows：回退到内置的自绘框选截图（capture_region）。
-
-    callback 签名：callback(image: Optional[QImage])
-    """
-    if sys.platform != "win32":
-        callback(capture_region())
-        return
-
-    clipboard = QApplication.clipboard()
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.setInterval(timeout_ms)
-    settled = False
-
-    def _cleanup():
-        try:
-            clipboard.dataChanged.disconnect(_on_data_changed)
-        except (TypeError, RuntimeError):
-            pass
-        timer.stop()
-
-    def _on_data_changed():
-        nonlocal settled
-        if settled:
-            return
-        if clipboard.mimeData().hasImage():
-            image = clipboard.image()
-            if image is not None and not image.isNull():
-                settled = True
-                _cleanup()
-                callback(image)
-
-    def _on_timeout():
-        nonlocal settled
-        if settled:
-            return
-        settled = True
-        _cleanup()
-        callback(None)
-
-    timer.timeout.connect(_on_timeout)
-    clipboard.dataChanged.connect(_on_data_changed)
-    timer.start()
-    _trigger_win_shift_s()

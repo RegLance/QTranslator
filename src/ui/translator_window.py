@@ -2659,21 +2659,34 @@ class TranslatorWindow(QWidget):
         self._schedule_collect_refresh()
 
     def _on_screenshot_clicked(self):
-        """截图并识图：调起系统截图，结果复用粘贴图片的识图流程。"""
+        """截图并识图：隐藏自身后框选截屏，结果复用粘贴图片的识图流程。"""
         if self._current_worker and self._current_worker.isRunning():
             return
         if self._is_streaming:
             return
         try:
-            from .screenshot import trigger_system_screenshot
+            from ..utils.logger import log_debug
         except ImportError:
-            from src.ui.screenshot import trigger_system_screenshot
-        trigger_system_screenshot(self._on_system_screenshot_done)
+            from src.utils.logger import log_debug
+        log_debug("[trans_window] 点击截图，开始框选截屏")
+        try:
+            from .screenshot import capture_region
+        except ImportError:
+            from src.ui.screenshot import capture_region
+        image = capture_region(hide_windows=[self])
+        self._on_system_screenshot_done(image)
 
     def _on_system_screenshot_done(self, image: Optional[QImage]):
-        """系统截图完成回调：拿到图片则走粘贴识图流程，取消/超时则忽略。"""
+        """截图完成回调：拿到图片则走粘贴识图流程，取消/超时则忽略。"""
+        try:
+            from ..utils.logger import log_debug
+        except ImportError:
+            from src.utils.logger import log_debug
         if image is not None and not image.isNull():
+            log_debug(f"[trans_window] 截图完成，进入识图流程，尺寸={image.width()}x{image.height()}")
             self._on_image_pasted(image)
+        else:
+            log_debug("[trans_window] 截图取消，忽略")
 
     def _on_input_text_changed(self):
         """原文文本变化时，若占位标记被改动则清除已粘贴的图片。"""

@@ -11,6 +11,9 @@ pynput==1.8.2
 # 剪贴板操作
 pyperclip==1.11.0
 
+# 多屏截图采集（物理像素，处理不同 DPI 缩放）
+mss==10.1.0
+
 # OpenAI API
 openai==2.36.0
 

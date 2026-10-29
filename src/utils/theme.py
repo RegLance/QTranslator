@@ -609,6 +609,9 @@ def get_checkbox_style(theme: Dict[str, Any]) -> str:
             color: {theme['text_primary']};
             font-size: 13px;
             spacing: 8px;
+            /* 指示器宽度为 0 后，Qt 仍在图标前保留 spacing(8px)，用负 margin 抵消，
+               让图标与下方内容左对齐 */
+            margin-left: -8px;
         }}
         QCheckBox::indicator {{
             width: 0px;

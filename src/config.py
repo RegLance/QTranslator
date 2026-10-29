@@ -240,6 +240,14 @@ class Config:
                 'trigger_mode': 'toolbar',  # 划词触发方式：toolbar=悬浮工具栏 / button=翻译图标按钮
                 'custom_actions': {},  # actions/ 目录 .py 扩展的显示开关 {文件名.py: bool}
             },
+            'reminder': {
+                'enabled': False,  # 是否启用周期提醒
+                'interval_minutes': 30,  # 提醒周期（分钟）
+                'message': '该起来活动一下，喝口水啦～',  # 提醒内容（可自定义）
+            },
+            'statistics': {
+                'enabled': False,  # 是否启用工作量统计（统计窗口内开关）
+            },
             'config_version': CONFIG_VERSION,  # 配置文件结构版本号（用于升级时一次性迁移）
             'writing': {
                 'keep_original': False,  # 保留原文

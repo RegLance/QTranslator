@@ -428,6 +428,10 @@ try:
     from .ui.history_window import get_history_window
     from .ui.vocabulary_window import get_vocabulary_window
     from .ui.help_window import get_help_window
+    from .ui.reminder_window import get_reminder_window
+    from .ui.statistics_window import get_statistics_window
+    from .core.reminder import get_reminder_manager
+    from .core.statistics import get_statistics_tracker
     from .ui.splash_screen import SplashScreen
     from .utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
     from .utils.history import add_translation_history
@@ -459,6 +463,10 @@ except ImportError:
     from src.ui.history_window import get_history_window
     from src.ui.vocabulary_window import get_vocabulary_window
     from src.ui.help_window import get_help_window
+    from src.ui.reminder_window import get_reminder_window
+    from src.ui.statistics_window import get_statistics_window
+    from src.core.reminder import get_reminder_manager
+    from src.core.statistics import get_statistics_tracker
     from src.ui.splash_screen import SplashScreen
     from src.utils.logger import get_logger, log_info, log_error, log_debug, log_warning, log_exception
     from src.utils.history import add_translation_history
@@ -3234,6 +3242,17 @@ class MainController(QObject):
         self._hotkey_manager = get_hotkey_manager(); _lap("hotkey_manager")
         self._writing_service = get_writing_service(); _lap("writing_service")
 
+        # 提醒管理器：按配置恢复周期提醒
+        self._reminder_manager = get_reminder_manager()
+        self._reminder_manager.configure(
+            self._config.get('reminder.enabled', False),
+            self._config.get('reminder.interval_minutes', 30),
+            self._config.get('reminder.message', ''),
+        )
+        # 统计跟踪器：按配置恢复启用状态（启用即开始全局监听）
+        self._statistics_tracker = get_statistics_tracker()
+        self._statistics_tracker.set_enabled(self._config.get('statistics.enabled', False))
+
         # 划词悬浮工具栏（toolbar 模式下划词时弹出）
         self._selection_toolbar = get_selection_toolbar()
         self._action_worker: Optional[CustomActionWorker] = None
@@ -3289,6 +3308,8 @@ class MainController(QObject):
         self._tray_icon.vocabulary_requested.connect(self._on_vocabulary_requested)
         self._tray_icon.chat_requested.connect(self._on_chat_requested)
         self._tray_icon.help_requested.connect(self._on_help_requested)
+        self._tray_icon.reminder_requested.connect(self._on_reminder_requested)
+        self._tray_icon.statistics_requested.connect(self._on_statistics_requested)
         # 翻译窗口关闭信号
         self._translator_window.closed.connect(self._on_translator_window_closed)
         self._translator_window.settings_requested.connect(self._on_settings_requested)
@@ -3602,6 +3623,15 @@ class MainController(QObject):
         self._tray_icon.hide()
         self._tray_icon.cleanup()
         self._text_capture.cleanup()
+
+        # 停止提醒与统计（统计会落盘今日数据）
+        for _attr in ('_reminder_manager', '_statistics_tracker'):
+            _mgr = getattr(self, _attr, None)
+            if _mgr is not None:
+                try:
+                    _mgr.stop()
+                except Exception:
+                    pass
 
         # 关闭 MCP 客户端（断开子进程连接）
         try:
@@ -4369,6 +4399,18 @@ class MainController(QObject):
         self._translate_button.hide()
         self._selection_toolbar.hide_toolbar()
         get_chat_window().show_window()
+
+    def _on_reminder_requested(self):
+        """托盘菜单打开提醒设置窗口"""
+        self._translate_button.hide()
+        self._selection_toolbar.hide_toolbar()
+        get_reminder_window().show_window()
+
+    def _on_statistics_requested(self):
+        """托盘菜单打开工作量统计窗口"""
+        self._translate_button.hide()
+        self._selection_toolbar.hide_toolbar()
+        get_statistics_window().show_window()
 
     def _on_ai_chat_hotkey_triggered(self):
         """AI 对话快捷键：唤起/置顶 AI 对话窗口"""

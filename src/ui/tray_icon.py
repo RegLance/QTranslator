@@ -32,6 +32,8 @@ class TrayIcon(QObject):
     vocabulary_requested = pyqtSignal()  # 单词收藏窗口
     chat_requested = pyqtSignal()  # 显示 AI 对话窗口
     help_requested = pyqtSignal()  # 显示帮助窗口
+    reminder_requested = pyqtSignal()  # 显示提醒设置窗口
+    statistics_requested = pyqtSignal()  # 显示工作量统计窗口
 
     def __init__(self):
         super().__init__()
@@ -173,6 +175,16 @@ class TrayIcon(QObject):
         self._chat_action = QAction("AI 对话", self._menu)
         self._chat_action.triggered.connect(self._on_chat)
         self._menu.addAction(self._chat_action)
+
+        # 提醒选项
+        self._reminder_action = QAction("提醒", self._menu)
+        self._reminder_action.triggered.connect(self._on_reminder)
+        self._menu.addAction(self._reminder_action)
+
+        # 统计选项
+        self._statistics_action = QAction("统计", self._menu)
+        self._statistics_action.triggered.connect(self._on_statistics)
+        self._menu.addAction(self._statistics_action)
 
         # 设置选项
         self._settings_action = QAction("设置...", self._menu)
@@ -395,6 +407,20 @@ class TrayIcon(QObject):
             self.help_requested.emit()
         except Exception as e:
             self._log_error("_on_help", e)
+
+    def _on_reminder(self):
+        """打开提醒设置窗口"""
+        try:
+            self.reminder_requested.emit()
+        except Exception as e:
+            self._log_error("_on_reminder", e)
+
+    def _on_statistics(self):
+        """打开工作量统计窗口"""
+        try:
+            self.statistics_requested.emit()
+        except Exception as e:
+            self._log_error("_on_statistics", e)
 
     def _on_exit(self):
         """退出应用"""

@@ -3242,13 +3242,9 @@ class MainController(QObject):
         self._hotkey_manager = get_hotkey_manager(); _lap("hotkey_manager")
         self._writing_service = get_writing_service(); _lap("writing_service")
 
-        # 提醒管理器：按配置恢复周期提醒
+        # 提醒管理器：按配置恢复提醒列表
         self._reminder_manager = get_reminder_manager()
-        self._reminder_manager.configure(
-            self._config.get('reminder.enabled', False),
-            self._config.get('reminder.interval_minutes', 30),
-            self._config.get('reminder.message', ''),
-        )
+        self._reminder_manager.configure(self._config.get('reminder.items', []))
         # 统计跟踪器：按配置恢复启用状态（启用即开始全局监听）
         self._statistics_tracker = get_statistics_tracker()
         self._statistics_tracker.set_enabled(self._config.get('statistics.enabled', False))

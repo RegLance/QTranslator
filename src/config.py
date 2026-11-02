@@ -3,6 +3,7 @@ import os
 import sys
 import yaml
 import json
+import uuid
 import traceback
 from pathlib import Path
 from typing import Any, Dict
@@ -16,7 +17,7 @@ APP_VERSION = "2.0.0"
 BUILD_TIME = "2026-04-24"
 
 # 配置文件结构版本号：升级版本时若需对旧配置文件做一次性迁移，递增此值并实现对应迁移逻辑
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 
 # 应用 URLs 和服务配置
 CONTACT_URL = "xxxx"
@@ -168,9 +169,58 @@ class Config:
             if raw_version is not None:
                 print("执行配置迁移: v1 划词黑名单（Excel/PowerPoint 移出黑名单）", file=sys.stderr)
 
+        if raw_version is None or raw_version < 2:
+            # v2：提醒从「单条周期提醒」迁移为「提醒列表」
+            if self._migrate_reminder_to_list():
+                changed = True
+            if raw_version is not None:
+                print("执行配置迁移: v2 提醒改为提醒列表", file=sys.stderr)
+
         if changed or raw_version is None:
             self._config['config_version'] = CONFIG_VERSION
             self.save()
+
+    def _migrate_reminder_to_list(self) -> bool:
+        """把旧版单条周期提醒（reminder.enabled/interval_minutes/message）迁移为提醒列表。
+
+        已有列表时仅清理遗留的旧字段；无列表但存在旧字段时，生成一条 interval 提醒。
+        返回是否有变更（是否需要保存）。
+        """
+        rem = self._config.get('reminder')
+        if not isinstance(rem, dict):
+            return False
+
+        items = rem.get('items')
+        if isinstance(items, list) and items:
+            # 已存在提醒列表，仅清理可能遗留的旧字段
+            changed = False
+            for k in ('enabled', 'interval_minutes', 'message'):
+                if k in rem:
+                    rem.pop(k, None)
+                    changed = True
+            return changed
+
+        # 旧格式：单条周期提醒。没有内容则不生成任何提醒。
+        enabled = bool(rem.get('enabled', False))
+        try:
+            interval = max(1, int(rem.get('interval_minutes', 30)))
+        except (TypeError, ValueError):
+            interval = 30
+        message = str(rem.get('message', '')).strip()
+
+        new_items = []
+        if message:
+            new_items.append({
+                'id': uuid.uuid4().hex[:12],
+                'enabled': enabled,
+                'mode': 'interval',
+                'interval_minutes': interval,
+                'message': message,
+            })
+        rem['items'] = new_items
+        for k in ('enabled', 'interval_minutes', 'message'):
+            rem.pop(k, None)
+        return True
 
     def _load_config(self, path: str) -> Dict[str, Any]:
         """加载配置文件"""
@@ -241,9 +291,7 @@ class Config:
                 'custom_actions': {},  # actions/ 目录 .py 扩展的显示开关 {文件名.py: bool}
             },
             'reminder': {
-                'enabled': False,  # 是否启用周期提醒
-                'interval_minutes': 30,  # 提醒周期（分钟）
-                'message': '该起来活动一下，喝口水啦～',  # 提醒内容（可自定义）
+                'items': [],  # 提醒列表，每项为 dict（字段见 core/reminder.py 说明）
             },
             'statistics': {
                 'enabled': False,  # 是否启用工作量统计（统计窗口内开关）

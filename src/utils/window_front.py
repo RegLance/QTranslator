@@ -135,6 +135,22 @@ def install_activation_topmost(widget: QWidget) -> None:
     widget.installEventFilter(f)
 
 
+def raise_without_activating(widget: QWidget) -> None:
+    """把窗口拉到最前但不抢键盘焦点（划词查词卡片等悬浮 UI 用）。
+
+    与 bring_to_front_once 的区别：全程不 activateWindow()，源应用（浏览器 /
+    编辑器）保持键盘焦点，用户选中文本后仍可正常按 Delete / Ctrl+C。
+    用 SWP_NOACTIVATE 的 HWND_TOPMOST 瞬闪把卡片盖到前台窗口之上。随后：
+    - 翻译窗口未「始终置顶」→ 立即降回普通带（不常驻置顶）；
+    - 翻译窗口「始终置顶」（处于置顶带）→ 保持置顶带、不立即降级，让卡片停留在
+      翻译窗口上方（普通带窗口永远盖不过置顶带窗口，此时若立即降级会被翻译窗口遮住）。
+    """
+    widget.raise_()
+    _set_topmost(widget, True)
+    if not _translator_always_on_top():
+        _set_topmost(widget, False)
+
+
 def bring_to_front_once(widget: QWidget) -> None:
     """唤醒窗口到前台：raise/激活 + Win32 置顶抢前台，按翻译窗口置顶状态决定是否立即降级。
 

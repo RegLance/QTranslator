@@ -28,7 +28,7 @@ try:
     from ..config import get_config, APP_VERSION, VERSION_AUTHOR
     from ..utils.tts import get_tts
     from ..utils.tts_speak_indicator import TtsSpeakPrepareIndicator
-    from ..ui.word_popup import show_word_popup, is_english_word, get_word_popup
+    from ..ui.word_popup import show_word_popup, is_english_word, get_word_popup, last_mouse_press_pos
 except ImportError:
     from src.utils.theme import (
         get_theme,
@@ -43,7 +43,7 @@ except ImportError:
     from src.config import get_config, APP_VERSION, VERSION_AUTHOR
     from src.utils.tts import get_tts
     from src.utils.tts_speak_indicator import TtsSpeakPrepareIndicator
-    from src.ui.word_popup import show_word_popup, is_english_word, get_word_popup
+    from src.ui.word_popup import show_word_popup, is_english_word, get_word_popup, last_mouse_press_pos
 
 
 class AnimatedSplitterHandle(QSplitterHandle):
@@ -3391,8 +3391,8 @@ class TranslatorWindow(QWidget):
                 and not (popup.isVisible() and popup._word == selected):
             return
 
-        # 卡片出现在鼠标右下角（与应用外划词查词行为一致）
-        show_word_popup(selected, QCursor.pos(), text_edit)
+        # 卡片出现在鼠标按下点右下角（与应用外划词查词行为一致）
+        show_word_popup(selected, last_mouse_press_pos() or QCursor.pos(), text_edit)
         self._last_popup_word = selected
 
     def _show_input_context_menu(self, pos):

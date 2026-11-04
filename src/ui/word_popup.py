@@ -198,24 +198,20 @@ class WordPopup(QFrame):
 
     def _setup_ui(self):
         """构建弹窗 UI 结构。"""
-        # 关键：不使用 WA_ShowWithoutActivating，让窗口可以接收焦点。
-        # 这样当用户点击弹窗外部时，系统会发送 ActivationChange 事件，
-        # 弹窗在 changeEvent 中检测到失活后自动关闭。
-        # 不常驻置顶：「始终置顶」设置只控制翻译窗口
+        # 不抢键盘焦点：与划词工具栏一致，用 WindowDoesNotAcceptFocus +
+        # WA_ShowWithoutActivating + NoFocus。否则选中单词后弹窗会抢走焦点，
+        # 用户本想按 Delete 删除 / Ctrl+C 复制，按键却落到弹窗上而失效。
+        # 关闭仍由全局鼠标钩子（点击卡片外）与 Qt 应用级过滤器兜底，无需依赖焦点。
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.Tool
+            Qt.WindowType.Tool |
+            Qt.WindowType.WindowDoesNotAcceptFocus
         )
-        # 用时置顶、切走降级：「始终置顶」设置只控制翻译窗口
-        try:
-            from ..utils.window_front import install_activation_topmost
-        except ImportError:
-            from src.utils.window_front import install_activation_topmost
-        install_activation_topmost(self)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_MouseTracking)
-        # 允许接收焦点（确保 ActivationChange 能正常触发）
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # 不接收键盘焦点：卡片内只有按钮（鼠标）与可选中的标签（鼠标）
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         # 阴影
         shadow = QGraphicsDropShadowEffect()
@@ -515,6 +511,7 @@ class WordPopup(QFrame):
 
     def show_at(self, word: str, global_pos: QPoint, text_edit: QWidget):
         """在指定位置显示单词弹窗。每次调用立即刷新为最新单词。"""
+        _diag_log(f"show_at enter word={word!r} pos={global_pos}")
 
         new_word = word.strip()
         if new_word == self._word and self.isVisible():
@@ -578,13 +575,15 @@ class WordPopup(QFrame):
         self.repaint()
         # 下一帧再补一次重绘兜底（layered 窗口合成异步）
         QTimer.singleShot(0, self.repaint)
-        # 弹出时刻短暂置前一次（bring_to_front_once 含 raise/激活）
+        # 弹出时刻短暂置前一次，但不抢焦点（不激活窗口，源应用键盘输入不受影响）
         try:
-            from ..utils.window_front import bring_to_front_once
+            from ..utils.window_front import raise_without_activating
         except ImportError:
-            from src.utils.window_front import bring_to_front_once
-        bring_to_front_once(self)
+            from src.utils.window_front import raise_without_activating
+        raise_without_activating(self)
+        _diag_log("show_at installing hooks")
         _install_global_mouse_hook()
+        _install_global_keyboard_hook()
 
         # 开启 500ms 宽限期：其间不响应外部点击关闭
         # 防止用户划词选中新单词时，第一步（点击文本框）误关弹窗
@@ -827,7 +826,9 @@ class WordPopup(QFrame):
         except Exception:
             pass
         self._cancel_lookup()
+        _diag_log("hide_popup uninstalling hooks")
         _uninstall_global_mouse_hook()
+        _uninstall_global_keyboard_hook()
         self._hide_time = _time.time()
         self._hidden_word = self._word
         # 阴影 effect 的像素缓存可能保留旧外观：隐藏期间禁用，
@@ -851,6 +852,25 @@ class WordPopup(QFrame):
 # （Qt 应用级事件过滤器收不到其他进程的鼠标事件，必须用系统级钩子）
 # ----------------------------------------------------------------------
 import ctypes
+
+# 崩溃排查日志：同步写文件并 flush，进程被强杀也能保留最后一行，用于定位 0xC0000409 崩溃点。
+_diag_log_path = None
+_diag_seq = 0
+
+
+def _diag_log(msg: str):
+    global _diag_log_path, _diag_seq
+    _diag_seq += 1
+    try:
+        if _diag_log_path is None:
+            import os
+            import tempfile
+            _diag_log_path = os.path.join(tempfile.gettempdir(), "qtranslator_word_popup_diag.log")
+        with open(_diag_log_path, 'a', encoding='utf-8') as f:
+            f.write(f"[{_diag_seq}] {_time.time():.3f} {msg}\n")
+            f.flush()
+    except Exception:
+        pass
 
 _mouse_hook_handle = None
 _mouse_hook_proc = None  # 保持引用防止回调对象被 GC
@@ -911,6 +931,7 @@ def _on_global_mouse_event(nCode, wParam, lParam):
     """WH_MOUSE_LL 回调：卡片区域外的鼠标按下 → 关闭卡片；
     双击 → 无条件关闭旧卡片（双击一定是查新词意图，且双击位置常落在
     锚于鼠标右下角的卡片区域内，新选区事件上报前旧卡片必须先退场）。"""
+    _diag_log(f"mouse_event enter nCode={nCode} wParam={wParam}")
     if nCode == 0 and (wParam in _WM_BUTTON_DOWN or wParam in _WM_DBLCLK):
         popup = _popup_ref[0]
         if popup is not None:
@@ -936,7 +957,9 @@ def _on_global_mouse_event(nCode, wParam, lParam):
 def _install_global_mouse_hook():
     """安装系统级低级鼠标钩子（仅在 Windows 下生效）。"""
     global _mouse_hook_handle, _mouse_hook_proc
+    _diag_log("install_mouse_hook enter")
     if sys.platform != 'win32' or _mouse_hook_handle:
+        _diag_log("install_mouse_hook skip")
         return
     try:
         user32 = ctypes.windll.user32
@@ -953,19 +976,207 @@ def _install_global_mouse_hook():
         h_mod = kernel32.GetModuleHandleW(None)
         _mouse_hook_handle = user32.SetWindowsHookExW(
             14, _mouse_hook_proc, h_mod, 0)  # 14 = WH_MOUSE_LL
-    except Exception:
+        _diag_log(f"install_mouse_hook done handle={_mouse_hook_handle}")
+    except Exception as _e:
         _mouse_hook_handle = None
+        _diag_log(f"install_mouse_hook FAILED {_e}")
 
 
 def _uninstall_global_mouse_hook():
     """卸载系统级低级鼠标钩子。"""
     global _mouse_hook_handle, _mouse_hook_proc
+    _diag_log("uninstall_mouse_hook")
     if _mouse_hook_handle:
         try:
             ctypes.windll.user32.UnhookWindowsHookEx(_mouse_hook_handle)
         except Exception:
             pass
     _mouse_hook_handle = None
+
+
+# ----------------------------------------------------------------------
+# Win32 全局键盘钩子：卡片可见时，用户按 Delete / Backspace / Ctrl+X
+# 删除选中单词即关闭卡片（选区被清空不会触发 selection-hook 的
+# text-selection 事件，也不会产生鼠标点击，鼠标钩子感知不到，故需监听键盘）
+# ----------------------------------------------------------------------
+_keyboard_hook_handle = None
+_keyboard_hook_proc = None  # 保持引用防止回调对象被 GC
+
+_WM_KEYDOWN = 0x0100
+_WM_SYSKEYDOWN = 0x0104
+_VK_DELETE = 0x2E
+_VK_BACK = 0x08
+_VK_X = 0x58
+_VK_CONTROL = 0x11
+
+_KEYBOARD_LL_PROC = ctypes.WINFUNCTYPE(
+    ctypes.c_long, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+
+
+class _KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ('vkCode', ctypes.c_ulong),
+        ('scanCode', ctypes.c_ulong),
+        ('flags', ctypes.c_ulong),
+        ('time', ctypes.c_ulong),
+        ('dwExtraInfo', ctypes.c_void_p),
+    ]
+
+
+def _on_global_keyboard_event(nCode, wParam, lParam):
+    """WH_KEYBOARD_LL 回调：Delete / Backspace 删除选中词，或 Ctrl+X 剪切时关闭卡片。"""
+    _diag_log(f"keyboard_event enter nCode={nCode} wParam={wParam}")
+    if nCode == 0 and wParam in (_WM_KEYDOWN, _WM_SYSKEYDOWN):
+        popup = _popup_ref[0]
+        if popup is not None:
+            try:
+                if popup.isVisible():
+                    info = _KBDLLHOOKSTRUCT.from_address(int(lParam))
+                    delete_word = info.vkCode in (_VK_DELETE, _VK_BACK)
+                    cut_word = (
+                        info.vkCode == _VK_X
+                        and (ctypes.windll.user32.GetAsyncKeyState(_VK_CONTROL) & 0x8000)
+                    )
+                    if delete_word or cut_word:
+                        # 延迟到事件循环执行，避免在钩子回调里做耗时操作
+                        QTimer.singleShot(0, popup.hide_popup)
+            except Exception:
+                pass
+    return ctypes.windll.user32.CallNextHookEx(
+        _keyboard_hook_handle, nCode, wParam, lParam)
+
+
+def _install_global_keyboard_hook():
+    """安装系统级低级键盘钩子（仅在 Windows 下生效）。"""
+    global _keyboard_hook_handle, _keyboard_hook_proc
+    _diag_log("install_keyboard_hook enter")
+    if sys.platform != 'win32' or _keyboard_hook_handle:
+        _diag_log("install_keyboard_hook skip")
+        return
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+        kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+        user32.SetWindowsHookExW.restype = ctypes.c_void_p
+        user32.SetWindowsHookExW.argtypes = [
+            ctypes.c_int, _KEYBOARD_LL_PROC, ctypes.c_void_p, ctypes.c_ulong]
+        user32.CallNextHookEx.restype = ctypes.c_long
+        user32.CallNextHookEx.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
+        _keyboard_hook_proc = _KEYBOARD_LL_PROC(_on_global_keyboard_event)
+        h_mod = kernel32.GetModuleHandleW(None)
+        _keyboard_hook_handle = user32.SetWindowsHookExW(
+            13, _keyboard_hook_proc, h_mod, 0)  # 13 = WH_KEYBOARD_LL
+        _diag_log(f"install_keyboard_hook done handle={_keyboard_hook_handle}")
+    except Exception as _e:
+        _keyboard_hook_handle = None
+        _diag_log(f"install_keyboard_hook FAILED {_e}")
+
+
+def _uninstall_global_keyboard_hook():
+    """卸载系统级低级键盘钩子。"""
+    global _keyboard_hook_handle, _keyboard_hook_proc
+    _diag_log("uninstall_keyboard_hook")
+    if _keyboard_hook_handle:
+        try:
+            ctypes.windll.user32.UnhookWindowsHookEx(_keyboard_hook_handle)
+        except Exception:
+            pass
+    _keyboard_hook_handle = None
+
+
+# ----------------------------------------------------------------------
+# 全局「鼠标按下位置」跟踪：卡片锚点改为鼠标按下点（而非松开点）。
+# 常驻 WH_MOUSE_LL 钩子记录最近一次左键按下的物理坐标。回调里只做纯
+# ctypes 读取（与 _on_global_mouse_event 一致），不调用任何 Qt API，
+# 避免在低级钩子回调里触发 Qt 内部状态访问导致崩溃。
+# ----------------------------------------------------------------------
+_press_hook_handle = None
+_press_hook_proc = None  # 保持引用防止回调对象被 GC
+_last_press_native: Optional[tuple] = None  # (x, y) 物理像素
+
+_WM_LBUTTONDOWN = 0x0201
+
+
+def _on_global_press_event(nCode, wParam, lParam):
+    global _last_press_native
+    _diag_log(f"press_event enter nCode={nCode} wParam={wParam}")
+    if nCode == 0 and wParam == _WM_LBUTTONDOWN:
+        try:
+            info = _MSLLHOOKSTRUCT.from_address(int(lParam))
+            _last_press_native = (info.pt.x, info.pt.y)
+            _diag_log(f"press_event recorded {_last_press_native}")
+        except Exception as _e:
+            _diag_log(f"press_event from_address FAILED {_e}")
+    return ctypes.windll.user32.CallNextHookEx(
+        _press_hook_handle, nCode, wParam, lParam)
+
+
+def _install_press_tracker():
+    """安装常驻鼠标按下跟踪钩子（仅在 Windows 下生效，重复调用安全）。"""
+    global _press_hook_handle, _press_hook_proc
+    _diag_log("install_press_tracker enter")
+    if sys.platform != 'win32' or _press_hook_handle:
+        _diag_log("install_press_tracker skip")
+        return
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+        kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+        user32.SetWindowsHookExW.restype = ctypes.c_void_p
+        user32.SetWindowsHookExW.argtypes = [
+            ctypes.c_int, _MOUSE_LL_PROC, ctypes.c_void_p, ctypes.c_ulong]
+        user32.CallNextHookEx.restype = ctypes.c_long
+        user32.CallNextHookEx.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
+        _press_hook_proc = _MOUSE_LL_PROC(_on_global_press_event)
+        h_mod = kernel32.GetModuleHandleW(None)
+        _press_hook_handle = user32.SetWindowsHookExW(
+            14, _press_hook_proc, h_mod, 0)  # 14 = WH_MOUSE_LL
+        _diag_log(f"install_press_tracker done handle={_press_hook_handle}")
+    except Exception as _e:
+        _press_hook_handle = None
+        _diag_log(f"install_press_tracker FAILED {_e}")
+
+
+def _native_to_logical(nx: int, ny: int) -> QPoint:
+    """把物理像素坐标换算成 Qt 逻辑像素坐标（按所在屏的 devicePixelRatio）。"""
+    try:
+        from PyQt6.QtGui import QGuiApplication
+        for screen in QGuiApplication.screens():
+            g = screen.geometry()
+            dpr = screen.devicePixelRatio()
+            px0 = int(round(g.x() * dpr))
+            py0 = int(round(g.y() * dpr))
+            pw = int(round(g.width() * dpr))
+            ph = int(round(g.height() * dpr))
+            if px0 <= nx < px0 + pw and py0 <= ny < py0 + ph:
+                return QPoint(
+                    g.x() + int(round((nx - px0) / dpr)),
+                    g.y() + int(round((ny - py0) / dpr)),
+                )
+    except Exception:
+        pass
+    # 兜底：用主屏 DPR 近似换算
+    try:
+        from PyQt6.QtGui import QGuiApplication
+        dpr = QGuiApplication.primaryScreen().devicePixelRatio()
+        if dpr > 0:
+            return QPoint(int(round(nx / dpr)), int(round(ny / dpr)))
+    except Exception:
+        pass
+    return QPoint(nx, ny)
+
+
+def last_mouse_press_pos() -> Optional[QPoint]:
+    """最近一次鼠标按下位置（Qt 逻辑像素）；尚未捕获到时返回 None。"""
+    _install_press_tracker()
+    _diag_log(f"last_mouse_press_pos native={_last_press_native}")
+    if _last_press_native is None:
+        return None
+    return _native_to_logical(_last_press_native[0], _last_press_native[1])
 
 
 # 全局弹窗实例引用
@@ -980,6 +1191,8 @@ def get_word_popup() -> WordPopup:
         _word_popup_instance = WordPopup()
         _popup_ref[0] = _word_popup_instance
         WordPopup.install_global_click_filter(_popup_ref)
+        # 常驻鼠标按下跟踪：卡片锚点改取「按下点」，需在首次选词前就位
+        _install_press_tracker()
     return _word_popup_instance
 
 

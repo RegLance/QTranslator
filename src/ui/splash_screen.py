@@ -72,9 +72,12 @@ class SplashScreen(QWidget):
     def __init__(self):
         super().__init__()
 
+        # Tool：隐藏 Windows 任务栏条目（启动动画是瞬态窗口，不应占用任务栏）。
+        # WindowStaysOnTopHint 保留，保证初始化期间盖在其他窗口之上。
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 

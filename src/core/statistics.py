@@ -91,6 +91,11 @@ class StatisticsTracker(QObject):
         self._tick.timeout.connect(self._on_tick)
         self._tick.start(1000)
 
+        # 鼠标移动距离采样定时器：200ms 轮询光标，替代低级钩子的高频 on_move 回调
+        self._mouse_poll = QTimer(self)
+        self._mouse_poll.timeout.connect(self._poll_mouse_pos)
+        self._mouse_poll.setInterval(200)
+
     @staticmethod
     def _new_counter() -> dict:
         return {"key": 0, "distance_px": 0.0, "wheel": 0, "left": 0, "right": 0}
@@ -178,10 +183,11 @@ class StatisticsTracker(QObject):
             self._keyboard_listener = keyboard.Listener(
                 on_press=self._on_key_press, on_release=self._on_key_release)
             self._mouse_listener = mouse.Listener(
-                on_move=self._on_mouse_move, on_scroll=self._on_mouse_scroll,
+                on_scroll=self._on_mouse_scroll,
                 on_click=self._on_mouse_click)
             self._keyboard_listener.start()
             self._mouse_listener.start()
+            self._mouse_poll.start()
             log_info("工作量统计已启动")
         except Exception:
             log_exception("启动统计监听失败")
@@ -189,6 +195,7 @@ class StatisticsTracker(QObject):
             self._mouse_listener = None
 
     def _stop_listeners(self):
+        self._mouse_poll.stop()
         for lst in (self._keyboard_listener, self._mouse_listener):
             if lst is not None:
                 try:
@@ -222,23 +229,33 @@ class StatisticsTracker(QObject):
         with self._lock:
             self._pressed_keys.discard(key_id)
 
-    def _on_mouse_move(self, x, y):
-        now = time.monotonic()
+    def _poll_mouse_pos(self):
+        """200ms 轮询光标物理坐标，替代低级钩子的高频 on_move 回调。
+
+        用 Win32 GetCursorPos 拿物理像素（与 pynput on_move 同坐标系），只在主线程
+        QTimer 中采样。这样鼠标移动不再走 WH_MOUSE_LL 钩子的每个事件回调，避免在
+        每个 mousemove 上进入 Python（那是全局鼠标卡顿/冻结的主要来源之一）。
+        """
+        try:
+            import ctypes
+            from ctypes import wintypes
+            pt = wintypes.POINT()
+            if not ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
+                return
+            x, y = int(pt.x), int(pt.y)
+        except Exception:
+            return
+
         with self._lock:
             if self._last_mouse_pos is None:
                 self._last_mouse_pos = (x, y)
-                self._last_sample_time = now
-                return
-            # 时间采样（200ms）：pynput 移动事件频率可达上千 Hz，逐像素累加会把
-            # 曲线的完整路径都算进去导致虚高；按固定间隔采样、只累加两点间直线距离，
-            # 才贴近「鼠标移动了多远」的直觉。
-            if now - self._last_sample_time < 0.2:
+                self._last_sample_time = time.monotonic()
                 return
             lx, ly = self._last_mouse_pos
             dx = x - lx
             dy = y - ly
             self._last_mouse_pos = (x, y)
-            self._last_sample_time = now
+            self._last_sample_time = time.monotonic()
             # 超过阈值视为光标跳变（跨屏/系统定位），忽略本次距离
             if abs(dx) > 3000 or abs(dy) > 3000:
                 return

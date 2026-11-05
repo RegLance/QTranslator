@@ -1,6 +1,7 @@
 """单词查询浮动弹窗模块 — 选中英文单词时显示发音、释义与收藏入口。"""
 from __future__ import annotations
 
+import os
 import re
 import sys
 import time as _time
@@ -854,11 +855,17 @@ class WordPopup(QFrame):
 import ctypes
 
 # 崩溃排查日志：同步写文件并 flush，进程被强杀也能保留最后一行，用于定位 0xC0000409 崩溃点。
+# 注意：_diag_log 被低级鼠标/键盘钩子回调（WH_MOUSE_LL / WH_KEYBOARD_LL）在「每个事件」上调用，
+# 同步 open+write+flush 会严重拖慢整个系统的鼠标输入（卡顿/冻结）。因此默认关闭，
+# 仅在需要排查崩溃时把 _diag_enabled 置 True（或设环境变量 QTRANSLATOR_WORD_POPUP_DIAG=1）。
 _diag_log_path = None
 _diag_seq = 0
+_diag_enabled = os.environ.get('QTRANSLATOR_WORD_POPUP_DIAG') == '1'
 
 
 def _diag_log(msg: str):
+    if not _diag_enabled:
+        return
     global _diag_log_path, _diag_seq
     _diag_seq += 1
     try:

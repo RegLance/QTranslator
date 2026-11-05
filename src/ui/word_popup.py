@@ -1141,25 +1141,84 @@ def _install_press_tracker():
         _diag_log(f"install_press_tracker FAILED {_e}")
 
 
+def _device_key(name: str) -> str:
+    """'\\\\.\\DISPLAY1' / 'DISPLAY1' → 'DISPLAY1'（大小写不敏感）。"""
+    if not name:
+        return ''
+    return name.rsplit('\\', 1)[-1].upper()
+
+
+class _MONITORINFOEX(ctypes.Structure):
+    """MONITORINFOEXW：显示器物理矩形 rcMonitor + 设备名 szDevice。"""
+    _fields_ = [
+        ('cbSize', ctypes.c_ulong),
+        ('rcMonitor', _RECT32),
+        ('rcWork', _RECT32),
+        ('dwFlags', ctypes.c_ulong),
+        ('szDevice', ctypes.c_wchar * 32),
+    ]
+
+
+_MONITOR_DEFAULTTONEAREST = 2  # MonitorFromPoint 取最近显示器
+
+
 def _native_to_logical(nx: int, ny: int) -> QPoint:
-    """把物理像素坐标换算成 Qt 逻辑像素坐标（按所在屏的 devicePixelRatio）。"""
+    """把 Win32 物理像素坐标换算成 Qt 逻辑像素坐标（多显示器 + 混合 DPI 正确）。
+
+    WH_MOUSE_LL 钩子的 pt 是物理像素。多显示器且各屏缩放比例不同（混合 DPI）时，
+    非主屏在虚拟屏里的物理原点不能用「逻辑原点 × 本屏 DPR」推算——那会把物理原点
+    算错，导致卡片位置整体偏移。这里改用 Win32 MonitorFromPoint / GetMonitorInfoW
+    拿到所在显示器的真实物理矩形，再叠加 Qt 同名屏的逻辑原点与 devicePixelRatio 换算。
+    """
+    if sys.platform != 'win32':
+        return QPoint(nx, ny)
     try:
         from PyQt6.QtGui import QGuiApplication
+
+        user32 = ctypes.windll.user32
+        user32.MonitorFromPoint.argtypes = [_POINT, ctypes.c_ulong]
+        user32.MonitorFromPoint.restype = ctypes.c_void_p
+        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MONITORINFOEX)]
+        user32.GetMonitorInfoW.restype = ctypes.c_int
+
+        hmon = user32.MonitorFromPoint(_POINT(int(nx), int(ny)), _MONITOR_DEFAULTTONEAREST)
+        if not hmon:
+            raise RuntimeError('MonitorFromPoint failed')
+        mi = _MONITORINFOEX()
+        mi.cbSize = ctypes.sizeof(_MONITORINFOEX)
+        if not user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            raise RuntimeError('GetMonitorInfoW failed')
+
+        # 匹配同名 Qt 屏，取逻辑原点与 DPR（首选，最精确）
+        dev = mi.szDevice
         for screen in QGuiApplication.screens():
-            g = screen.geometry()
-            dpr = screen.devicePixelRatio()
-            px0 = int(round(g.x() * dpr))
-            py0 = int(round(g.y() * dpr))
-            pw = int(round(g.width() * dpr))
-            ph = int(round(g.height() * dpr))
-            if px0 <= nx < px0 + pw and py0 <= ny < py0 + ph:
+            if _device_key(screen.name()) == _device_key(dev):
+                g = screen.geometry()
+                dpr = screen.devicePixelRatio() or 1.0
                 return QPoint(
-                    g.x() + int(round((nx - px0) / dpr)),
-                    g.y() + int(round((ny - py0) / dpr)),
+                    int(round(g.x() + (nx - mi.rcMonitor.left) / dpr)),
+                    int(round(g.y() + (ny - mi.rcMonitor.top) / dpr)),
                 )
-    except Exception:
-        pass
-    # 兜底：用主屏 DPR 近似换算
+
+        # 名称匹配失败：GetDpiForMonitor 取 DPI + 主屏 DPR 推算逻辑原点兜底
+        shcore = ctypes.windll.shcore
+        shcore.GetDpiForMonitor.argtypes = [
+            ctypes.c_void_p, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)]
+        shcore.GetDpiForMonitor.restype = ctypes.c_long  # HRESULT
+        dpi_x = ctypes.c_uint(96)
+        dpi_y = ctypes.c_uint(96)
+        shcore.GetDpiForMonitor(hmon, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y))
+        dpr = dpi_x.value / 96.0 or 1.0
+        pdpr = QGuiApplication.primaryScreen().devicePixelRatio() or 1.0
+        return QPoint(
+            int(round((mi.rcMonitor.left / pdpr) + (nx - mi.rcMonitor.left) / dpr)),
+            int(round((mi.rcMonitor.top / pdpr) + (ny - mi.rcMonitor.top) / dpr)),
+        )
+    except Exception as _e:
+        _diag_log(f"_native_to_logical win32 FAILED {_e}")
+
+    # 兜底：主屏 DPR 近似（单屏 / 同 DPI 多屏时精确）
     try:
         from PyQt6.QtGui import QGuiApplication
         dpr = QGuiApplication.primaryScreen().devicePixelRatio()

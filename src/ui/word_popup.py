@@ -1141,13 +1141,6 @@ def _install_press_tracker():
         _diag_log(f"install_press_tracker FAILED {_e}")
 
 
-def _device_key(name: str) -> str:
-    """'\\\\.\\DISPLAY1' / 'DISPLAY1' → 'DISPLAY1'（大小写不敏感）。"""
-    if not name:
-        return ''
-    return name.rsplit('\\', 1)[-1].upper()
-
-
 class _MONITORINFOEX(ctypes.Structure):
     """MONITORINFOEXW：显示器物理矩形 rcMonitor + 设备名 szDevice。"""
     _fields_ = [
@@ -1165,10 +1158,14 @@ _MONITOR_DEFAULTTONEAREST = 2  # MonitorFromPoint 取最近显示器
 def _native_to_logical(nx: int, ny: int) -> QPoint:
     """把 Win32 物理像素坐标换算成 Qt 逻辑像素坐标（多显示器 + 混合 DPI 正确）。
 
-    WH_MOUSE_LL 钩子的 pt 是物理像素。多显示器且各屏缩放比例不同（混合 DPI）时，
-    非主屏在虚拟屏里的物理原点不能用「逻辑原点 × 本屏 DPR」推算——那会把物理原点
-    算错，导致卡片位置整体偏移。这里改用 Win32 MonitorFromPoint / GetMonitorInfoW
-    拿到所在显示器的真实物理矩形，再叠加 Qt 同名屏的逻辑原点与 devicePixelRatio 换算。
+    WH_MOUSE_LL 钩子的 pt 是物理像素。关键点：Qt 的 QScreen.geometry() 在 Windows
+    上「位置是物理(native)像素、尺寸才是逻辑像素」——例如副屏物理原点 x=2560，
+    geometry().x() 也等于 2560，而 geometry().width() 才是 2048(=2560/1.25)。
+    所以正确的逻辑坐标是「显示器物理原点 + (物理坐标 − 物理原点) / 该屏 DPR」，
+    而不是「物理坐标 / DPR」（后者会把副屏原点多除以一次 DPR，整体左偏）。
+
+    这里用 Win32 MonitorFromPoint / GetMonitorInfoW 拿所在显示器的物理原点，
+    用匹配到的 Qt 屏 devicePixelRatio（或 GetDpiForMonitor）取 DPR。
     """
     if sys.platform != 'win32':
         return QPoint(nx, ny)
@@ -1189,32 +1186,34 @@ def _native_to_logical(nx: int, ny: int) -> QPoint:
         if not user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
             raise RuntimeError('GetMonitorInfoW failed')
 
-        # 匹配同名 Qt 屏，取逻辑原点与 DPR（首选，最精确）
-        dev = mi.szDevice
+        # 按物理原点匹配 Qt 屏，优先用它的 devicePixelRatio（贴合 Qt 坐标体系）
+        dpr = 0.0
         for screen in QGuiApplication.screens():
-            if _device_key(screen.name()) == _device_key(dev):
-                g = screen.geometry()
-                dpr = screen.devicePixelRatio() or 1.0
-                return QPoint(
-                    int(round(g.x() + (nx - mi.rcMonitor.left) / dpr)),
-                    int(round(g.y() + (ny - mi.rcMonitor.top) / dpr)),
-                )
+            g = screen.geometry()
+            if abs(g.x() - mi.rcMonitor.left) <= 1 and abs(g.y() - mi.rcMonitor.top) <= 1:
+                dpr = screen.devicePixelRatio()
+                break
+        if dpr <= 0.0:
+            shcore = ctypes.windll.shcore
+            shcore.GetDpiForMonitor.argtypes = [
+                ctypes.c_void_p, ctypes.c_int,
+                ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)]
+            shcore.GetDpiForMonitor.restype = ctypes.c_long  # HRESULT
+            dpi_x = ctypes.c_uint(96)
+            dpi_y = ctypes.c_uint(96)
+            shcore.GetDpiForMonitor(hmon, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y))
+            dpr = dpi_x.value / 96.0
+        if dpr <= 0.0:
+            dpr = 1.0
 
-        # 名称匹配失败：GetDpiForMonitor 取 DPI + 主屏 DPR 推算逻辑原点兜底
-        shcore = ctypes.windll.shcore
-        shcore.GetDpiForMonitor.argtypes = [
-            ctypes.c_void_p, ctypes.c_int,
-            ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)]
-        shcore.GetDpiForMonitor.restype = ctypes.c_long  # HRESULT
-        dpi_x = ctypes.c_uint(96)
-        dpi_y = ctypes.c_uint(96)
-        shcore.GetDpiForMonitor(hmon, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y))
-        dpr = dpi_x.value / 96.0 or 1.0
-        pdpr = QGuiApplication.primaryScreen().devicePixelRatio() or 1.0
-        return QPoint(
-            int(round((mi.rcMonitor.left / pdpr) + (nx - mi.rcMonitor.left) / dpr)),
-            int(round((mi.rcMonitor.top / pdpr) + (ny - mi.rcMonitor.top) / dpr)),
+        lx = mi.rcMonitor.left + (nx - mi.rcMonitor.left) / dpr
+        ly = mi.rcMonitor.top + (ny - mi.rcMonitor.top) / dpr
+        _diag_log(
+            f"_native_to_logical ({nx},{ny}) -> ({int(round(lx))},{int(round(ly))}) "
+            f"dpr={dpr:.3f} mon=({mi.rcMonitor.left},{mi.rcMonitor.top},"
+            f"{mi.rcMonitor.right},{mi.rcMonitor.bottom})"
         )
+        return QPoint(int(round(lx)), int(round(ly)))
     except Exception as _e:
         _diag_log(f"_native_to_logical win32 FAILED {_e}")
 

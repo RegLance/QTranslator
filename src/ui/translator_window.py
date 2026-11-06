@@ -390,7 +390,20 @@ class UpdateCheckWorker(QThread):
             self.check_error.emit()
 
 
-class ImageInputTextEdit(QTextEdit):
+class _SelectionPressTrackingMixin:
+    """记录文本选择的起始（鼠标按下）全局位置，供划词卡片锚定按下点使用。
+
+    应用内划词走 Qt 的 selectionChanged 信号（与应用外走原生钩子不同），
+    需要在文本框自身记录鼠标按下位置，否则只能拿到松开位置的 QCursor.pos()。
+    """
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._last_mouse_press_global = event.globalPosition().toPoint()
+        super().mousePressEvent(event)
+
+
+class ImageInputTextEdit(_SelectionPressTrackingMixin, QTextEdit):
     """支持粘贴图片的原文输入框：粘贴图片时发出 image_pasted 信号（不插入富文本）。"""
 
     image_pasted = pyqtSignal(object)  # 参数为 QImage
@@ -410,6 +423,10 @@ class ImageInputTextEdit(QTextEdit):
                 self.image_pasted.emit(image.toImage())
                 return
         super().insertFromMimeData(source)
+
+
+class SelectionOutputTextEdit(_SelectionPressTrackingMixin, QTextEdit):
+    """译文框：记录文本选择起始位置（其余行为与 QTextEdit 一致）。"""
 
 
 class VisionOCRWorker(QThread):
@@ -1444,7 +1461,7 @@ class TranslatorWindow(QWidget):
         self._output_container.setMinimumHeight(output_min_height)
 
         # 翻译结果文本框
-        self._output_text = QTextEdit()
+        self._output_text = SelectionOutputTextEdit()
         self._output_text.setParent(self._output_container)
         self._output_text.setReadOnly(True)
         # 滚动条常显：滚动条出现/消失会改变视口宽度导致文本重排，
@@ -3391,8 +3408,10 @@ class TranslatorWindow(QWidget):
                 and not (popup.isVisible() and popup._word == selected):
             return
 
-        # 卡片出现在鼠标右下角（与应用外划词查词行为一致）
-        show_word_popup(selected, QCursor.pos(), text_edit)
+        # 卡片锚定在鼠标「按下」位置（与应用外划词查词行为一致）；
+        # 文本框在 mousePressEvent 中记录了选择起始点，缺省时回退到当前光标位置
+        anchor = getattr(text_edit, '_last_mouse_press_global', None)
+        show_word_popup(selected, anchor if anchor is not None else QCursor.pos(), text_edit)
         self._last_popup_word = selected
 
     def _show_input_context_menu(self, pos):

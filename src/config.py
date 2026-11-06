@@ -293,9 +293,6 @@ class Config:
             'reminder': {
                 'items': [],  # 提醒列表，每项为 dict（字段见 core/reminder.py 说明）
             },
-            'statistics': {
-                'enabled': False,  # 是否启用工作量统计（统计窗口内开关）
-            },
             'config_version': CONFIG_VERSION,  # 配置文件结构版本号（用于升级时一次性迁移）
             'writing': {
                 'keep_original': False,  # 保留原文

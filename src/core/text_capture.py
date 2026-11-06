@@ -485,6 +485,17 @@ class TextCapture:
                 return self._last_selection.get('program', '')
         return ""
 
+    def get_last_press(self) -> Optional[Tuple[int, int]]:
+        """获取最后一次选择的鼠标按下点（物理像素）；无则返回 None。"""
+        with self._lock:
+            if not self._last_selection:
+                return None
+            x = self._last_selection.get('mouseStartX')
+            y = self._last_selection.get('mouseStartY')
+        if x and y:
+            return (int(x), int(y))
+        return None
+
     def clear_selection(self):
         """清除缓存的选中内容（在翻译完成后调用）"""
         with self._lock:
@@ -614,3 +625,8 @@ def clear_text_capture():
 def get_last_program_name() -> str:
     """快捷函数：获取最后一次选择的程序名"""
     return get_text_capture().get_last_program()
+
+
+def get_last_press_position() -> Optional[Tuple[int, int]]:
+    """快捷函数：获取最后一次选择的鼠标按下点（物理像素）。"""
+    return get_text_capture().get_last_press()

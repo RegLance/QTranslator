@@ -174,12 +174,15 @@ selectionHook.on('text-selection', (data) => {
     lastTime = now;
 
     const position = getSelectionPosition(data);
-    
+    const mouseStart = pointOrNull(data.mousePosStart);
+
     // 输出 JSON 到 stdout
     const result = {
         text: data.text || '',
         x: position.x || 0,
         y: position.y || 0,
+        mouseStartX: mouseStart ? mouseStart.x : 0,
+        mouseStartY: mouseStart ? mouseStart.y : 0,
         program: data.programName || '',
         method: data.method,
         posLevel: data.posLevel,
@@ -208,12 +211,15 @@ function emitCurrentSelection(requestId) {
         }
 
         const position = getSelectionPosition(data);
+        const mouseStart = pointOrNull(data.mousePosStart);
         console.log(JSON.stringify({
             type: 'current-selection',
             requestId,
             text: data.text || '',
             x: position.x || 0,
             y: position.y || 0,
+            mouseStartX: mouseStart ? mouseStart.x : 0,
+            mouseStartY: mouseStart ? mouseStart.y : 0,
             program: data.programName || '',
             method: data.method,
             posLevel: data.posLevel,

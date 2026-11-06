@@ -420,7 +420,7 @@ try:
     from .core.mcp_client import get_mcp_manager
     from .ui.translate_button import get_translate_button
     from .ui.selection_toolbar import get_selection_toolbar
-    from .ui.word_popup import show_word_popup, is_english_word, last_mouse_press_pos
+    from .ui.word_popup import show_word_popup, is_english_word
     from .ui.chat_window import get_chat_window
     from .ui.tray_icon import get_tray_icon
     from .ui.translator_window import get_translator_window
@@ -453,7 +453,7 @@ except ImportError:
     from src.core.mcp_client import get_mcp_manager
     from src.ui.translate_button import get_translate_button
     from src.ui.selection_toolbar import get_selection_toolbar
-    from src.ui.word_popup import show_word_popup, is_english_word, last_mouse_press_pos
+    from src.ui.word_popup import show_word_popup, is_english_word
     from src.ui.chat_window import get_chat_window
     from src.ui.tray_icon import get_tray_icon
     from src.ui.translator_window import get_translator_window
@@ -4228,12 +4228,25 @@ class MainController(QObject):
 
         # 查词优先：单个英文单词直接弹释义弹窗（与翻译窗口内划词查词一致），
         # 不再弹工具栏/图标按钮；由设置「启用划词查词（应用外）」开关控制。
-        # 锚点取鼠标按下位置（按下点），未捕获到则回退当前鼠标位置。
+        # 锚点取鼠标按下点（selection-hook 原生钩子非阻塞记录），取不到回退当前鼠标位置
         if self._config.get('word_popup.global_enabled', True) \
                 and is_english_word(selected_text):
             self._translate_button.hide()
             self._selection_toolbar.hide_toolbar()
-            show_word_popup(selected_text, last_mouse_press_pos() or QCursor.pos(), None)
+            anchor = None
+            try:
+                from .core.text_capture import get_last_press_position
+                from .ui.word_popup import physical_to_logical
+            except ImportError:
+                from src.core.text_capture import get_last_press_position
+                from src.ui.word_popup import physical_to_logical
+            press = get_last_press_position()
+            if press:
+                try:
+                    anchor = physical_to_logical(press[0], press[1])
+                except Exception:
+                    anchor = None
+            show_word_popup(selected_text, anchor if anchor is not None else QCursor.pos(), None)
             return
 
         if trigger_mode == 'toolbar':

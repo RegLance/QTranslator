@@ -1093,99 +1093,33 @@ def _uninstall_global_keyboard_hook():
     _keyboard_hook_handle = None
 
 
-# ----------------------------------------------------------------------
-# 全局「鼠标按下位置」跟踪：卡片锚点改为鼠标按下点（而非松开点）。
-# 常驻 WH_MOUSE_LL 钩子记录最近一次左键按下的物理坐标。回调里只做纯
-# ctypes 读取（与 _on_global_mouse_event 一致），不调用任何 Qt API，
-# 避免在低级钩子回调里触发 Qt 内部状态访问导致崩溃。
-# ----------------------------------------------------------------------
-_press_hook_handle = None
-_press_hook_proc = None  # 保持引用防止回调对象被 GC
-_last_press_native: Optional[tuple] = None  # (x, y) 物理像素
-
-_WM_LBUTTONDOWN = 0x0201
-
-
-def _on_global_press_event(nCode, wParam, lParam):
-    global _last_press_native
-    _diag_log(f"press_event enter nCode={nCode} wParam={wParam}")
-    if nCode == 0 and wParam == _WM_LBUTTONDOWN:
-        try:
-            info = _MSLLHOOKSTRUCT.from_address(int(lParam))
-            _last_press_native = (info.pt.x, info.pt.y)
-            _diag_log(f"press_event recorded {_last_press_native}")
-        except Exception as _e:
-            _diag_log(f"press_event from_address FAILED {_e}")
-    return ctypes.windll.user32.CallNextHookEx(
-        _press_hook_handle, nCode, wParam, lParam)
-
-
-def _install_press_tracker():
-    """安装常驻鼠标按下跟踪钩子（仅在 Windows 下生效，重复调用安全）。"""
-    global _press_hook_handle, _press_hook_proc
-    _diag_log("install_press_tracker enter")
-    if sys.platform != 'win32' or _press_hook_handle:
-        _diag_log("install_press_tracker skip")
-        return
-    try:
-        user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
-        kernel32.GetModuleHandleW.restype = ctypes.c_void_p
-        kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
-        user32.SetWindowsHookExW.restype = ctypes.c_void_p
-        user32.SetWindowsHookExW.argtypes = [
-            ctypes.c_int, _MOUSE_LL_PROC, ctypes.c_void_p, ctypes.c_ulong]
-        user32.CallNextHookEx.restype = ctypes.c_long
-        user32.CallNextHookEx.argtypes = [
-            ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
-        _press_hook_proc = _MOUSE_LL_PROC(_on_global_press_event)
-        h_mod = kernel32.GetModuleHandleW(None)
-        _press_hook_handle = user32.SetWindowsHookExW(
-            14, _press_hook_proc, h_mod, 0)  # 14 = WH_MOUSE_LL
-        _diag_log(f"install_press_tracker done handle={_press_hook_handle}")
-    except Exception as _e:
-        _press_hook_handle = None
-        _diag_log(f"install_press_tracker FAILED {_e}")
-
-
-class _MONITORINFOEX(ctypes.Structure):
-    """MONITORINFOEXW：显示器物理矩形 rcMonitor + 设备名 szDevice。"""
-    _fields_ = [
-        ('cbSize', ctypes.c_ulong),
-        ('rcMonitor', _RECT32),
-        ('rcWork', _RECT32),
-        ('dwFlags', ctypes.c_ulong),
-        ('szDevice', ctypes.c_wchar * 32),
-    ]
-
-
-_MONITOR_DEFAULTTONEAREST = 2  # MonitorFromPoint 取最近显示器
-
-
-def _native_to_logical(nx: int, ny: int) -> QPoint:
+def physical_to_logical(px: int, py: int) -> QPoint:
     """把 Win32 物理像素坐标换算成 Qt 逻辑像素坐标（多显示器 + 混合 DPI 正确）。
 
-    WH_MOUSE_LL 钩子的 pt 是物理像素。关键点：Qt 的 QScreen.geometry() 在 Windows
-    上「位置是物理(native)像素、尺寸才是逻辑像素」——例如副屏物理原点 x=2560，
-    geometry().x() 也等于 2560，而 geometry().width() 才是 2048(=2560/1.25)。
-    所以正确的逻辑坐标是「显示器物理原点 + (物理坐标 − 物理原点) / 该屏 DPR」，
-    而不是「物理坐标 / DPR」（后者会把副屏原点多除以一次 DPR，整体左偏）。
-
-    这里用 Win32 MonitorFromPoint / GetMonitorInfoW 拿所在显示器的物理原点，
-    用匹配到的 Qt 屏 devicePixelRatio（或 GetDpiForMonitor）取 DPR。
+    只在每次选词时调用一次（拿到按下点后），绝不要在 WH_MOUSE_LL 钩子回调里调用。
     """
     if sys.platform != 'win32':
-        return QPoint(nx, ny)
+        return QPoint(px, py)
     try:
         from PyQt6.QtGui import QGuiApplication
 
         user32 = ctypes.windll.user32
         user32.MonitorFromPoint.argtypes = [_POINT, ctypes.c_ulong]
         user32.MonitorFromPoint.restype = ctypes.c_void_p
+
+        class _MONITORINFOEX(ctypes.Structure):
+            _fields_ = [
+                ('cbSize', ctypes.c_ulong),
+                ('rcMonitor', _RECT32),
+                ('rcWork', _RECT32),
+                ('dwFlags', ctypes.c_ulong),
+                ('szDevice', ctypes.c_wchar * 32),
+            ]
+
         user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MONITORINFOEX)]
         user32.GetMonitorInfoW.restype = ctypes.c_int
 
-        hmon = user32.MonitorFromPoint(_POINT(int(nx), int(ny)), _MONITOR_DEFAULTTONEAREST)
+        hmon = user32.MonitorFromPoint(_POINT(int(px), int(py)), 2)  # MONITOR_DEFAULTTONEAREST
         if not hmon:
             raise RuntimeError('MonitorFromPoint failed')
         mi = _MONITORINFOEX()
@@ -1193,7 +1127,6 @@ def _native_to_logical(nx: int, ny: int) -> QPoint:
         if not user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
             raise RuntimeError('GetMonitorInfoW failed')
 
-        # 按物理原点匹配 Qt 屏，优先用它的 devicePixelRatio（贴合 Qt 坐标体系）
         dpr = 0.0
         for screen in QGuiApplication.screens():
             g = screen.geometry()
@@ -1205,7 +1138,7 @@ def _native_to_logical(nx: int, ny: int) -> QPoint:
             shcore.GetDpiForMonitor.argtypes = [
                 ctypes.c_void_p, ctypes.c_int,
                 ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)]
-            shcore.GetDpiForMonitor.restype = ctypes.c_long  # HRESULT
+            shcore.GetDpiForMonitor.restype = ctypes.c_long
             dpi_x = ctypes.c_uint(96)
             dpi_y = ctypes.c_uint(96)
             shcore.GetDpiForMonitor(hmon, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y))
@@ -1213,35 +1146,21 @@ def _native_to_logical(nx: int, ny: int) -> QPoint:
         if dpr <= 0.0:
             dpr = 1.0
 
-        lx = mi.rcMonitor.left + (nx - mi.rcMonitor.left) / dpr
-        ly = mi.rcMonitor.top + (ny - mi.rcMonitor.top) / dpr
-        _diag_log(
-            f"_native_to_logical ({nx},{ny}) -> ({int(round(lx))},{int(round(ly))}) "
-            f"dpr={dpr:.3f} mon=({mi.rcMonitor.left},{mi.rcMonitor.top},"
-            f"{mi.rcMonitor.right},{mi.rcMonitor.bottom})"
-        )
+        lx = mi.rcMonitor.left + (px - mi.rcMonitor.left) / dpr
+        ly = mi.rcMonitor.top + (py - mi.rcMonitor.top) / dpr
         return QPoint(int(round(lx)), int(round(ly)))
-    except Exception as _e:
-        _diag_log(f"_native_to_logical win32 FAILED {_e}")
+    except Exception:
+        pass
 
     # 兜底：主屏 DPR 近似（单屏 / 同 DPI 多屏时精确）
     try:
         from PyQt6.QtGui import QGuiApplication
         dpr = QGuiApplication.primaryScreen().devicePixelRatio()
         if dpr > 0:
-            return QPoint(int(round(nx / dpr)), int(round(ny / dpr)))
+            return QPoint(int(round(px / dpr)), int(round(py / dpr)))
     except Exception:
         pass
-    return QPoint(nx, ny)
-
-
-def last_mouse_press_pos() -> Optional[QPoint]:
-    """最近一次鼠标按下位置（Qt 逻辑像素）；尚未捕获到时返回 None。"""
-    _install_press_tracker()
-    _diag_log(f"last_mouse_press_pos native={_last_press_native}")
-    if _last_press_native is None:
-        return None
-    return _native_to_logical(_last_press_native[0], _last_press_native[1])
+    return QPoint(px, py)
 
 
 # 全局弹窗实例引用
@@ -1256,8 +1175,6 @@ def get_word_popup() -> WordPopup:
         _word_popup_instance = WordPopup()
         _popup_ref[0] = _word_popup_instance
         WordPopup.install_global_click_filter(_popup_ref)
-        # 常驻鼠标按下跟踪：卡片锚点改取「按下点」，需在首次选词前就位
-        _install_press_tracker()
     return _word_popup_instance
 
 

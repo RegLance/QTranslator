@@ -171,23 +171,23 @@ class PhoneticDict:
     """本地 IPA 音标词典（按口音惰性加载并缓存）"""
 
     def __init__(self):
-        self._dicts: Dict[str, Dict[str, str]] = {}
+        self._dicts: Dict[str, Dict[str, list]] = {}
         self._lock = threading.Lock()
 
     def _dict_dir(self) -> Path:
         return _get_base_path() / "assets" / "phonetic"
 
-    def _load_accent(self, accent: str) -> Dict[str, str]:
-        """加载某个口音的词典文件，返回 {word: "/ipa/"} 映射。
+    def _load_accent(self, accent: str) -> Dict[str, list]:
+        """加载某个口音的词典文件，返回 {word: ["/ipa1/", "/ipa2/", ...]} 映射。
 
-        只取每行的第一个音标作为主音标。加载失败返回空字典（不抛异常）。
+        一行可能有多个候选音标（用 ", " 分隔），全部保留。加载失败返回空字典（不抛异常）。
         """
         filename = _ACCENT_FILES.get(accent)
         if not filename:
             return {}
 
         path = self._dict_dir() / filename
-        mapping: Dict[str, str] = {}
+        mapping: Dict[str, list] = {}
         if not path.exists():
             log_warning(f"音标词典文件不存在: {path}")
             return mapping
@@ -199,10 +199,10 @@ class PhoneticDict:
                     if not line or "\t" not in line:
                         continue
                     word, ipa_field = line.split("\t", 1)
-                    # 一行可能有多个音标，用 ", " 分隔，取第一个作为主音标
-                    first = ipa_field.split(",", 1)[0].strip()
-                    if first:
-                        mapping[word.strip().lower()] = first
+                    # 一行可能有多个音标，用 ", " 分隔，全部保留
+                    phonetics = [p.strip() for p in ipa_field.split(",") if p.strip()]
+                    if phonetics:
+                        mapping[word.strip().lower()] = phonetics
             log_debug(f"已加载音标词典 {filename}：{len(mapping)} 条")
         except Exception as e:
             log_warning(f"加载音标词典失败 {path}: {e}")
@@ -210,7 +210,7 @@ class PhoneticDict:
 
         return mapping
 
-    def _get_dict(self, accent: str) -> Dict[str, str]:
+    def _get_dict(self, accent: str) -> Dict[str, list]:
         accent = accent.lower()
         if accent not in self._dicts:
             with self._lock:
@@ -223,8 +223,21 @@ class PhoneticDict:
         """规范化待查单词：去首尾空白/标点、转小写。"""
         return word.strip().strip(".,!?;:\"'()[]{}").lower()
 
+    def lookup_all(self, word: str, accent: str = "us") -> list:
+        """查询单词全部音标（原始 ipa-dict 形式，含斜杠）。
+
+        Returns:
+            形如 ["/ˈwɝd/", "/wɚd/"] 的列表；未命中返回空列表。
+        """
+        if not word:
+            return []
+        key = self._normalize(word)
+        if not key:
+            return []
+        return list(self._get_dict(accent).get(key) or [])
+
     def lookup(self, word: str, accent: str = "us") -> Optional[str]:
-        """查询单词音标（原始 ipa-dict 形式，含斜杠）。
+        """查询单词主音标（原始 ipa-dict 形式，含斜杠）。
 
         Args:
             word: 待查单词
@@ -233,44 +246,49 @@ class PhoneticDict:
         Returns:
             形如 "/ˈwɝd/" 的音标字符串（含斜杠）；未命中返回 None。
         """
-        if not word:
-            return None
-        key = self._normalize(word)
-        if not key:
-            return None
-        return self._get_dict(accent).get(key)
+        all_ipa = self.lookup_all(word, accent)
+        return all_ipa[0] if all_ipa else None
 
-    def _lookup_normalized(self, word: str, accent: str) -> Optional[str]:
-        """查询并归一化为谷歌风格的单一音标（不含斜杠），未命中返回 None。"""
-        raw = self.lookup(word, accent)
-        if not raw:
-            return None
-        # 一行可能有多个候选音标，取第一个
-        first = raw.split(",", 1)[0]
-        norm = _normalize_google_style(first, move_stress=(accent.lower() == "uk"))
-        return norm or None
+    def _lookup_normalized_list(self, word: str, accent: str) -> list:
+        """查询并归一化为谷歌风格的全部音标（不含斜杠、去重），未命中返回空列表。"""
+        move_stress = accent.lower() == "uk"
+        result = []
+        for raw in self.lookup_all(word, accent):
+            norm = _normalize_google_style(raw, move_stress=move_stress)
+            if norm and norm not in result:
+                result.append(norm)
+        return result
 
     def lookup_dual(self, word: str) -> Optional[str]:
         """查询英式 + 美式音标，返回适合展示的字符串。
 
         规则：
-        - 英美归一化后相同：合并为单个 "/音标/"
-        - 不同：返回 "英 /uk/ 美 /us/"
-        - 仅命中其一：返回带标签的单个
+        - 同一口音内的多个候选音标用空格并列展示
+        - 英美归一化后完全相同：合并为单个 "/音标1/ /音标2/ ..."
+        - 不同：返回 "英 /uk.../ 美 /us.../"
+        - 仅命中其一：返回带标签的一组
         - 都未命中：返回 None
         """
-        uk = self._lookup_normalized(word, "uk")
-        us = self._lookup_normalized(word, "us")
+        uk = self._lookup_normalized_list(word, "uk")
+        us = self._lookup_normalized_list(word, "us")
 
-        if uk and us:
-            if uk == us:
-                return f"/{us}/"
-            return f"英 /{uk}/ 美 /{us}/"
-        if us:
-            return f"美 /{us}/"
-        if uk:
-            return f"英 /{uk}/"
+        uk_str = self._format_accent(uk)
+        us_str = self._format_accent(us)
+
+        if uk_str and us_str:
+            if uk_str == us_str:
+                return us_str
+            return f"英 {uk_str} 美 {us_str}"
+        if us_str:
+            return f"美 {us_str}"
+        if uk_str:
+            return f"英 {uk_str}"
         return None
+
+    @staticmethod
+    def _format_accent(phonetics: list) -> str:
+        """把一组归一化音标（不含斜杠）格式化为 "/a/ /b/" 形式；空列表返回空串。"""
+        return " ".join(f"/{p}/" for p in phonetics)
 
 
 # 全局单例

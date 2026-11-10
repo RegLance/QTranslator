@@ -276,6 +276,7 @@ class WordPopup(QFrame):
         phon_font.setFamilies(["Microsoft YaHei", "Segoe UI", "sans-serif"])
         phon_font.setPointSize(12)
         self._phonetic_label.setFont(phon_font)
+        self._phonetic_label.setWordWrap(True)  # 多音标并列较长时换行而非截断
         self._phonetic_label.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
         self._phonetic_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse

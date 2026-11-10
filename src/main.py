@@ -4484,6 +4484,15 @@ class TranslatorApp(QApplication):
     Qt 6 保留的 WA_AlwaysShowToolTips 是 widget 级属性，在 Show 事件时设置，
     覆盖所有窗口与子控件。"""
 
+    def __init__(self, argv):
+        super().__init__(argv)
+        # 高 DPI 失同步修复：全局监听显示器 / DPI 变化，唤醒后自动重排窗口
+        try:
+            from .utils.dpi_sync import install_dpi_monitor
+        except ImportError:
+            from src.utils.dpi_sync import install_dpi_monitor
+        install_dpi_monitor(self)
+
     def notify(self, receiver, event):
         if event.type() == QEvent.Type.ToolTip:
             # 用自定义 tooltip 替代原生 QToolTip。
@@ -4515,6 +4524,14 @@ class TranslatorApp(QApplication):
                 receiver.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, True)
             except Exception:
                 pass
+            # 高 DPI 失同步修复：顶层窗口显示后延迟重同步一次
+            # （锁屏/显示器唤醒后首次打开窗口尤其需要；正常情况下是 no-op）
+            if receiver.isWindow():
+                try:
+                    from .utils.dpi_sync import sync_window_dpi
+                except ImportError:
+                    from src.utils.dpi_sync import sync_window_dpi
+                QTimer.singleShot(0, lambda w=receiver: sync_window_dpi(w))
         return super().notify(receiver, event)
 
 

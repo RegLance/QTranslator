@@ -40,12 +40,18 @@ try:
 except ImportError:
     from src.utils.context_probe import probe_context_limit, guess_context_limit
 
-# 设置 Windows 高 DPI 支持
+# 设置 Windows 高 DPI 支持（per-monitor DPI awareness）
 import ctypes
 try:
-    ctypes.windll.user32.SetProcessDpiAwareness(2)
+    # Win10 1703+：per-monitor DPI aware v2（推荐，覆盖非客户区/子窗口）
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
 except Exception:
-    pass
+    try:
+        # Win8.1+：per-monitor DPI aware。注意该函数位于 shcore.dll，
+        # 不在 user32.dll（此前误写在 user32 上导致静默失败、程序按 DPI 无关运行）
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
 
 
 # ── 启动耗时打点：定位慢启动（bootloader/DLL 加载 vs Python 导入 vs 初始化）──
@@ -4532,6 +4538,14 @@ class TranslatorApp(QApplication):
                 except ImportError:
                     from src.utils.dpi_sync import sync_window_dpi
                 QTimer.singleShot(0, lambda w=receiver: sync_window_dpi(w))
+                # 锁屏/显示器唤醒后 layered 窗口被系统缩小：主窗口（Window 类型）
+                # 显示后重断言尺寸。Tool/ToolTip 等浮层尺寸是动态的，排除在外。
+                if receiver.windowType() == Qt.WindowType.Window:
+                    try:
+                        from .utils.dpi_sync import reassert_after_show
+                    except ImportError:
+                        from src.utils.dpi_sync import reassert_after_show
+                    reassert_after_show(receiver)
         return super().notify(receiver, event)
 
 

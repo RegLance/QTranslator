@@ -112,55 +112,129 @@ def _qt_dpr(widget) -> float:
         return 1.0
 
 
+def _screen_logical_dpi(widget) -> int:
+    """Qt 缓存的窗口所在屏幕 logicalDotsPerInch；失败返回 0。"""
+    try:
+        from PyQt6.QtWidgets import QApplication
+        handle = widget.windowHandle()
+        screen = handle.screen() if handle is not None else None
+        if screen is None:
+            screen = QApplication.screenAt(widget.mapToGlobal(widget.rect().center())) \
+                if not widget.rect().isEmpty() else QApplication.primaryScreen()
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            return 0
+        return int(round(screen.logicalDotsPerInch()))
+    except Exception:
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # 重同步
 # ---------------------------------------------------------------------------
 
+def _diagnose(widget, tag: str) -> None:
+    """把窗口的 DPI / 尺寸状态写入日志，用于定位唤醒后窗口缩小问题。"""
+    try:
+        from ..utils.logger import log_warning
+    except ImportError:
+        from src.utils.logger import log_warning
+    try:
+        w = widget.width()
+        h = widget.height()
+        min_w = widget.minimumWidth()
+        min_h = widget.minimumHeight()
+        max_w = widget.maximumWidth()
+        max_h = widget.maximumHeight()
+        info = (
+            f"[DPI诊断][{tag}] size={w}x{h} min={min_w}x{min_h} max={max_w}x{max_h} "
+            f"qtDPR={_qt_dpr(widget):.3f} monitorDpi={get_monitor_dpi(widget)} "
+            f"windowDpi={get_native_dpi(widget)} screenLogDpi={_screen_logical_dpi(widget)} "
+            f"visible={widget.isVisible()}"
+        )
+        log_warning(info)
+    except Exception:
+        pass
+
+
 def is_dpi_mismatched(widget) -> bool:
     monitor_dpi = get_monitor_dpi(widget)
-    if not monitor_dpi:
+    screen_dpi = _screen_logical_dpi(widget)
+
+    # 显示器真实 DPI（优先）或 Qt 屏幕 DPI 作为基准
+    truth_dpi = monitor_dpi or screen_dpi
+    if not truth_dpi:
         return False
 
-    # 窗口级 DPI 与显示器真实 DPI 不一致（Windows 侧失同步）
+    # 窗口级 DPI 与基准不一致（Windows 侧失同步）
     window_dpi = get_native_dpi(widget)
-    if window_dpi and window_dpi != monitor_dpi:
+    if window_dpi and window_dpi != truth_dpi:
         return True
 
     # 窗口 DPI 正确但 Qt 缓存 DPR 未跟上（Qt 侧失同步）
-    if abs(monitor_dpi / 96.0 - _qt_dpr(widget)) > _DPR_EPS:
+    if abs(truth_dpi / 96.0 - _qt_dpr(widget)) > _DPR_EPS:
         return True
 
     return False
 
 
 def _nudge(window) -> None:
-    """原位微移 1px 再复位，触发 Windows 按显示器重新评估窗口 DPI。
+    """原位微移 1px 再复位，触发 Qt 重新评估窗口所在屏幕与 DPR。
 
-    两次 SetWindowPos 在同一段同步代码内完成，肉眼不可见。
+    同时用 Qt move 与原生 SetWindowPos 双路触发，覆盖不同失效场景；
+    1px 位移在同一段同步代码内完成，肉眼不可见。
     """
-    hwnd = int(window.winId())
-    if not hwnd:
-        return
-    user32 = _user32()
-    rect = _RECT()
-    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-        return
+    # 1) Qt 路径：move 会让 Qt 重新评估 screen/DPR（等同拖动窗口）
+    try:
+        pos = window.pos()
+        window.move(pos.x() + 1, pos.y())
+        window.move(pos.x(), pos.y())
+    except Exception:
+        pass
 
-    SWP_NOSIZE = 0x0001
-    SWP_NOZORDER = 0x0004
-    SWP_NOACTIVATE = 0x0010
-    flags = SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
-
-    user32.SetWindowPos(hwnd, 0, rect.left + 1, rect.top, 0, 0, flags)
-    user32.SetWindowPos(hwnd, 0, rect.left, rect.top, 0, 0, flags)
+    # 2) 原生路径：SetWindowPos 触发 Windows 侧 DPI 重评估
+    try:
+        hwnd = int(window.winId())
+        if hwnd:
+            user32 = _user32()
+            rect = _RECT()
+            if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                SWP_NOSIZE = 0x0001
+                SWP_NOZORDER = 0x0004
+                SWP_NOACTIVATE = 0x0010
+                flags = SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+                user32.SetWindowPos(hwnd, 0, rect.left + 1, rect.top, 0, 0, flags)
+                user32.SetWindowPos(hwnd, 0, rect.left, rect.top, 0, 0, flags)
+    except Exception:
+        pass
 
 
 def sync_window_dpi(widget) -> bool:
     """若窗口 DPI 失同步则强制重新评估；返回是否执行了修复。"""
-    if not is_supported() or not is_dpi_mismatched(widget):
+    if not is_supported():
+        return False
+    _diagnose(widget, "show")
+    if not is_dpi_mismatched(widget):
         return False
     try:
         _nudge(widget)
+        _diagnose(widget, "after-nudge")
+        return True
+    except Exception:
+        return False
+
+
+def _nudge_if_dpi_mismatched(window) -> bool:
+    """轻量版 DPI 检查：仅在确实失同步时 nudge，且只在真正修复时写日志。
+
+    供尺寸守卫定时器周期调用，避免每次都写「show」诊断刷屏。
+    """
+    if not is_dpi_mismatched(window):
+        return False
+    try:
+        _nudge(window)
+        _diagnose(window, "nudge-dpr")
         return True
     except Exception:
         return False
@@ -183,6 +257,147 @@ def sync_all_windows() -> int:
             if w.isVisible() and sync_window_dpi(w):
                 fixed += 1
         except RuntimeError:
+            continue
+    return fixed
+
+
+_REASSERT_INTERVAL_MS = 3000
+_REASSERT_MAX_TICKS = 40  # 约 120 秒：覆盖显示器深度休眠唤醒后的异步重建窗口
+
+
+def reassert_after_show(window) -> None:
+    """在窗口显示后持续重断言其尺寸，修复锁屏/显示器唤醒后被系统缩小的问题。
+
+    背景：程序所有主窗口都是无边框 + `WA_TranslucentBackground`（Windows
+    layered 窗口）。长时间锁屏（显示器进入深度休眠）后再唤醒，Windows / DWM
+    有一个异步的显示重建过程，会把已显示的 layered 窗口缩小一圈（原生
+    WM_SIZE 直接改尺寸，Qt 的 minimumSize 约束对原生 resize 不生效）。手动
+    拖动边缘之所以能恢复，是因为拖动触发 Qt 重排并把它钳制到 minimumSize——
+    但只是到最小值（如 450×660），而非默认值（500×660），所以用户感觉「还
+    稍微小一点」。
+
+    由于重建是异步、延迟且非必现的，只在 show 后一次性地检查不够；这里用一个
+    低频定时器在显示后持续盯 2 分钟，一旦发现窗口尺寸小于显示时的尺寸（或小于
+    minimumSize——这一定是异常，Qt 对 resize/拖动都强制最小值，只有原生
+    WM_SIZE 能绕过），就恢复目标尺寸。仅在确实缩小时动作，正常情况（以及
+    流式输出时窗口自动变大）是 no-op，无可见副作用。
+
+    窗口显示时的尺寸由调用方在 `show()` 之前通过 `resize()` 设定，因此
+    Show 事件触发时捕获到的即为目标尺寸。
+    """
+    if not is_supported():
+        return
+    try:
+        from PyQt6.QtCore import QTimer
+    except Exception:
+        return
+    try:
+        target_w = window.width()
+        target_h = window.height()
+    except Exception:
+        return
+    if target_w <= 0 or target_h <= 0:
+        return
+
+    # 记录目标尺寸，供屏幕变化时的兜底恢复使用
+    try:
+        window._reassert_target = (target_w, target_h)
+    except Exception:
+        pass
+
+    _stop_guard(window)
+
+    state = {"ticks": 0}
+
+    def _check() -> None:
+        try:
+            if not window.isVisible():
+                return
+            cur_w = window.width()
+            cur_h = window.height()
+            min_w = window.minimumWidth()
+            min_h = window.minimumHeight()
+            if cur_w < target_w or cur_h < target_h or cur_w < min_w or cur_h < min_h:
+                fix_w = max(target_w, min_w)
+                fix_h = max(target_h, min_h)
+                _diagnose(window, f"reassert:{fix_w}x{fix_h}")
+                window.resize(fix_w, fix_h)
+            # DPR 失同步（Qt 缓存 DPR 与显示器不一致，如唤醒后回落 1.0）→ nudge 触发重评估
+            _nudge_if_dpi_mismatched(window)
+        except Exception:
+            pass
+
+    def _tick() -> None:
+        try:
+            state["ticks"] += 1
+            if state["ticks"] > _REASSERT_MAX_TICKS:
+                _stop_guard(window)
+                return
+            _check()
+        except Exception:
+            _stop_guard(window)
+
+    timer = QTimer(window)
+    timer.setInterval(_REASSERT_INTERVAL_MS)
+    timer.timeout.connect(_tick)
+    try:
+        window._reassert_timer = timer
+    except Exception:
+        pass
+    timer.start()
+    _check()  # 立即检查一次，覆盖 show 后同步缩小的场景
+
+
+def _stop_guard(window) -> None:
+    """停止并释放窗口上挂的尺寸守卫定时器。"""
+    try:
+        t = getattr(window, "_reassert_timer", None)
+        if t is not None:
+            try:
+                t.stop()
+                t.deleteLater()
+            except Exception:
+                pass
+            try:
+                window._reassert_timer = None
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def reassert_all_visible() -> int:
+    """屏幕/显示变化后，对所有可见主窗口按记录的目标尺寸重断言；返回修复数。"""
+    if not is_supported():
+        return 0
+    try:
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import Qt
+    except Exception:
+        return 0
+    app = QApplication.instance()
+    if app is None:
+        return 0
+    fixed = 0
+    for w in app.topLevelWidgets():
+        try:
+            if not w.isVisible():
+                continue
+            if w.windowType() != Qt.WindowType.Window:
+                continue
+            target = getattr(w, "_reassert_target", None)
+            if not target:
+                continue
+            tw, th = target
+            cw, ch = w.width(), w.height()
+            mw, mh = w.minimumWidth(), w.minimumHeight()
+            if cw < tw or ch < th or cw < mw or ch < mh:
+                fw = max(tw, mw)
+                fh = max(th, mh)
+                _diagnose(w, f"reassert-all:{fw}x{fh}")
+                w.resize(fw, fh)
+                fixed += 1
+        except Exception:
             continue
     return fixed
 
@@ -229,7 +444,8 @@ def _on_screen_added(screen) -> None:
 def _on_screen_changed(*_args) -> None:
     try:
         from PyQt6.QtCore import QTimer
-        # 显示器 / DPI 变化可能连续多次，延迟一拍统一重同步
+        # 显示器 / DPI 变化可能连续多次，延迟一拍统一重同步 + 尺寸兜底
         QTimer.singleShot(0, sync_all_windows)
+        QTimer.singleShot(0, reassert_all_visible)
     except Exception:
         pass

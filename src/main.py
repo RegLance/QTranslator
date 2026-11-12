@@ -1,5 +1,10 @@
 """QTranslator - 主入口文件"""
 from __future__ import annotations
+try:
+    from .utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 import sys
 from pathlib import Path
 
@@ -30,7 +35,7 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect, QScrollArea, QMenu, QWidget,
     QSpinBox, QKeySequenceEdit, QColorDialog, QSlider,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect, QByteArray, QEvent
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QPoint, QTimer, QPropertyAnimation, QRect, QByteArray, QEvent, QSize
 from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QAction, QIcon, QPixmap, QPainter, QPen, QKeySequence, QPolygonF, QBrush
 from PyQt6.QtCore import QPointF
 from PyQt6.QtSvg import QSvgRenderer
@@ -548,6 +553,25 @@ def sync_auto_start_path():
         log_error(f"开机自启自愈失败: {e}")
 
 
+class _FitComboBox(QComboBox):
+    """设置窗口专用下拉：封顶宽度 hint。
+
+    QComboBox 默认 minimumSizeHint=最长选项宽度，英文选项很长时会把
+    固定宽度的设置对话框撑爆（横向滚动条关闭→右侧裁切）。封顶后
+    下拉仍随字段列伸展填充，中文观感不变。
+    """
+    _MIN_W = 220
+    _HINT_W = 340
+
+    def minimumSizeHint(self):
+        s = super().minimumSizeHint()
+        return QSize(min(s.width(), self._MIN_W), s.height())
+
+    def sizeHint(self):
+        s = super().sizeHint()
+        return QSize(min(s.width(), self._HINT_W), s.height())
+
+
 class SettingsDialog(QWidget):
     """设置对话框（无边框风格）"""
 
@@ -571,6 +595,13 @@ class SettingsDialog(QWidget):
         except ImportError:
             from src.utils.theme import get_theme_manager
         get_theme_manager().theme_changed.connect(self.update_theme)
+
+        # 语言切换：即时重设本窗口文案
+        try:
+            from .utils.i18n import get_i18n_manager
+        except ImportError:
+            from src.utils.i18n import get_i18n_manager
+        get_i18n_manager().language_changed.connect(self.retranslate_ui)
 
         # 设置无边框窗口属性
         # 不常驻置顶：「始终置顶」设置只控制翻译窗口
@@ -714,7 +745,7 @@ class SettingsDialog(QWidget):
         title_layout.setContentsMargins(8, 0, 8, 0)
 
         # 标题文字
-        self._title_label = QLabel("设置")
+        self._title_label = QLabel(t('设置'))
         self._title_label.setObjectName("titleLabel")
         title_layout.addWidget(self._title_label)
         title_layout.addStretch()
@@ -743,7 +774,7 @@ class SettingsDialog(QWidget):
         scroll_layout.setContentsMargins(8, 8, 8, 16)  # 底部增加边距避免视觉截断
 
         # API 配置组
-        self._api_group = QGroupBox("API 配置")
+        self._api_group = QGroupBox(t('API 配置'))
         api_layout = QFormLayout(self._api_group)
         api_layout.setSpacing(10)
         api_layout.setContentsMargins(12, 20, 12, 12)
@@ -778,20 +809,19 @@ class SettingsDialog(QWidget):
         api_layout.addRow(self._model_label, self._model_edit)
 
         # 添加说明文字
-        self._model_hint_label = QLabel("推荐使用Instruct模型，Thinking模型响应会比较慢")
+        self._model_hint_label = QLabel(t('推荐使用Instruct模型，Thinking模型响应会比较慢'))
         self._model_hint_label.setProperty("class", "hint")
         self._model_hint_label.setWordWrap(True)
         api_layout.addRow("", self._model_hint_label)
 
         # 识图模型设置
-        self._vision_shared_check = QCheckBox("识图模型与翻译模型相同")
+        self._vision_shared_check = QCheckBox(t('识图模型与翻译模型相同'))
         self._vision_shared_check.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._vision_shared_check.toggled.connect(self._on_vision_shared_toggled)
         api_layout.addRow(self._vision_shared_check)
 
         self._vision_hint_label = QLabel(
-            "取消勾选后可独立配置识图模型的 Base URL、API Key 与 Model；"
-            "在翻译窗口原文框粘贴图片后，点「翻译/润色/总结」会先识别图片文字。"
+            t('取消勾选后可独立配置识图模型的 Base URL、API Key 与 Model；在翻译窗口原文框粘贴图片后，点「翻译/润色/总结」会先识别图片文字。')
         )
         self._vision_hint_label.setProperty("class", "hint")
         self._vision_hint_label.setWordWrap(True)
@@ -800,20 +830,20 @@ class SettingsDialog(QWidget):
         self._vision_api_url_edit = QLineEdit()
         self._vision_api_url_edit.setMinimumHeight(32)
         self._vision_api_url_edit.setPlaceholderText("https://api.openai.com/v1")
-        self._vision_api_url_label = QLabel("识图 Base URL:")
+        self._vision_api_url_label = QLabel(t('识图 Base URL:'))
         api_layout.addRow(self._vision_api_url_label, self._vision_api_url_edit)
 
         self._vision_api_key_edit = QLineEdit()
         self._vision_api_key_edit.setMinimumHeight(32)
         self._vision_api_key_edit.setPlaceholderText("sk-...")
         self._vision_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self._vision_api_key_label = QLabel("识图 API Key:")
+        self._vision_api_key_label = QLabel(t('识图 API Key:'))
         api_layout.addRow(self._vision_api_key_label, self._vision_api_key_edit)
 
         self._vision_model_edit = QLineEdit()
         self._vision_model_edit.setMinimumHeight(32)
-        self._vision_model_edit.setPlaceholderText("如 qwen-vl-plus")
-        self._vision_model_label = QLabel("识图模型:")
+        self._vision_model_edit.setPlaceholderText(t('如 qwen-vl-plus'))
+        self._vision_model_label = QLabel(t('识图模型:'))
         api_layout.addRow(self._vision_model_label, self._vision_model_edit)
 
         self._no_proxy_edit = QLineEdit()
@@ -822,21 +852,21 @@ class SettingsDialog(QWidget):
         self._no_proxy_label = QLabel("No Proxy:")
         api_layout.addRow(self._no_proxy_label, self._no_proxy_edit)
 
-        self._lang_detect_combo = QComboBox()
+        self._lang_detect_combo = _FitComboBox()
         self._lang_detect_combo.setMinimumHeight(32)
         _lang_items = (
-            ("百度", "baidu"),
+            (t('百度'), "baidu"),
             ("Google", "google"),
             ("Bing", "bing"),
-            ("本地", "local"),
+            (t('本地'), "local"),
         )
         for lab, val in _lang_items:
             self._lang_detect_combo.addItem(lab, val)
-        self._lang_detect_label = QLabel("语种检测:")
+        self._lang_detect_label = QLabel(t('语种检测:'))
         api_layout.addRow(self._lang_detect_label, self._lang_detect_combo)
 
         self._lang_detect_hint_label = QLabel(
-            "任一网关请求失败或解析不到语言时，会自动回退使用本地检测。"
+            t('任一网关请求失败或解析不到语言时，会自动回退使用本地检测。')
         )
         self._lang_detect_hint_label.setProperty("class", "hint")
         self._lang_detect_hint_label.setWordWrap(True)
@@ -845,7 +875,7 @@ class SettingsDialog(QWidget):
         scroll_layout.addWidget(self._api_group)
 
         # 外观设置组
-        self._theme_group = QGroupBox("外观设置")
+        self._theme_group = QGroupBox(t('外观设置'))
         theme_layout = QFormLayout(self._theme_group)
         theme_layout.setSpacing(10)
         theme_layout.setContentsMargins(12, 20, 12, 12)
@@ -853,11 +883,22 @@ class SettingsDialog(QWidget):
 
         # 主题选择下拉框（使用 THEME_DISPLAY_NAMES 填充）
         self._theme_keys = list(THEME_DISPLAY_NAMES.keys())
-        self._popup_style_combo = QComboBox()
-        self._popup_style_combo.addItems(list(THEME_DISPLAY_NAMES.values()))
+        self._popup_style_combo = _FitComboBox()
+        self._popup_style_combo.addItems([t(v) for v in THEME_DISPLAY_NAMES.values()])
         self._popup_style_combo.setMinimumHeight(32)
-        self._popup_style_label = QLabel("窗口样式:")
+        self._popup_style_label = QLabel(t('窗口样式:'))
         theme_layout.addRow(self._popup_style_label, self._popup_style_combo)
+
+        # 界面语言（即时生效）：跟随系统 / 中文 / English
+        # 中文/English 以各自母语显示（不翻译），仅「跟随系统」走 t()
+        self._language_combo = _FitComboBox()
+        self._language_combo.addItem(t('跟随系统'), 'system')
+        self._language_combo.addItem('中文', 'zh')
+        self._language_combo.addItem('English', 'en')
+        self._language_combo.setMinimumHeight(32)
+        self._language_label = QLabel(t('界面语言:'))
+        theme_layout.addRow(self._language_label, self._language_combo)
+        self._language_combo.currentIndexChanged.connect(self._on_language_combo_changed)
 
         # 自定义主题：强调色选择器
         self._custom_accent = '#007AFF'
@@ -865,7 +906,7 @@ class SettingsDialog(QWidget):
         self._accent_color_btn.setFixedSize(80, 32)
         self._accent_color_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._accent_color_btn.clicked.connect(self._pick_accent_color)
-        self._accent_color_label = QLabel("强调色:")
+        self._accent_color_label = QLabel(t('强调色:'))
         theme_layout.addRow(self._accent_color_label, self._accent_color_btn)
 
         # 自定义主题：背景色选择器
@@ -874,7 +915,7 @@ class SettingsDialog(QWidget):
         self._bg_color_btn.setFixedSize(80, 32)
         self._bg_color_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._bg_color_btn.clicked.connect(self._pick_bg_color)
-        self._bg_color_label = QLabel("背景色:")
+        self._bg_color_label = QLabel(t('背景色:'))
         theme_layout.addRow(self._bg_color_label, self._bg_color_btn)
 
         # 根据当前选择控制颜色选择器可见性
@@ -884,7 +925,7 @@ class SettingsDialog(QWidget):
         scroll_layout.addWidget(self._theme_group)
 
         # 字体设置组
-        self._font_group = QGroupBox("字体设置")
+        self._font_group = QGroupBox(t('字体设置'))
         font_layout = QFormLayout(self._font_group)
         font_layout.setSpacing(10)
         font_layout.setContentsMargins(12, 20, 12, 12)
@@ -895,13 +936,13 @@ class SettingsDialog(QWidget):
         self._font_size_spin.setValue(14)
         self._font_size_spin.setMinimumHeight(32)
         self._font_size_spin.setSuffix(" px")
-        self._font_size_label = QLabel("字体大小:")
+        self._font_size_label = QLabel(t('字体大小:'))
         font_layout.addRow(self._font_size_label, self._font_size_spin)
 
         scroll_layout.addWidget(self._font_group)
 
         # 快捷键设置组
-        self._hotkey_group = QGroupBox("快捷键设置")
+        self._hotkey_group = QGroupBox(t('快捷键设置'))
         hotkey_layout = QFormLayout(self._hotkey_group)
         hotkey_layout.setSpacing(10)
         hotkey_layout.setContentsMargins(12, 20, 12, 12)
@@ -915,7 +956,7 @@ class SettingsDialog(QWidget):
         self._hotkey_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._hotkey_btn.setAutoDefault(False)
         self._hotkey_btn.setDefault(False)
-        self._hotkey_label = QLabel("唤醒翻译窗口:")
+        self._hotkey_label = QLabel(t('唤醒翻译窗口:'))
         self._hotkey_row, self._hotkey_clear_btn = self._create_hotkey_row(self._hotkey_btn)
         hotkey_layout.addRow(self._hotkey_label, self._hotkey_row)
 
@@ -927,7 +968,7 @@ class SettingsDialog(QWidget):
         self._writing_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._writing_hotkey_btn.setAutoDefault(False)
         self._writing_hotkey_btn.setDefault(False)
-        self._writing_hotkey_label = QLabel("划词写作:")
+        self._writing_hotkey_label = QLabel(t('划词写作:'))
         self._writing_hotkey_row, self._writing_hotkey_clear_btn = self._create_hotkey_row(
             self._writing_hotkey_btn
         )
@@ -940,7 +981,7 @@ class SettingsDialog(QWidget):
         self._selection_translate_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._selection_translate_hotkey_btn.setAutoDefault(False)
         self._selection_translate_hotkey_btn.setDefault(False)
-        self._selection_translate_hotkey_label = QLabel("选中翻译:")
+        self._selection_translate_hotkey_label = QLabel(t('选中翻译:'))
         self._selection_translate_hotkey_row, self._selection_translate_hotkey_clear_btn = (
             self._create_hotkey_row(self._selection_translate_hotkey_btn)
         )
@@ -953,14 +994,14 @@ class SettingsDialog(QWidget):
         self._ai_chat_hotkey_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._ai_chat_hotkey_btn.setAutoDefault(False)
         self._ai_chat_hotkey_btn.setDefault(False)
-        self._ai_chat_hotkey_label = QLabel("AI 对话:")
+        self._ai_chat_hotkey_label = QLabel(t('AI 对话:'))
         self._ai_chat_hotkey_row, self._ai_chat_hotkey_clear_btn = (
             self._create_hotkey_row(self._ai_chat_hotkey_btn)
         )
         hotkey_layout.addRow(self._ai_chat_hotkey_label, self._ai_chat_hotkey_row)
 
         # 快捷键提示文字
-        self._hotkey_hint_label = QLabel("点击按钮后按下新的快捷键组合，点击 × 可清除")
+        self._hotkey_hint_label = QLabel(t('点击按钮后按下新的快捷键组合，点击 × 可清除'))
         self._hotkey_hint_label.setProperty("class", "hint")
         self._hotkey_hint_label.setWordWrap(True)
         hotkey_layout.addRow("", self._hotkey_hint_label)
@@ -992,14 +1033,13 @@ class SettingsDialog(QWidget):
         scroll_layout.addWidget(self._hotkey_group)
 
         # 划词黑名单
-        self._blacklist_group = QGroupBox("划词黑名单")
+        self._blacklist_group = QGroupBox(t('划词黑名单'))
         blacklist_outer = QVBoxLayout(self._blacklist_group)
         blacklist_outer.setSpacing(8)
         blacklist_outer.setContentsMargins(12, 20, 12, 12)
 
         self._blacklist_hint_label = QLabel(
-            "左侧为划词黑名单（这些程序中不显示划词图标）；点击 → 移出后出现在右侧，"
-            "可从右侧点击 ← 重新加入黑名单。进程名可在任务管理器「详细信息」中查看。"
+            t('左侧为划词黑名单（这些程序中不显示划词图标）；点击 → 移出后出现在右侧，可从右侧点击 ← 重新加入黑名单。进程名可在任务管理器「详细信息」中查看。')
         )
         self._blacklist_hint_label.setProperty("class", "hint")
         self._blacklist_hint_label.setWordWrap(True)
@@ -1011,7 +1051,7 @@ class SettingsDialog(QWidget):
         # 左侧：黑名单
         left_panel = QVBoxLayout()
         left_panel.setSpacing(6)
-        self._blacklist_left_title = QLabel("黑名单")
+        self._blacklist_left_title = QLabel(t('黑名单'))
         self._blacklist_left_title.setProperty("class", "blacklistPanelTitle")
         left_panel.addWidget(self._blacklist_left_title)
 
@@ -1031,7 +1071,7 @@ class SettingsDialog(QWidget):
         # 右侧：已移出
         right_panel = QVBoxLayout()
         right_panel.setSpacing(6)
-        self._blacklist_right_title = QLabel("已移出黑名单")
+        self._blacklist_right_title = QLabel(t('已移出黑名单'))
         self._blacklist_right_title.setProperty("class", "blacklistPanelTitle")
         right_panel.addWidget(self._blacklist_right_title)
 
@@ -1057,12 +1097,12 @@ class SettingsDialog(QWidget):
         add_layout.setContentsMargins(0, 0, 0, 0)
         add_layout.setSpacing(8)
         self._blacklist_app_edit = QLineEdit()
-        self._blacklist_app_edit.setPlaceholderText("应用名称")
+        self._blacklist_app_edit.setPlaceholderText(t('应用名称'))
         self._blacklist_app_edit.setMinimumHeight(32)
         self._blacklist_exe_edit = QLineEdit()
-        self._blacklist_exe_edit.setPlaceholderText("进程名，如 notepad.exe")
+        self._blacklist_exe_edit.setPlaceholderText(t('进程名，如 notepad.exe'))
         self._blacklist_exe_edit.setMinimumHeight(32)
-        self._blacklist_add_btn = QPushButton("添加")
+        self._blacklist_add_btn = QPushButton(t('添加'))
         self._blacklist_add_btn.setObjectName("blacklistAddBtn")
         self._blacklist_add_btn.setMinimumHeight(32)
         self._blacklist_add_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -1076,40 +1116,40 @@ class SettingsDialog(QWidget):
         scroll_layout.addWidget(self._blacklist_group)
 
         # 划词工具栏设置组
-        self._toolbar_group = QGroupBox("划词工具栏")
+        self._toolbar_group = QGroupBox(t('划词工具栏'))
         toolbar_layout = QFormLayout(self._toolbar_group)
         toolbar_layout.setSpacing(10)
         toolbar_layout.setContentsMargins(12, 20, 12, 12)
         toolbar_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        self._trigger_mode_combo = QComboBox()
+        self._trigger_mode_combo = _FitComboBox()
         self._trigger_mode_combo.setMinimumHeight(32)
-        self._trigger_mode_combo.addItem("悬浮工具栏（翻译/润色/总结/AI对话/自定义）", "toolbar")
-        self._trigger_mode_combo.addItem("翻译图标按钮（经典模式）", "button")
-        self._trigger_mode_label = QLabel("划词触发方式:")
+        self._trigger_mode_combo.addItem(t('悬浮工具栏（翻译/润色/总结/AI对话/自定义）'), "toolbar")
+        self._trigger_mode_combo.addItem(t('翻译图标按钮（经典模式）'), "button")
+        self._trigger_mode_label = QLabel(t('划词触发方式:'))
         toolbar_layout.addRow(self._trigger_mode_label, self._trigger_mode_combo)
 
         ext_btn_row = QHBoxLayout()
-        ext_btn_row.setSpacing(8)
-        self._open_actions_dir_btn = QPushButton("打开自定义功能目录")
+        ext_btn_row.setSpacing(4)
+        self._open_actions_dir_btn = QPushButton(t('打开自定义功能目录'))
         self._open_actions_dir_btn.setMinimumHeight(30)
         self._open_actions_dir_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._open_actions_dir_btn.clicked.connect(self._on_open_actions_dir)
         ext_btn_row.addWidget(self._open_actions_dir_btn)
 
-        self._open_skills_dir_btn = QPushButton("打开技能目录")
+        self._open_skills_dir_btn = QPushButton(t('打开技能目录'))
         self._open_skills_dir_btn.setMinimumHeight(30)
         self._open_skills_dir_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._open_skills_dir_btn.clicked.connect(self._on_open_skills_dir)
         ext_btn_row.addWidget(self._open_skills_dir_btn)
 
-        self._open_mcp_cfg_btn = QPushButton("打开 MCP 配置")
+        self._open_mcp_cfg_btn = QPushButton(t('打开 MCP 配置'))
         self._open_mcp_cfg_btn.setMinimumHeight(30)
         self._open_mcp_cfg_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._open_mcp_cfg_btn.clicked.connect(self._on_open_mcp_config)
         ext_btn_row.addWidget(self._open_mcp_cfg_btn)
         ext_btn_row.addStretch()
-        toolbar_layout.addRow("", ext_btn_row)
+        toolbar_layout.addRow(ext_btn_row)
 
         # 高级：actions/ 目录 .py 扩展勾选区（_load_settings 中根据目录动态重建）
         self._action_checks_box = QWidget()
@@ -1121,20 +1161,20 @@ class SettingsDialog(QWidget):
         scroll_layout.addWidget(self._toolbar_group)
 
         # AI 对话设置组
-        self._chat_group = QGroupBox("AI 对话")
+        self._chat_group = QGroupBox(t('AI 对话'))
         chat_layout = QVBoxLayout(self._chat_group)
         chat_layout.setSpacing(8)
         chat_layout.setContentsMargins(12, 20, 12, 12)
 
         # 共用 API 勾选框（全宽，与其他设置组风格一致）
-        self._chat_shared_api_check = QCheckBox("与翻译共用 API 配置")
+        self._chat_shared_api_check = QCheckBox(t('与翻译共用 API 配置'))
         self._chat_shared_api_check.setChecked(True)
         self._chat_shared_api_check.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._chat_shared_api_check.toggled.connect(self._on_chat_shared_api_toggled)
         chat_layout.addWidget(self._chat_shared_api_check)
 
         self._chat_shared_api_hint_label = QLabel(
-            "取消后可使用独立于翻译功能的 API Key、Base URL、Model 和 Timeout"
+            t('取消后可使用独立于翻译功能的 API Key、Base URL、Model 和 Timeout')
         )
         self._chat_shared_api_hint_label.setProperty("class", "checkbox-hint")
         self._chat_shared_api_hint_label.setWordWrap(True)
@@ -1143,7 +1183,8 @@ class SettingsDialog(QWidget):
         # 模型上下文长度（行内标签 + 输入框）
         ctx_row = QHBoxLayout()
         ctx_row.setSpacing(8)
-        ctx_label = QLabel("模型上下文长度:")
+        ctx_label = QLabel(t('模型上下文长度:'))
+        self._ctx_label = ctx_label
         self._ctx_limit_spin = StyledSpinBox()
         self._ctx_limit_spin.setMinimumHeight(32)
         self._ctx_limit_spin.setRange(4096, 1048576)
@@ -1156,8 +1197,7 @@ class SettingsDialog(QWidget):
 
         # 上下文长度说明
         self._chat_hint_label = QLabel(
-            "对话历史不限条数；超过约 70% 上下文窗口时，自动按开源摘要缓冲策略\n"
-            "（LangChain ConversationSummaryBufferMemory 模式）压缩较早对话为摘要，最近消息原文保留。"
+            t('对话历史不限条数；超过约 70% 上下文窗口时，自动按开源摘要缓冲策略\n（LangChain ConversationSummaryBufferMemory 模式）压缩较早对话为摘要，最近消息原文保留。')
         )
         self._chat_hint_label.setProperty("class", "hint")
         self._chat_hint_label.setWordWrap(True)
@@ -1200,18 +1240,17 @@ class SettingsDialog(QWidget):
         self._chat_timeout_spin.setMinimumHeight(32)
         self._chat_timeout_spin.setRange(10, 600)
         self._chat_timeout_spin.setValue(60)
-        self._chat_timeout_spin.setSuffix(" 秒")
+        self._chat_timeout_spin.setSuffix(t(' 秒'))
         self._chat_timeout_label = QLabel("Timeout:")
         chat_api_form.addRow(self._chat_timeout_label, self._chat_timeout_spin)
 
-        self._chat_api_test_btn = QPushButton("测试连接")
+        self._chat_api_test_btn = QPushButton(t('测试连接'))
         self._chat_api_test_btn.setObjectName("chatApiTestBtn")
         self._chat_api_test_btn.setMinimumHeight(32)
         self._chat_api_test_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._chat_api_test_btn.setToolTip("发送一条最小请求验证此 API 是否可用，"
-                                           "通过后自动更新模型上下文长度")
+        self._chat_api_test_btn.setToolTip(t('发送一条最小请求验证此 API 是否可用，通过后自动更新模型上下文长度'))
         self._chat_api_test_btn.clicked.connect(self._on_test_chat_api)
-        chat_api_form.addRow("连接测试:", self._chat_api_test_btn)
+        chat_api_form.addRow(t('连接测试:'), self._chat_api_test_btn)
         self._chat_api_test_worker = None
 
         chat_layout.addWidget(self._chat_api_form_widget)
@@ -1220,17 +1259,17 @@ class SettingsDialog(QWidget):
         scroll_layout.addWidget(self._chat_group)
 
         # 写作设置组
-        self._writing_group = QGroupBox("写作设置")
+        self._writing_group = QGroupBox(t('写作设置'))
         writing_layout = QVBoxLayout(self._writing_group)
         writing_layout.setSpacing(8)
         writing_layout.setContentsMargins(12, 20, 12, 12)
 
-        self._keep_original_check = QCheckBox("保留原文")
+        self._keep_original_check = QCheckBox(t('保留原文'))
         self._keep_original_check.toggled.connect(self._on_checkbox_toggled)
         writing_layout.addWidget(self._keep_original_check)
 
         # 添加说明文字
-        self._writing_hint_label = QLabel("勾选后，写作时会在原文下方另起一行插入翻译结果")
+        self._writing_hint_label = QLabel(t('勾选后，写作时会在原文下方另起一行插入翻译结果'))
         self._writing_hint_label.setProperty("class", "checkbox-hint")
         self._writing_hint_label.setWordWrap(True)
         writing_layout.addWidget(self._writing_hint_label)
@@ -1238,8 +1277,8 @@ class SettingsDialog(QWidget):
         # 换行快捷键选择
         newline_layout = QHBoxLayout()
         newline_layout.setContentsMargins(28, 0, 0, 0)
-        self._newline_hotkey_label = QLabel("换行快捷键:")
-        self._newline_hotkey_combo = QComboBox()
+        self._newline_hotkey_label = QLabel(t('换行快捷键:'))
+        self._newline_hotkey_combo = _FitComboBox()
         self._newline_hotkey_combo.addItems(["enter", "shift+enter", "ctrl+enter"])
         self._newline_hotkey_combo.setMinimumHeight(32)
         newline_layout.addWidget(self._newline_hotkey_label)
@@ -1248,24 +1287,24 @@ class SettingsDialog(QWidget):
         writing_layout.addLayout(newline_layout)
 
         # 动画输入勾选
-        self._animation_check = QCheckBox("动画输入（逐字输入效果）")
+        self._animation_check = QCheckBox(t('动画输入（逐字输入效果）'))
         self._animation_check.toggled.connect(self._on_checkbox_toggled)
         writing_layout.addWidget(self._animation_check)
 
         scroll_layout.addWidget(self._writing_group)
 
         # 润色设置组
-        self._polishing_group = QGroupBox("润色设置")
+        self._polishing_group = QGroupBox(t('润色设置'))
         polishing_layout = QVBoxLayout(self._polishing_group)
         polishing_layout.setSpacing(8)
         polishing_layout.setContentsMargins(12, 20, 12, 12)
 
-        self._polishing_show_diff_check = QCheckBox("显示润色差异")
+        self._polishing_show_diff_check = QCheckBox(t('显示润色差异'))
         self._polishing_show_diff_check.toggled.connect(self._on_checkbox_toggled)
         polishing_layout.addWidget(self._polishing_show_diff_check)
 
         # 添加说明文字
-        self._polishing_show_diff_hint_label = QLabel("勾选后，润色完成时将对原文与结果做词/短语级比对：浅红为删除片段，浅绿为新增片段")
+        self._polishing_show_diff_hint_label = QLabel(t('勾选后，润色完成时将对原文与结果做词/短语级比对：浅红为删除片段，浅绿为新增片段'))
         self._polishing_show_diff_hint_label.setProperty("class", "checkbox-hint")
         self._polishing_show_diff_hint_label.setWordWrap(True)
         polishing_layout.addWidget(self._polishing_show_diff_hint_label)
@@ -1273,70 +1312,70 @@ class SettingsDialog(QWidget):
         scroll_layout.addWidget(self._polishing_group)
 
         # 翻译窗口设置组
-        self._translator_window_group = QGroupBox("翻译窗口设置")
+        self._translator_window_group = QGroupBox(t('翻译窗口设置'))
         translator_window_layout = QVBoxLayout(self._translator_window_group)
         translator_window_layout.setSpacing(8)
         translator_window_layout.setContentsMargins(12, 20, 12, 12)
 
-        self._fixed_height_check = QCheckBox("固定窗口高度")
+        self._fixed_height_check = QCheckBox(t('固定窗口高度'))
         self._fixed_height_check.toggled.connect(self._on_checkbox_toggled)
         translator_window_layout.addWidget(self._fixed_height_check)
 
         # 添加说明文字
-        self._fixed_height_hint_label = QLabel("勾选后，原文框固定180px，译文框固定360px，不随内容自动调整")
+        self._fixed_height_hint_label = QLabel(t('勾选后，原文框固定180px，译文框固定360px，不随内容自动调整'))
         self._fixed_height_hint_label.setProperty("class", "checkbox-hint")
         self._fixed_height_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._fixed_height_hint_label)
 
         # 记忆窗口大小勾选框
-        self._remember_size_check = QCheckBox("固定窗口大小（上一次调整的大小）")
+        self._remember_size_check = QCheckBox(t('固定窗口大小（上一次调整的大小）'))
         self._remember_size_check.toggled.connect(self._on_checkbox_toggled)
         translator_window_layout.addWidget(self._remember_size_check)
 
         # 添加说明文字
-        self._remember_size_hint_label = QLabel("勾选后，翻译窗口会记住用户最后一次手动调整的大小，下次唤醒时恢复")
+        self._remember_size_hint_label = QLabel(t('勾选后，翻译窗口会记住用户最后一次手动调整的大小，下次唤醒时恢复'))
         self._remember_size_hint_label.setProperty("class", "checkbox-hint")
         self._remember_size_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._remember_size_hint_label)
 
         # 记忆窗口位置勾选框
-        self._remember_position_check = QCheckBox("记忆窗口位置")
+        self._remember_position_check = QCheckBox(t('记忆窗口位置'))
         self._remember_position_check.toggled.connect(self._on_checkbox_toggled)
         translator_window_layout.addWidget(self._remember_position_check)
 
         # 添加说明文字
-        self._remember_position_hint_label = QLabel("勾选后，翻译窗口会记住上次关闭时的位置。程序重启后位置重置")
+        self._remember_position_hint_label = QLabel(t('勾选后，翻译窗口会记住上次关闭时的位置。程序重启后位置重置'))
         self._remember_position_hint_label.setProperty("class", "checkbox-hint")
         self._remember_position_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._remember_position_hint_label)
 
         # 始终置顶勾选框
-        self._always_on_top_check = QCheckBox("始终置顶")
+        self._always_on_top_check = QCheckBox(t('始终置顶'))
         self._always_on_top_check.toggled.connect(self._on_checkbox_toggled)
         translator_window_layout.addWidget(self._always_on_top_check)
 
         # 添加说明文字
-        self._always_on_top_hint_label = QLabel("勾选后，翻译窗口始终显示在所有窗口最上层。不勾选时，窗口可被其他窗口覆盖，通过快捷键、双击托盘图标或点击任务栏图标可重新唤醒")
+        self._always_on_top_hint_label = QLabel(t('勾选后，翻译窗口始终显示在所有窗口最上层。不勾选时，窗口可被其他窗口覆盖，通过快捷键、双击托盘图标或点击任务栏图标可重新唤醒'))
         self._always_on_top_hint_label.setProperty("class", "checkbox-hint")
         self._always_on_top_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._always_on_top_hint_label)
 
         # 划词查词勾选框（应用内：翻译窗口原文/译文框）
-        self._word_popup_check = QCheckBox("启用划词查词（应用内）")
+        self._word_popup_check = QCheckBox(t('启用划词查词（应用内）'))
         self._word_popup_check.toggled.connect(self._on_checkbox_toggled)
         translator_window_layout.addWidget(self._word_popup_check)
 
-        self._word_popup_hint_label = QLabel("勾选后，在原文框或译文框中选中单个英文单词时，自动弹出单词释义和发音弹窗")
+        self._word_popup_hint_label = QLabel(t('勾选后，在原文框或译文框中选中单个英文单词时，自动弹出单词释义和发音弹窗'))
         self._word_popup_hint_label.setProperty("class", "checkbox-hint")
         self._word_popup_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._word_popup_hint_label)
 
         # 划词查词勾选框（应用外：桌面任意位置）
-        self._word_popup_global_check = QCheckBox("启用划词查词（应用外）")
+        self._word_popup_global_check = QCheckBox(t('启用划词查词（应用外）'))
         self._word_popup_global_check.toggled.connect(self._on_checkbox_toggled)
         translator_window_layout.addWidget(self._word_popup_global_check)
 
-        self._word_popup_global_hint_label = QLabel("勾选后，在翻译窗口外的桌面任意位置（如浏览器、文档）选中单个英文单词时，自动弹出单词释义和发音弹窗")
+        self._word_popup_global_hint_label = QLabel(t('勾选后，在翻译窗口外的桌面任意位置（如浏览器、文档）选中单个英文单词时，自动弹出单词释义和发音弹窗'))
         self._word_popup_global_hint_label.setProperty("class", "checkbox-hint")
         self._word_popup_global_hint_label.setWordWrap(True)
         translator_window_layout.addWidget(self._word_popup_global_hint_label)
@@ -1344,19 +1383,19 @@ class SettingsDialog(QWidget):
         scroll_layout.addWidget(self._translator_window_group)
 
         # 朗读 TTS 设置
-        self._tts_group = QGroupBox("朗读 (TTS)")
+        self._tts_group = QGroupBox(t('朗读 (TTS)'))
         tts_layout = QFormLayout(self._tts_group)
         tts_layout.setSpacing(10)
         tts_layout.setContentsMargins(12, 20, 12, 12)
         tts_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        self._tts_provider_combo = QComboBox()
-        self._tts_provider_combo.addItems(["系统语音 (离线)", "Microsoft Edge 在线"])
+        self._tts_provider_combo = _FitComboBox()
+        self._tts_provider_combo.addItems([t('系统语音 (离线)'), t('Microsoft Edge 在线')])
         self._tts_provider_combo.setMinimumHeight(32)
         self._tts_provider_combo.currentIndexChanged.connect(
             lambda _i: self._update_tts_edge_controls_enabled()
         )
 
-        self._tts_edge_voice_combo = QComboBox()
+        self._tts_edge_voice_combo = _FitComboBox()
         self._tts_edge_voice_combo.setMinimumHeight(32)
 
         self._tts_rate_slider = QSlider(Qt.Orientation.Horizontal)
@@ -1397,12 +1436,16 @@ class SettingsDialog(QWidget):
         _vol_layout.addWidget(self._tts_volume_slider, 1)
         _vol_layout.addWidget(self._tts_volume_value_label)
 
-        tts_layout.addRow(QLabel("引擎:"), self._tts_provider_combo)
-        tts_layout.addRow(QLabel("Edge 音色:"), self._tts_edge_voice_combo)
-        tts_layout.addRow(QLabel("语速:"), _rate_row)
-        tts_layout.addRow(QLabel("音量:"), _vol_row)
+        self._tts_engine_label = QLabel(t('引擎:'))
+        self._tts_voice_label = QLabel(t('Edge 音色:'))
+        self._tts_rate_label = QLabel(t('语速:'))
+        self._tts_volume_label = QLabel(t('音量:'))
+        tts_layout.addRow(self._tts_engine_label, self._tts_provider_combo)
+        tts_layout.addRow(self._tts_voice_label, self._tts_edge_voice_combo)
+        tts_layout.addRow(self._tts_rate_label, _rate_row)
+        tts_layout.addRow(self._tts_volume_label, _vol_row)
         self._tts_hint_label = QLabel(
-            "Edge tts需联网，使用神经网络朗读；合成或播放失败时会自动改用系统语音。"
+            t('Edge tts需联网，使用神经网络朗读；合成或播放失败时会自动改用系统语音。')
         )
         self._tts_hint_label.setProperty("class", "checkbox-hint")
         self._tts_hint_label.setWordWrap(True)
@@ -1411,16 +1454,16 @@ class SettingsDialog(QWidget):
         scroll_layout.addWidget(self._tts_group)
 
         # 系统设置组
-        self._sys_group = QGroupBox("系统设置")
+        self._sys_group = QGroupBox(t('系统设置'))
         sys_layout = QVBoxLayout(self._sys_group)
         sys_layout.setSpacing(8)
         sys_layout.setContentsMargins(12, 20, 12, 12)
 
-        self._auto_start_check = QCheckBox("开机自动启动")
+        self._auto_start_check = QCheckBox(t('开机自动启动'))
         self._auto_start_check.toggled.connect(self._on_checkbox_toggled)
         sys_layout.addWidget(self._auto_start_check)
 
-        self._disable_update_check = QCheckBox("禁用更新检查")
+        self._disable_update_check = QCheckBox(t('禁用更新检查'))
         self._disable_update_check.toggled.connect(self._on_checkbox_toggled)
         sys_layout.addWidget(self._disable_update_check)
 
@@ -1437,13 +1480,13 @@ class SettingsDialog(QWidget):
         btn_layout.setSpacing(12)
         btn_layout.addStretch()
 
-        self._cancel_btn = QPushButton("取消")
+        self._cancel_btn = QPushButton(t('取消'))
         self._cancel_btn.setObjectName("cancelBtn")
         self._cancel_btn.setFixedHeight(32)
         self._cancel_btn.clicked.connect(self.hide)
         btn_layout.addWidget(self._cancel_btn)
 
-        self._save_btn = QPushButton("保存")
+        self._save_btn = QPushButton(t('保存'))
         self._save_btn.setObjectName("saveBtn")
         self._save_btn.setFixedHeight(32)
         self._save_btn.clicked.connect(self._save_settings)
@@ -1887,7 +1930,7 @@ class SettingsDialog(QWidget):
         clear_btn.setObjectName("hotkeyClearBtn")
         clear_btn.setFixedSize(32, 32)
         clear_btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        clear_btn.setToolTip("清除快捷键")
+        clear_btn.setToolTip(t('清除快捷键'))
 
         layout.addWidget(hotkey_btn)
         layout.addWidget(clear_btn)
@@ -1895,7 +1938,7 @@ class SettingsDialog(QWidget):
 
     def _set_hotkey_btn_text(self, btn: QPushButton, value: str):
         """根据快捷键值更新按钮显示文本"""
-        btn.setText(value if value else "点击设置快捷键")
+        btn.setText(value if value else t('点击设置快捷键'))
 
     def _clear_blacklist_panel(self, layout: QVBoxLayout):
         """清空某一侧黑名单列表 UI。"""
@@ -1921,7 +1964,7 @@ class SettingsDialog(QWidget):
 
         text_col = QVBoxLayout()
         text_col.setSpacing(0)
-        app_label = QLabel(str(entry.get("app_name") or entry.get("exe", "")))
+        app_label = QLabel(t(str(entry.get("app_name") or entry.get("exe", ""))))
         app_label.setObjectName("blacklistAppLabel")
         exe_label = QLabel(str(entry.get("exe", "")))
         exe_label.setObjectName("blacklistExeLabel")
@@ -1932,12 +1975,12 @@ class SettingsDialog(QWidget):
         if side == "active":
             action_btn = QPushButton("→")
             action_btn.setObjectName("blacklistMoveOutBtn")
-            action_btn.setToolTip("移出黑名单")
+            action_btn.setToolTip(t('移出黑名单'))
             action_btn.clicked.connect(lambda _checked=False, e=exe_key: self._on_move_blacklist_out(e))
         else:
             action_btn = QPushButton("←")
             action_btn.setObjectName("blacklistMoveInBtn")
-            action_btn.setToolTip("加入黑名单")
+            action_btn.setToolTip(t('加入黑名单'))
             action_btn.clicked.connect(lambda _checked=False, e=exe_key: self._on_move_blacklist_in(e))
 
         action_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -1966,8 +2009,8 @@ class SettingsDialog(QWidget):
         self._blacklist_active_layout.addStretch(1)
         self._blacklist_inactive_layout.addStretch(1)
 
-        self._blacklist_left_title.setText(f"黑名单 ({len(active_entries)})")
-        self._blacklist_right_title.setText(f"已移出黑名单 ({len(inactive_entries)})")
+        self._blacklist_left_title.setText(t('黑名单 ({0})', len(active_entries)))
+        self._blacklist_right_title.setText(t('已移出黑名单 ({0})', len(inactive_entries)))
 
     def _collect_blacklist_entries_from_ui(self):
         """收集当前黑名单配置（enabled=True 为左侧黑名单）。"""
@@ -1994,7 +2037,7 @@ class SettingsDialog(QWidget):
         exe = normalize_exe(self._blacklist_exe_edit.text())
         app_name = self._blacklist_app_edit.text().strip()
         if not exe:
-            self._show_message_dialog("提示", "请输入进程名，例如 notepad.exe", "warning")
+            self._show_message_dialog(t('提示'), t('请输入进程名，例如 notepad.exe'), "warning")
             return
         if not app_name:
             app_name = exe
@@ -2002,7 +2045,7 @@ class SettingsDialog(QWidget):
         for entry in self._blacklist_entries:
             if entry.get("exe") == exe:
                 if entry.get("enabled", True):
-                    self._show_message_dialog("提示", f"{app_name} 已在黑名单中", "warning")
+                    self._show_message_dialog(t('提示'), t('{0} 已在黑名单中', app_name), "warning")
                 else:
                     entry["app_name"] = app_name
                     entry["enabled"] = True
@@ -2055,16 +2098,16 @@ class SettingsDialog(QWidget):
     def _start_hotkey_capture(self, target: str):
         """开始捕获快捷键"""
         if target == "translator":
-            self._hotkey_btn.setText("请按下快捷键...")
+            self._hotkey_btn.setText(t('请按下快捷键...'))
             self._capturing_hotkey_target = "translator"
         elif target == "writing":
-            self._writing_hotkey_btn.setText("请按下快捷键...")
+            self._writing_hotkey_btn.setText(t('请按下快捷键...'))
             self._capturing_hotkey_target = "writing"
         elif target == "selection_translate":
-            self._selection_translate_hotkey_btn.setText("请按下快捷键...")
+            self._selection_translate_hotkey_btn.setText(t('请按下快捷键...'))
             self._capturing_hotkey_target = "selection_translate"
         elif target == "ai_chat":
-            self._ai_chat_hotkey_btn.setText("请按下快捷键...")
+            self._ai_chat_hotkey_btn.setText(t('请按下快捷键...'))
             self._capturing_hotkey_target = "ai_chat"
         # 焦点放在对话框上接收按键，避免快捷键按钮出现主题色边框
         self.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -2100,11 +2143,11 @@ class SettingsDialog(QWidget):
             # 重复组合在 pynput 注册字典中会同 key 覆盖，先设置的功能会静默失效
             _target = self._capturing_hotkey_target
             _all_hotkeys = {
-                "translator": (self._hotkey_value, self._hotkey_btn, "唤醒翻译窗口"),
-                "writing": (self._writing_hotkey_value, self._writing_hotkey_btn, "划词写作"),
+                "translator": (self._hotkey_value, self._hotkey_btn, t('唤醒翻译窗口')),
+                "writing": (self._writing_hotkey_value, self._writing_hotkey_btn, t('划词写作')),
                 "selection_translate": (self._selection_translate_hotkey_value,
-                                        self._selection_translate_hotkey_btn, "选中翻译"),
-                "ai_chat": (self._ai_chat_hotkey_value, self._ai_chat_hotkey_btn, "AI 对话"),
+                                        self._selection_translate_hotkey_btn, t('选中翻译')),
+                "ai_chat": (self._ai_chat_hotkey_value, self._ai_chat_hotkey_btn, t('AI 对话')),
             }
             _dup_label = next(
                 (label for name, (val, _b, label) in _all_hotkeys.items()
@@ -2113,8 +2156,8 @@ class SettingsDialog(QWidget):
             )
             if _dup_label:
                 self._show_modal_message_box(
-                    QMessageBox.Icon.Warning, "快捷键冲突",
-                    f"「{hotkey}」已被「{_dup_label}」使用，请换一个组合。")
+                    QMessageBox.Icon.Warning, t('快捷键冲突'),
+                    t('「{0}」已被「{1}」使用，请换一个组合。', hotkey, _dup_label))
                 _orig_value, _orig_btn, _ = _all_hotkeys[_target]
                 self._set_hotkey_btn_text(_orig_btn, _orig_value)
                 self._capturing_hotkey_target = None
@@ -2258,6 +2301,15 @@ class SettingsDialog(QWidget):
         else:
             self._popup_style_combo.setCurrentIndex(0)
 
+        # 界面语言回填（不触发切换信号）
+        _lang_setting = self._config.get('ui.language', 'system') or 'system'
+        self._language_combo.blockSignals(True)
+        for _i in range(self._language_combo.count()):
+            if self._language_combo.itemData(_i) == _lang_setting:
+                self._language_combo.setCurrentIndex(_i)
+                break
+        self._language_combo.blockSignals(False)
+
         # 加载自定义颜色
         self._custom_accent = self._config.get('theme.custom_accent', '#007AFF')
         self._custom_bg = self._config.get('theme.custom_bg', '#2d2d2d')
@@ -2329,7 +2381,7 @@ class SettingsDialog(QWidget):
             _all_actions = []
         for _action in _all_actions:
             _fname = os.path.basename(_action.file_path)
-            _cb = QCheckBox(f"显示 {(_action.icon + ' ' + _action.name).strip()}")
+            _cb = QCheckBox(t('显示 {0}', (_action.icon + ' ' + _action.name).strip()))
             _cb.setToolTip(_action.file_path)
             _cb.setChecked(bool(_enabled_actions.get(_fname)))
             _cb.toggled.connect(self._on_checkbox_toggled)
@@ -2409,6 +2461,7 @@ class SettingsDialog(QWidget):
         self._reload_blacklist_ui()
 
         # 禁用滚轮事件，避免误触
+        self._disable_wheel_event(self._language_combo)
         self._disable_wheel_event(self._popup_style_combo)
         self._disable_wheel_event(self._trigger_mode_combo)
         self._disable_wheel_event(self._lang_detect_combo)
@@ -2480,8 +2533,8 @@ class SettingsDialog(QWidget):
             return
         self._ctx_limit_spin.setValue(min(max(tokens, 4096), 1048576))
         self._ctx_limit_spin.setToolTip(
-            "自动回填: " + ("查询 /models 端点获得" if source == 'api'
-                                else "端点无上下文字段，按内置已知模型表推断"))
+            t('自动回填: ') + (t('查询 /models 端点获得') if source == 'api'
+                                else t('端点无上下文字段，按内置已知模型表推断')))
 
     def _disable_wheel_event(self, widget):
         """禁用控件的鼠标滚轮事件，防止误触"""
@@ -2508,7 +2561,7 @@ class SettingsDialog(QWidget):
         combo.blockSignals(True)
         combo.clear()
         for label, vid in EDGE_TTS_VOICE_PRESETS:
-            combo.addItem(label, vid)
+            combo.addItem(t(label), vid)
         match_i = -1
         for i in range(combo.count()):
             if self._tts_combo_voice_id_at(i) == cfg:
@@ -2516,7 +2569,7 @@ class SettingsDialog(QWidget):
                 break
         if match_i < 0:
             if cfg:
-                combo.insertItem(1, f"自定义 ({cfg})", cfg)
+                combo.insertItem(1, t('自定义 ({0})', cfg), cfg)
                 match_i = 1
             else:
                 match_i = 0
@@ -2571,13 +2624,13 @@ class SettingsDialog(QWidget):
         log_info(f"[settings] _on_test_chat_api 点击 base={base!r} model={model!r}")
         if not base or not model:
             self._show_modal_message_box(
-                QMessageBox.Icon.Warning, "测试失败", "请先填写 Base URL 和 Model。")
+                QMessageBox.Icon.Warning, t('测试失败'), t('请先填写 Base URL 和 Model。'))
             return
         if self._chat_api_test_worker is not None \
                 and self._chat_api_test_worker.isRunning():
             return
         self._chat_api_test_btn.setEnabled(False)
-        self._chat_api_test_btn.setText("测试中…")
+        self._chat_api_test_btn.setText(t('测试中…'))
         self._chat_api_test_worker = _ChatApiTestWorker(
             key, base, model, int(self._chat_timeout_spin.value()), self)
         self._chat_api_test_worker.ok.connect(self._on_chat_api_test_ok)
@@ -2592,34 +2645,158 @@ class SettingsDialog(QWidget):
         if tokens >= 4096:
             self._ctx_limit_spin.setValue(min(max(tokens, 4096), 1048576))
             self._show_modal_message_box(
-                QMessageBox.Icon.Information, "测试通过",
-                f"API 连接正常，模型上下文长度已更新为 {tokens} tokens。\n"
-                f"点击保存后生效。")
+                QMessageBox.Icon.Information, t('测试通过'),
+                t('API 连接正常，模型上下文长度已更新为 {0} tokens。\n点击保存后生效。', tokens))
         else:
             self._show_modal_message_box(
-                QMessageBox.Icon.Information, "测试通过",
-                "API 连接正常。未能自动探测到该模型的上下文长度，\n"
-                "将沿用当前上下文长度设置。")
+                QMessageBox.Icon.Information, t('测试通过'),
+                t('API 连接正常。未能自动探测到该模型的上下文长度，\n将沿用当前上下文长度设置。'))
 
     def _on_chat_api_test_fail(self, error: str):
         """测试不通：提示用户，回退继续用和翻译一样的模型配置"""
         log_info(f"[settings] _on_chat_api_test_fail error={error!r}")
         self._show_modal_message_box(
-            QMessageBox.Icon.Warning, "测试失败",
-            f"无法连接该 API：\n{error}\n\n"
-            f"对话将继续使用与翻译相同的模型配置。")
+            QMessageBox.Icon.Warning, t('测试失败'),
+            t('无法连接该 API：\n{0}\n\n对话将继续使用与翻译相同的模型配置。', error))
         # 回退到"与翻译共用 API"（toggled 会自动置灰独立 API 字段）
         self._chat_shared_api_check.setChecked(True)
 
     def _on_chat_api_test_done(self):
         """测试收尾：恢复按钮文案与启用态"""
-        self._chat_api_test_btn.setText("测试连接")
+        self._chat_api_test_btn.setText(t('测试连接'))
         self._chat_api_test_btn.setEnabled(
             not self._chat_shared_api_check.isChecked())
 
     def _on_theme_combo_changed(self, index):
         """主题下拉框选项变更时，控制自定义颜色选择器的可见性"""
         self._update_custom_color_visibility()
+
+    def _on_language_combo_changed(self, index):
+        """界面语言切换：即时生效（持久化 + 广播信号，各窗口 retranslate）"""
+        setting = self._language_combo.itemData(index)
+        if setting:
+            try:
+                from .utils.i18n import set_language
+            except ImportError:
+                from src.utils.i18n import set_language
+            set_language(setting)
+
+    def retranslate_ui(self):
+        """语言切换：重设设置窗口全部静态文案（窗口尺寸不变）。
+
+        下拉框只重译显示文案，功能值（itemData/索引）保持不变；
+        瞬态状态（测试中、录制快捷键）不在此重设。
+        """
+        if not hasattr(self, '_save_btn'):
+            return
+        self._title_label.setText(t('设置'))
+        self._api_group.setTitle(t('API 配置'))
+        self._model_hint_label.setText(t('推荐使用Instruct模型，Thinking模型响应会比较慢'))
+        self._vision_shared_check.setText(t('识图模型与翻译模型相同'))
+        self._vision_hint_label.setText(t('取消勾选后可独立配置识图模型的 Base URL、API Key 与 Model；在翻译窗口原文框粘贴图片后，点「翻译/润色/总结」会先识别图片文字。'))
+        self._vision_api_url_label.setText(t('识图 Base URL:'))
+        self._vision_api_key_label.setText(t('识图 API Key:'))
+        self._vision_model_edit.setPlaceholderText(t('如 qwen-vl-plus'))
+        self._vision_model_label.setText(t('识图模型:'))
+        self._lang_detect_label.setText(t('语种检测:'))
+        self._lang_detect_hint_label.setText(t('任一网关请求失败或解析不到语言时，会自动回退使用本地检测。'))
+        self._theme_group.setTitle(t('外观设置'))
+        self._popup_style_label.setText(t('窗口样式:'))
+        self._language_label.setText(t('界面语言:'))
+        self._accent_color_label.setText(t('强调色:'))
+        self._bg_color_label.setText(t('背景色:'))
+        self._font_group.setTitle(t('字体设置'))
+        self._font_size_label.setText(t('字体大小:'))
+        self._hotkey_group.setTitle(t('快捷键设置'))
+        self._hotkey_label.setText(t('唤醒翻译窗口:'))
+        self._writing_hotkey_label.setText(t('划词写作:'))
+        self._selection_translate_hotkey_label.setText(t('选中翻译:'))
+        self._ai_chat_hotkey_label.setText(t('AI 对话:'))
+        self._hotkey_hint_label.setText(t('点击按钮后按下新的快捷键组合，点击 × 可清除'))
+        self._blacklist_group.setTitle(t('划词黑名单'))
+        self._blacklist_hint_label.setText(t('左侧为划词黑名单（这些程序中不显示划词图标）；点击 → 移出后出现在右侧，可从右侧点击 ← 重新加入黑名单。进程名可在任务管理器「详细信息」中查看。'))
+        self._blacklist_app_edit.setPlaceholderText(t('应用名称'))
+        self._blacklist_exe_edit.setPlaceholderText(t('进程名，如 notepad.exe'))
+        self._blacklist_add_btn.setText(t('添加'))
+        self._toolbar_group.setTitle(t('划词工具栏'))
+        self._trigger_mode_label.setText(t('划词触发方式:'))
+        self._open_actions_dir_btn.setText(t('打开自定义功能目录'))
+        self._open_skills_dir_btn.setText(t('打开技能目录'))
+        self._open_mcp_cfg_btn.setText(t('打开 MCP 配置'))
+        self._chat_group.setTitle(t('AI 对话'))
+        self._chat_shared_api_check.setText(t('与翻译共用 API 配置'))
+        self._chat_shared_api_hint_label.setText(t('取消后可使用独立于翻译功能的 API Key、Base URL、Model 和 Timeout'))
+        self._chat_hint_label.setText(t('对话历史不限条数；超过约 70% 上下文窗口时，自动按开源摘要缓冲策略\n（LangChain ConversationSummaryBufferMemory 模式）压缩较早对话为摘要，最近消息原文保留。'))
+        self._ctx_label.setText(t('模型上下文长度:'))
+        self._chat_timeout_spin.setSuffix(t(' 秒'))
+        self._chat_api_test_btn.setText(t('测试连接'))
+        self._chat_api_test_btn.setToolTip(t('发送一条最小请求验证此 API 是否可用，通过后自动更新模型上下文长度'))
+        self._writing_group.setTitle(t('写作设置'))
+        self._keep_original_check.setText(t('保留原文'))
+        self._writing_hint_label.setText(t('勾选后，写作时会在原文下方另起一行插入翻译结果'))
+        self._newline_hotkey_label.setText(t('换行快捷键:'))
+        self._animation_check.setText(t('动画输入（逐字输入效果）'))
+        self._polishing_group.setTitle(t('润色设置'))
+        self._polishing_show_diff_check.setText(t('显示润色差异'))
+        self._polishing_show_diff_hint_label.setText(t('勾选后，润色完成时将对原文与结果做词/短语级比对：浅红为删除片段，浅绿为新增片段'))
+        self._translator_window_group.setTitle(t('翻译窗口设置'))
+        self._fixed_height_check.setText(t('固定窗口高度'))
+        self._fixed_height_hint_label.setText(t('勾选后，原文框固定180px，译文框固定360px，不随内容自动调整'))
+        self._remember_size_check.setText(t('固定窗口大小（上一次调整的大小）'))
+        self._remember_size_hint_label.setText(t('勾选后，翻译窗口会记住用户最后一次手动调整的大小，下次唤醒时恢复'))
+        self._remember_position_check.setText(t('记忆窗口位置'))
+        self._remember_position_hint_label.setText(t('勾选后，翻译窗口会记住上次关闭时的位置。程序重启后位置重置'))
+        self._always_on_top_check.setText(t('始终置顶'))
+        self._always_on_top_hint_label.setText(t('勾选后，翻译窗口始终显示在所有窗口最上层。不勾选时，窗口可被其他窗口覆盖，通过快捷键、双击托盘图标或点击任务栏图标可重新唤醒'))
+        self._word_popup_check.setText(t('启用划词查词（应用内）'))
+        self._word_popup_hint_label.setText(t('勾选后，在原文框或译文框中选中单个英文单词时，自动弹出单词释义和发音弹窗'))
+        self._word_popup_global_check.setText(t('启用划词查词（应用外）'))
+        self._word_popup_global_hint_label.setText(t('勾选后，在翻译窗口外的桌面任意位置（如浏览器、文档）选中单个英文单词时，自动弹出单词释义和发音弹窗'))
+        self._tts_group.setTitle(t('朗读 (TTS)'))
+        self._tts_hint_label.setText(t('Edge tts需联网，使用神经网络朗读；合成或播放失败时会自动改用系统语音。'))
+        self._tts_engine_label.setText(t('引擎:'))
+        self._tts_voice_label.setText(t('Edge 音色:'))
+        self._tts_rate_label.setText(t('语速:'))
+        self._tts_volume_label.setText(t('音量:'))
+        self._sys_group.setTitle(t('系统设置'))
+        self._auto_start_check.setText(t('开机自动启动'))
+        self._disable_update_check.setText(t('禁用更新检查'))
+        self._cancel_btn.setText(t('取消'))
+        self._save_btn.setText(t('保存'))
+
+        # ── 下拉框：只重译显示，功能值不变 ──
+        # 语言下拉（仅「跟随系统」项需翻译），保留当前选择且不触发切换
+        self._language_combo.blockSignals(True)
+        _lang_data = self._language_combo.currentData()
+        self._language_combo.setItemText(0, t('跟随系统'))
+        for _i in range(self._language_combo.count()):
+            if self._language_combo.itemData(_i) == _lang_data:
+                self._language_combo.setCurrentIndex(_i)
+                break
+        self._language_combo.blockSignals(False)
+        # 主题下拉：按索引重设显示（功能键 _theme_keys 不变）
+        for _i, _key in enumerate(self._theme_keys):
+            self._popup_style_combo.setItemText(_i, t(THEME_DISPLAY_NAMES[_key]))
+        # 语种检测下拉：按 itemData 重译
+        _ld_map = {'baidu': '百度', 'google': 'Google', 'bing': 'Bing', 'local': '本地'}
+        for _i in range(self._lang_detect_combo.count()):
+            _d = self._lang_detect_combo.itemData(_i)
+            if _d in _ld_map:
+                self._lang_detect_combo.setItemText(_i, t(_ld_map[_d]))
+        # TTS 引擎下拉：按索引（0=系统 1=Edge）
+        self._tts_provider_combo.setItemText(0, t('系统语音 (离线)'))
+        self._tts_provider_combo.setItemText(1, t('Microsoft Edge 在线'))
+        # TTS 音色下拉：重建并保留选中
+        _cur_voice = self._tts_edge_voice_combo.currentData()
+        self._reload_tts_edge_voice_combo(str(_cur_voice) if _cur_voice else '')
+        # 划词触发方式下拉：按 itemData 重译
+        _tm_map = {'toolbar': '悬浮工具栏（翻译/润色/总结/AI对话/自定义）', 'button': '翻译图标按钮（经典模式）'}
+        for _i in range(self._trigger_mode_combo.count()):
+            _d = self._trigger_mode_combo.itemData(_i)
+            if _d in _tm_map:
+                self._trigger_mode_combo.setItemText(_i, t(_tm_map[_d]))
+        # 黑名单列表（含计数标题与行内提示）
+        self._reload_blacklist_ui()
 
     def _update_custom_color_visibility(self):
         """根据当前主题选择更新颜色选择器的可见性"""
@@ -2684,14 +2861,14 @@ class SettingsDialog(QWidget):
 
     def _pick_accent_color(self):
         """弹出颜色对话框选择强调色"""
-        color = QColorDialog.getColor(QColor(self._custom_accent), self, "选择强调色")
+        color = QColorDialog.getColor(QColor(self._custom_accent), self, t('选择强调色'))
         if color.isValid():
             self._custom_accent = color.name()
             self._update_color_btn_style(self._accent_color_btn, self._custom_accent)
 
     def _pick_bg_color(self):
         """弹出颜色对话框选择背景色"""
-        color = QColorDialog.getColor(QColor(self._custom_bg), self, "选择背景色")
+        color = QColorDialog.getColor(QColor(self._custom_bg), self, t('选择背景色'))
         if color.isValid():
             self._custom_bg = color.name()
             self._update_color_btn_style(self._bg_color_btn, self._custom_bg)
@@ -2902,7 +3079,7 @@ class SettingsDialog(QWidget):
         # 先关闭设置对话框
         self.hide()
         # 延迟显示简洁 Toast
-        QTimer.singleShot(100, lambda: SimpleToastWidget.show_message("保存成功"))
+        QTimer.singleShot(100, lambda: SimpleToastWidget.show_message(t('保存成功')))
 
     # ── 扩展目录快捷入口 ──
     def _open_dir_safe(self, path):
@@ -3736,7 +3913,7 @@ class MainController(QObject):
             if not text:
                 self._tray_icon.show_message(
                     APP_NAME,
-                    "未能获取选中内容，可先复制后再试或检查焦点是否在编辑区域",
+                    t('未能获取选中内容，可先复制后再试或检查焦点是否在编辑区域'),
                     "warning",
                 )
                 return
@@ -4196,9 +4373,9 @@ class MainController(QObject):
     def _on_writing_completed(self, result: WritingResult):
         """写作完成回调（运行在 Qt 主线程）。"""
         if result.error:
-            ToastWidget.show_message("写作失败", result.error, "error")
+            ToastWidget.show_message(t('写作失败'), result.error, "error")
         else:
-            SimpleToastWidget.show_message("写作完成")
+            SimpleToastWidget.show_message(t('写作完成'))
             log_info(f"写作完成: {result.source_language} -> {result.target_language}")
 
     def _on_selection_finished(self):
@@ -4330,7 +4507,7 @@ class MainController(QObject):
     def _on_toolbar_action(self, action):
         """工具栏自定义功能 - 后台执行用户扩展 run(text)，结果展示在 AI 对话窗口"""
         if self._action_worker and self._action_worker.isRunning():
-            ToastWidget.show_message("自定义功能", "上一个功能还在执行中", "info")
+            ToastWidget.show_message(t('自定义功能'), t('上一个功能还在执行中'), "info")
             return
         text = self._toolbar_current_text()
         self._action_worker = CustomActionWorker(action, text)
@@ -4341,11 +4518,11 @@ class MainController(QObject):
     def _on_action_done(self, action, selected_text: str, result: str):
         get_chat_window().append_action_result(action.name, selected_text, result)
         if not result:
-            SimpleToastWidget.show_message(f"{action.name} 已执行")
+            SimpleToastWidget.show_message(t('{0} 已执行', action.name))
 
     def _on_action_failed(self, action, error: str):
         log_error(f"自定义功能 {action.name} 执行失败: {error}")
-        ToastWidget.show_message("执行失败", f"{action.name}: {error}", "error")
+        ToastWidget.show_message(t('执行失败'), f"{action.name}: {error}", "error")
 
     def _on_translator_window_closed(self):
         """翻译窗口关闭"""
@@ -4356,13 +4533,13 @@ class MainController(QObject):
         if enabled:
             self._text_capture.start_selection_hook()
             self._selection_detector.set_enabled(True)
-            self._tray_icon.show_message(APP_NAME, "划词监听已启用", "info")
+            self._tray_icon.show_message(APP_NAME, t('划词监听已启用'), "info")
         else:
             self._selection_detector.set_enabled(False)
             self._translate_button.hide()
             self._selection_toolbar.hide_toolbar()
             self._text_capture.stop_selection_hook()
-            self._tray_icon.show_message(APP_NAME, "划词监听已禁用", "info")
+            self._tray_icon.show_message(APP_NAME, t('划词监听已禁用'), "info")
 
     def _on_settings_requested(self):
         dialog = get_settings_dialog()
@@ -4569,6 +4746,13 @@ def main():
     app = TranslatorApp(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    # 界面语言初始化（system/zh/en），须在创建任何窗口之前
+    try:
+        from .utils.i18n import init_i18n
+    except ImportError:
+        from src.utils.i18n import init_i18n
+    init_i18n()
+
     splash = SplashScreen()
     splash.show_splash()
     app.processEvents()
@@ -4593,7 +4777,7 @@ def main():
     if not single_instance.try_lock():
         splash.close()
         QMessageBox.warning(None, APP_NAME,
-            f"{APP_NAME} 已经在运行中！\n\n请在系统托盘查找已有实例。",
+            t('{0} 已经在运行中！\n\n请在系统托盘查找已有实例。', APP_NAME),
             QMessageBox.StandardButton.Ok)
         sys.exit(0)
 

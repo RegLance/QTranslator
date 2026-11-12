@@ -16,6 +16,11 @@
 关键点：不能用 QRubberBand 的 grab 结果（会得到透明空白图），必须用框选坐标到
 已抓取的「全屏底图」上裁剪。
 """
+try:
+    from ..utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 import time
 from typing import List, Optional, Tuple
 

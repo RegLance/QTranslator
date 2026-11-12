@@ -1,4 +1,9 @@
 """翻译历史窗口模块 - 显示和管理翻译历史"""
+try:
+    from ..utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 from typing import Optional, List
 from pathlib import Path
 from PyQt6.QtWidgets import (
@@ -89,6 +94,13 @@ class HistoryWindow(QWidget):
         except ImportError:
             from src.utils.theme import get_theme_manager
         get_theme_manager().theme_changed.connect(self.update_theme)
+
+        # 语言切换：即时重设文案（窗口尺寸不变）
+        try:
+            from ..utils.i18n import get_i18n_manager
+        except ImportError:
+            from src.utils.i18n import get_i18n_manager
+        get_i18n_manager().language_changed.connect(self.retranslate_ui)
         self._applied_theme_signature = self._get_theme_signature()
 
 
@@ -240,7 +252,7 @@ class HistoryWindow(QWidget):
         title_layout = QHBoxLayout(self._title_bar)
         title_layout.setContentsMargins(8, 0, 8, 0)
 
-        self._title_label = QLabel("翻译历史")
+        self._title_label = QLabel(t('翻译历史'))
         self._title_label.setStyleSheet(f"""
             QLabel {{
                 color: {theme['text_muted']};
@@ -251,7 +263,7 @@ class HistoryWindow(QWidget):
         title_layout.addStretch()
 
         # 导出按钮
-        self._export_btn = QPushButton("导出")
+        self._export_btn = QPushButton(t('导出'))
         self._export_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
@@ -268,7 +280,7 @@ class HistoryWindow(QWidget):
         title_layout.addWidget(self._export_btn)
 
         # 清空按钮
-        self._clear_btn = QPushButton("清空")
+        self._clear_btn = QPushButton(t('清空'))
         self._clear_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
@@ -361,7 +373,7 @@ class HistoryWindow(QWidget):
         search_layout.setContentsMargins(0, 0, 0, 0)
 
         self._search_input = QLineEdit()
-        self._search_input.setPlaceholderText("搜索历史...")
+        self._search_input.setPlaceholderText(t('搜索历史...'))
         self._search_input.setStyleSheet(f"""
             QLineEdit {{
                 background-color: {theme['input_bg']};
@@ -443,7 +455,7 @@ class HistoryWindow(QWidget):
         detail_layout.setSpacing(10)
 
         # 详情标题
-        self._detail_title = QLabel("详情")
+        self._detail_title = QLabel(t('详情'))
         self._detail_title.setStyleSheet(f"""
             QLabel {{
                 color: {theme['accent_color']};
@@ -454,7 +466,7 @@ class HistoryWindow(QWidget):
         detail_layout.addWidget(self._detail_title)
 
         # 原文标签
-        self._original_label_title = QLabel("原文：")
+        self._original_label_title = QLabel(t('原文：'))
         self._original_label_title.setStyleSheet(f"""
             QLabel {{
                 color: {theme['text_muted']};
@@ -485,7 +497,7 @@ class HistoryWindow(QWidget):
         detail_layout.addWidget(self._separator1)
 
         # 译文标签
-        self._translated_label_title = QLabel("译文：")
+        self._translated_label_title = QLabel(t('译文：'))
         self._translated_label_title.setStyleSheet(f"""
             QLabel {{
                 color: {theme['text_muted']};
@@ -530,7 +542,7 @@ class HistoryWindow(QWidget):
         btn_layout.setSpacing(10)
 
         # 复制原文按钮
-        self._copy_original_btn = QPushButton("复制原文")
+        self._copy_original_btn = QPushButton(t('复制原文'))
         self._copy_original_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {theme['button_bg']};
@@ -552,7 +564,7 @@ class HistoryWindow(QWidget):
         self._speak_original_btn.setObjectName("speakOriginalBtn")
         self._speak_original_btn.setFixedSize(28, 28)
         self._speak_original_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._speak_original_btn.setToolTip("朗读原文")
+        self._speak_original_btn.setToolTip(t('朗读原文'))
         self._speak_original_btn.setIcon(self._create_speak_icon(theme))
         self._speak_original_btn.setStyleSheet(f"""
             QPushButton#speakOriginalBtn {{
@@ -571,7 +583,7 @@ class HistoryWindow(QWidget):
         btn_layout.addWidget(self._speak_original_btn)
 
         # 复制译文按钮
-        self._copy_btn = QPushButton("复制译文")
+        self._copy_btn = QPushButton(t('复制译文'))
         self._copy_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {theme['accent_color']};
@@ -594,7 +606,7 @@ class HistoryWindow(QWidget):
         self._speak_btn.setObjectName("speakTranslatedBtn")
         self._speak_btn.setFixedSize(28, 28)
         self._speak_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._speak_btn.setToolTip("朗读译文")
+        self._speak_btn.setToolTip(t('朗读译文'))
         self._speak_btn.setIcon(self._create_speak_icon(theme))
         self._speak_btn.setStyleSheet(f"""
             QPushButton#speakTranslatedBtn {{
@@ -652,6 +664,24 @@ class HistoryWindow(QWidget):
         self._title_bar.installEventFilter(self)
         self._title_label.installEventFilter(self)
         self._content_frame.installEventFilter(self)
+
+    def retranslate_ui(self):
+        """语言切换：重设历史窗口静态文案并刷新列表（窗口尺寸不变）。"""
+        if not hasattr(self, '_title_label'):
+            return
+        self._title_label.setText(t('翻译历史'))
+        self._export_btn.setText(t('导出'))
+        self._clear_btn.setText(t('清空'))
+        self._search_input.setPlaceholderText(t('搜索历史...'))
+        self._detail_title.setText(t('详情'))
+        self._original_label_title.setText(t('原文：'))
+        self._translated_label_title.setText(t('译文：'))
+        self._copy_original_btn.setText(t('复制原文'))
+        self._speak_original_btn.setToolTip(t('朗读原文'))
+        self._copy_btn.setText(t('复制译文'))
+        self._speak_btn.setToolTip(t('朗读译文'))
+        self._load_history()
+
 
     def update_theme(self):
         """更新主题"""
@@ -976,7 +1006,7 @@ class HistoryWindow(QWidget):
             list_item.setData(Qt.ItemDataRole.UserRole, item)
             self._history_list.addItem(list_item)
 
-        self._status_label.setText(f"共 {len(items)} 条记录")
+        self._status_label.setText(t('共 {0} 条记录', len(items)))
 
     def _on_search_input_changed(self, keyword: str):
         """搜索框内容变化时启动防抖定时器"""
@@ -1005,7 +1035,7 @@ class HistoryWindow(QWidget):
             list_item.setData(Qt.ItemDataRole.UserRole, item)
             self._history_list.addItem(list_item)
 
-        self._status_label.setText(f"找到 {len(items)} 条记录")
+        self._status_label.setText(t('找到 {0} 条记录', len(items)))
 
     def _on_item_clicked(self, list_item: QListWidgetItem):
         """单击选中条目"""
@@ -1014,9 +1044,7 @@ class HistoryWindow(QWidget):
             self._original_detail.setText(self._current_item.original_text)
             self._translated_detail.setText(self._current_item.translated_text)
             self._meta_label.setText(
-                f"时间: {self._current_item.timestamp}  |  "
-                f"语言: {self._current_item.target_language}  |  "
-                f"来源: {self._current_item.source}"
+                t('时间: {0}  |  语言: {1}  |  来源: {2}', self._current_item.timestamp, self._current_item.target_language, self._current_item.source)
             )
 
     def _on_item_double_clicked(self, list_item: QListWidgetItem):
@@ -1031,7 +1059,7 @@ class HistoryWindow(QWidget):
             from PyQt6.QtWidgets import QApplication
             clipboard = QApplication.clipboard()
             clipboard.setText(self._current_item.original_text)
-            self._status_label.setText("原文已复制到剪贴板")
+            self._status_label.setText(t('原文已复制到剪贴板'))
 
     def _copy_translated(self):
         """复制译文"""
@@ -1039,7 +1067,7 @@ class HistoryWindow(QWidget):
             from PyQt6.QtWidgets import QApplication
             clipboard = QApplication.clipboard()
             clipboard.setText(self._current_item.translated_text)
-            self._status_label.setText("译文已复制到剪贴板")
+            self._status_label.setText(t('译文已复制到剪贴板'))
 
     def hideEvent(self, event: QHideEvent):
         """关闭/隐藏窗口时停止朗读（与翻译窗口共用 TTS）。"""
@@ -1068,7 +1096,7 @@ class HistoryWindow(QWidget):
             ok = tts.speak(self._current_item.original_text)
             if ok:
                 self._tts_speak_orig_prep.start_prepare()
-                self._status_label.setText("正在朗读原文...")
+                self._status_label.setText(t('正在朗读原文...'))
             else:
                 self._tts_speak_orig_prep.end_prepare()
 
@@ -1086,7 +1114,7 @@ class HistoryWindow(QWidget):
             ok = tts.speak(self._current_item.translated_text)
             if ok:
                 self._tts_speak_trans_prep.start_prepare()
-                self._status_label.setText("正在朗读译文...")
+                self._status_label.setText(t('正在朗读译文...'))
             else:
                 self._tts_speak_trans_prep.end_prepare()
 
@@ -1097,7 +1125,7 @@ class HistoryWindow(QWidget):
 
         items = self._history.get_history(limit=9999)
         if not items:
-            self._status_label.setText("没有可导出的记录")
+            self._status_label.setText(t('没有可导出的记录'))
             return
 
         # 默认保存到系统 Downloads 目录
@@ -1110,9 +1138,9 @@ class HistoryWindow(QWidget):
         # 弹出文件保存对话框
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "导出翻译历史",
+            t('导出翻译历史'),
             default_name,
-            "JSON 文件 (*.json);;所有文件 (*)"
+            t('JSON 文件 (*.json);;所有文件 (*)')
         )
 
         if not file_path:
@@ -1125,9 +1153,9 @@ class HistoryWindow(QWidget):
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
-            self._status_label.setText(f"已导出 {len(items)} 条记录到 {Path(file_path).name}")
+            self._status_label.setText(t('已导出 {0} 条记录到 {1}', len(items), Path(file_path).name))
         except Exception as e:
-            self._status_label.setText(f"导出失败: {e}")
+            self._status_label.setText(t('导出失败: {0}', e))
 
     def _clear_history(self):
         """清空历史"""
@@ -1170,7 +1198,7 @@ class HistoryWindow(QWidget):
         icon_label.setStyleSheet("#confirmIconLabel { color: #ff9800; font-size: 20px; }")
         icon_label.setFixedSize(24, 24)
 
-        title_label = QLabel("确认清空")
+        title_label = QLabel(t('确认清空'))
         title_label.setObjectName("confirmTitleLabel")
         title_label.setStyleSheet(
             f"#confirmTitleLabel {{ color: {theme['text_primary']}; font-size: 14px; font-weight: bold; }}")
@@ -1202,7 +1230,7 @@ class HistoryWindow(QWidget):
         layout.addWidget(title_bar)
 
         # 消息内容
-        msg_label = QLabel("确定要清空所有翻译历史吗？\n此操作不可撤销。")
+        msg_label = QLabel(t('确定要清空所有翻译历史吗？\n此操作不可撤销。'))
         msg_label.setObjectName("confirmMsgLabel")
         msg_label.setStyleSheet(
             f"#confirmMsgLabel {{ color: {theme['text_secondary']}; font-size: 13px; }}")
@@ -1213,7 +1241,7 @@ class HistoryWindow(QWidget):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        cancel_btn = QPushButton("取消")
+        cancel_btn = QPushButton(t('取消'))
         cancel_btn.setFixedSize(80, 32)
         cancel_btn.setStyleSheet(f"""
             QPushButton {{
@@ -1229,7 +1257,7 @@ class HistoryWindow(QWidget):
         """)
         cancel_btn.clicked.connect(dialog.reject)
 
-        ok_btn = QPushButton("确定")
+        ok_btn = QPushButton(t('确定'))
         ok_btn.setFixedSize(80, 32)
         ok_btn.setStyleSheet("""
             QPushButton {

@@ -1,5 +1,10 @@
 """单词收藏窗口：列表 + 详情（浏览、删除、导出）。"""
 from __future__ import annotations
+try:
+    from ..utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 
 import json
 from pathlib import Path
@@ -155,6 +160,13 @@ class VocabularyWindow(QWidget):
 
         get_theme_manager().theme_changed.connect(self.update_theme)
 
+        # 语言切换：即时重设文案（窗口尺寸不变）
+        try:
+            from ..utils.i18n import get_i18n_manager
+        except ImportError:
+            from src.utils.i18n import get_i18n_manager
+        get_i18n_manager().language_changed.connect(self.retranslate_ui)
+
     @staticmethod
     def _create_speak_icon(theme: dict) -> QIcon:
         pixmap = QPixmap(18, 18)
@@ -258,7 +270,7 @@ class VocabularyWindow(QWidget):
         outer.setSpacing(8)
 
         title_bar = QHBoxLayout()
-        self._title_label = QLabel("单词收藏")
+        self._title_label = QLabel(t('单词收藏'))
         self._title_label.setObjectName("vocTitleLabel")
         self._title_label.setStyleSheet(
             f"#vocTitleLabel {{ color: {theme['text_primary']}; font-size: 15px; font-weight: bold; }}"
@@ -318,7 +330,7 @@ class VocabularyWindow(QWidget):
 
         self._trans_plain = QPlainTextEdit(self._trans_output_container)
         self._trans_plain.setReadOnly(True)
-        self._trans_plain.setPlaceholderText("译文")
+        self._trans_plain.setPlaceholderText(t('译文'))
         self._trans_plain.setStyleSheet(
             f"""
             QPlainTextEdit {{
@@ -349,7 +361,7 @@ class VocabularyWindow(QWidget):
         self._speak_word_btn.setObjectName("vocSpeakWordBtn")
         self._speak_word_btn.setFixedSize(28, 28)
         self._speak_word_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._speak_word_btn.setToolTip("朗读单词")
+        self._speak_word_btn.setToolTip(t('朗读单词'))
         self._speak_word_btn.setIcon(self._create_speak_icon(theme))
         self._speak_word_btn.setEnabled(False)
         self._speak_word_btn.setStyleSheet(
@@ -396,7 +408,7 @@ class VocabularyWindow(QWidget):
 
         row = QHBoxLayout()
         self._search_edit = QLineEdit()
-        self._search_edit.setPlaceholderText("搜索原文或译文…")
+        self._search_edit.setPlaceholderText(t('搜索原文或译文…'))
         self._search_edit.setStyleSheet(
             f"""
             QLineEdit {{
@@ -408,9 +420,9 @@ class VocabularyWindow(QWidget):
         """
         )
         self._search_edit.textChanged.connect(self._reload_list)
-        self._del_btn = QPushButton("删除选中")
-        self._export_btn = QPushButton("导出 JSON")
-        self._clear_btn = QPushButton("清空")
+        self._del_btn = QPushButton(t('删除选中'))
+        self._export_btn = QPushButton(t('导出 JSON'))
+        self._clear_btn = QPushButton(t('清空'))
         for b in (self._del_btn, self._export_btn, self._clear_btn):
             b.setStyleSheet(
                 f"""
@@ -431,15 +443,13 @@ class VocabularyWindow(QWidget):
         row.addWidget(self._clear_btn)
         outer.addLayout(row)
 
-        self._bb_title = QLabel("📝 词汇短文")
+        self._bb_title = QLabel(t('📝 词汇短文'))
         self._bb_title.setObjectName("bbTitle")
         self._bb_title.setStyleSheet(
             f"#bbTitle {{ color: {theme['text_primary']}; font-size: 13px; font-weight: bold; margin-top: 4px; }}"
         )
         self._bb_hint = QLabel(
-            "按「复习次数」从高到低取原文，最多 50 条；若总数不足 50，则用当前已有的全部条目。"
-            "将这些词用逗号连接后交给当前翻译 API，"
-            "生成不超过约 160 词的短文。"
+            t('按「复习次数」从高到低取原文，最多 50 条；若总数不足 50，则用当前已有的全部条目。将这些词用逗号连接后交给当前翻译 API，生成不超过约 160 词的短文。')
         )
         self._bb_hint.setWordWrap(True)
         self._bb_hint.setObjectName("bbHint")
@@ -447,17 +457,17 @@ class VocabularyWindow(QWidget):
             f"#bbHint {{ color: {theme['text_muted']}; font-size: 11px; }}")
 
         bb_row = QHBoxLayout()
-        self._bb_genre_label = QLabel("体裁:")
+        self._bb_genre_label = QLabel(t('体裁:'))
         self._bb_genre_label.setObjectName("bbGenreLabel")
         self._bb_genre_label.setStyleSheet(
             f"#bbGenreLabel {{ color: {theme['text_secondary']}; font-size: 12px; background: transparent; }}"
         )
         self._bb_article_combo = QComboBox()
         for _id, label, prompt in BIG_BANG_ARTICLE_OPTIONS:
-            self._bb_article_combo.addItem(label, prompt)
+            self._bb_article_combo.addItem(t(label), prompt)
         self._bb_article_combo.setStyleSheet(get_combobox_style(theme))
-        self._bb_go_btn = QPushButton("生成短文")
-        self._bb_stop_btn = QPushButton("停止")
+        self._bb_go_btn = QPushButton(t('生成短文'))
+        self._bb_stop_btn = QPushButton(t('停止'))
         self._bb_stop_btn.setEnabled(False)
         self._bb_go_btn.setStyleSheet(
             f"""
@@ -504,7 +514,7 @@ class VocabularyWindow(QWidget):
         )
         self._bb_output = QPlainTextEdit(self._bb_output_container)
         self._bb_output.setReadOnly(True)
-        self._bb_output.setPlaceholderText("生成的短文将显示在这里…")
+        self._bb_output.setPlaceholderText(t('生成的短文将显示在这里…'))
         self._bb_output.setStyleSheet(
             f"""
             QPlainTextEdit {{
@@ -534,7 +544,7 @@ class VocabularyWindow(QWidget):
         self._bb_speak_btn.setObjectName("vocBbSpeakBtn")
         self._bb_speak_btn.setFixedSize(28, 28)
         self._bb_speak_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._bb_speak_btn.setToolTip("朗读短文")
+        self._bb_speak_btn.setToolTip(t('朗读短文'))
         self._bb_speak_btn.setIcon(self._create_speak_icon(theme))
         self._bb_speak_btn.setEnabled(False)
         self._bb_speak_btn.setStyleSheet(
@@ -644,7 +654,7 @@ class VocabularyWindow(QWidget):
         items = self._vocabulary.list_frequency_items(50)
         if not items:
             QMessageBox.information(
-                self, APP_NAME, "请先收藏一些单词后再使用「词汇短文」。"
+                self, APP_NAME, t('请先收藏一些单词后再使用「词汇短文」。')
             )
             return
         words_csv = ",".join(it.word for it in items)
@@ -676,7 +686,7 @@ class VocabularyWindow(QWidget):
         self._set_big_bang_busy(False)
         self._big_bang_worker = None
         self._sync_bb_speak_btn_enabled()
-        QMessageBox.warning(self, APP_NAME, f"词汇短文生成失败：{message}")
+        QMessageBox.warning(self, APP_NAME, t('词汇短文生成失败：{0}', message))
 
     def _on_big_bang_stop(self) -> None:
         if self._big_bang_worker is not None and self._big_bang_worker.isRunning():
@@ -797,7 +807,7 @@ class VocabularyWindow(QWidget):
 
     def _export_json(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出单词收藏", str(Path.home() / "Downloads" / "qtranslator_vocabulary.json"), "JSON (*.json)"
+            self, t('导出单词收藏'), str(Path.home() / "Downloads" / "qtranslator_vocabulary.json"), "JSON (*.json)"
         )
         if not path:
             return
@@ -806,7 +816,7 @@ class VocabularyWindow(QWidget):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            QMessageBox.warning(self, APP_NAME, f"导出失败: {e}")
+            QMessageBox.warning(self, APP_NAME, t('导出失败: {0}', e))
 
     def _clear_all(self) -> None:
         if self._list.count() == 0:
@@ -814,7 +824,7 @@ class VocabularyWindow(QWidget):
         r = QMessageBox.question(
             self,
             APP_NAME,
-            "确定清空全部单词收藏？",
+            t('确定清空全部单词收藏？'),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if r != QMessageBox.StandardButton.Yes:
@@ -840,6 +850,37 @@ class VocabularyWindow(QWidget):
             from src.utils.window_front import bring_to_front_once
         bring_to_front_once(self)
         QTimer.singleShot(0, self._refresh_overlay_layouts)
+
+    def retranslate_ui(self):
+        """语言切换：重设词汇窗口静态文案（窗口尺寸不变）。"""
+        if not hasattr(self, '_title_label'):
+            return
+        self._title_label.setText(t('单词收藏'))
+        self._trans_plain.setPlaceholderText(t('译文'))
+        self._speak_word_btn.setToolTip(t('朗读单词'))
+        self._search_edit.setPlaceholderText(t('搜索原文或译文…'))
+        self._del_btn.setText(t('删除选中'))
+        self._export_btn.setText(t('导出 JSON'))
+        self._clear_btn.setText(t('清空'))
+        self._bb_title.setText(t('📝 词汇短文'))
+        self._bb_hint.setText(t('按「复习次数」从高到低取原文，最多 50 条；若总数不足 50，则用当前已有的全部条目。将这些词用逗号连接后交给当前翻译 API，生成不超过约 160 词的短文。'))
+        self._bb_genre_label.setText(t('体裁:'))
+        self._bb_go_btn.setText(t('生成短文'))
+        self._bb_stop_btn.setText(t('停止'))
+        self._bb_output.setPlaceholderText(t('生成的短文将显示在这里…'))
+        self._bb_speak_btn.setToolTip(t('朗读短文'))
+        # 体裁下拉：重译显示，itemData(prompt) 与当前选择不变
+        self._bb_article_combo.blockSignals(True)
+        _cur = self._bb_article_combo.currentData()
+        self._bb_article_combo.clear()
+        for _id, label, prompt in BIG_BANG_ARTICLE_OPTIONS:
+            self._bb_article_combo.addItem(t(label), prompt)
+        for _i in range(self._bb_article_combo.count()):
+            if self._bb_article_combo.itemData(_i) == _cur:
+                self._bb_article_combo.setCurrentIndex(_i)
+                break
+        self._bb_article_combo.blockSignals(False)
+
 
     def update_theme(self) -> None:
         try:

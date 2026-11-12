@@ -4,6 +4,11 @@
 每天 / 每周 / 每月。列表内可单独开关、编辑、删除某条提醒。
 配置存于 config.yaml 的 reminder.items，保存后调用 ReminderManager.configure() 生效。
 """
+try:
+    from ..utils.i18n import t, get_i18n_manager
+except ImportError:
+    from src.utils.i18n import t, get_i18n_manager
+
 import uuid
 from typing import Optional
 
@@ -215,6 +220,8 @@ class ReminderWindow(QWidget):
         self._reset_editor()
 
         get_theme_manager().theme_changed.connect(self._on_theme_changed)
+        # 语言切换：复用整体重建机制，所有文案即时刷新（窗口尺寸不变）
+        get_i18n_manager().language_changed.connect(self._on_theme_changed)
 
     # ------------------------------------------------------------------
     # 界面构建
@@ -248,7 +255,7 @@ class ReminderWindow(QWidget):
         title_layout = QHBoxLayout(self._title_bar)
         title_layout.setContentsMargins(6, 0, 2, 0)
 
-        title = QLabel("提醒设置")
+        title = QLabel(t('提醒设置'))
         title.setStyleSheet(f"QLabel {{ color: {theme['text_muted']}; font-size: 12px; }}")
         title_layout.addWidget(title)
         title_layout.addStretch()
@@ -269,7 +276,7 @@ class ReminderWindow(QWidget):
 
         # 列表标题
         list_header = QHBoxLayout()
-        list_header.addWidget(self._make_label("提醒列表", theme))
+        list_header.addWidget(self._make_label(t('提醒列表'), theme))
         list_header.addStretch()
         content.addLayout(list_header)
 
@@ -289,7 +296,7 @@ class ReminderWindow(QWidget):
         # 添加按钮
         add_row = QHBoxLayout()
         add_row.addStretch()
-        self._add_btn = QPushButton("＋ 添加提醒")
+        self._add_btn = QPushButton(t('＋ 添加提醒'))
         self._add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._add_btn.setStyleSheet(f"""
             QPushButton {{
@@ -311,7 +318,7 @@ class ReminderWindow(QWidget):
         content.addWidget(sep)
 
         # 编辑器
-        content.addWidget(self._make_label("编辑提醒", theme))
+        content.addWidget(self._make_label(t('编辑提醒'), theme))
         self._editor_frame = QFrame()
         self._editor_frame.setStyleSheet(f"""
             QFrame {{ background-color: {theme['bg_secondary']};
@@ -323,9 +330,9 @@ class ReminderWindow(QWidget):
 
         # 模式选择
         mode_row = QHBoxLayout()
-        mode_row.addWidget(self._make_label("模式", theme))
+        mode_row.addWidget(self._make_label(t('模式'), theme))
         self._mode_combo = StyledComboBox()
-        self._mode_combo.addItems(MODE_LABELS)
+        self._mode_combo.addItems([t(x) for x in MODE_LABELS])
         self._mode_combo.setStyleSheet(self._combo_style(theme))
         self._mode_combo.set_arrow_color(theme['text_secondary'])
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
@@ -340,20 +347,22 @@ class ReminderWindow(QWidget):
 
         # 预设
         preset_row = QHBoxLayout()
-        preset_row.addWidget(self._make_label("预设内容", theme))
+        preset_row.addWidget(self._make_label(t('预设内容'), theme))
         self._preset_combo = StyledComboBox()
-        self._preset_combo.addItems(list(PRESETS.keys()))
+        # 显示文案走 t()，功能值（itemData）固定为 PRESETS 的规范键
+        for _pk in PRESETS.keys():
+            self._preset_combo.addItem(t(_pk), _pk)
         self._preset_combo.setStyleSheet(self._combo_style(theme))
         self._preset_combo.set_arrow_color(theme['text_secondary'])
-        self._preset_combo.currentTextChanged.connect(self._on_preset_changed)
+        self._preset_combo.currentIndexChanged.connect(self._on_preset_changed)
         preset_row.addWidget(self._preset_combo, 1)
         editor.addLayout(preset_row)
 
         # 提醒内容
         msg_row = QHBoxLayout()
-        msg_row.addWidget(self._make_label("提醒内容", theme))
+        msg_row.addWidget(self._make_label(t('提醒内容'), theme))
         self._message_edit = QLineEdit()
-        self._message_edit.setPlaceholderText("输入提醒内容...")
+        self._message_edit.setPlaceholderText(t('输入提醒内容...'))
         self._message_edit.setStyleSheet(self._lineedit_style(theme))
         self._message_edit.textEdited.connect(self._on_message_edited)
         msg_row.addWidget(self._message_edit, 1)
@@ -362,13 +371,13 @@ class ReminderWindow(QWidget):
         # 保存 / 取消
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        self._cancel_btn = QPushButton("取消")
+        self._cancel_btn = QPushButton(t('取消'))
         self._cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._cancel_btn.setStyleSheet(self._secondary_btn_style(theme))
         self._cancel_btn.clicked.connect(self._reset_editor)
         btn_row.addWidget(self._cancel_btn)
 
-        self._save_btn = QPushButton("添加提醒")
+        self._save_btn = QPushButton(t('添加提醒'))
         self._save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._save_btn.setStyleSheet(self._primary_btn_style(theme))
         self._save_btn.clicked.connect(self._on_save)
@@ -386,11 +395,11 @@ class ReminderWindow(QWidget):
         page0 = QWidget()
         l0 = QHBoxLayout(page0)
         l0.setContentsMargins(0, 0, 0, 0)
-        l0.addWidget(self._make_label("间隔", theme))
+        l0.addWidget(self._make_label(t('间隔'), theme))
         self._interval_spin = StyledSpinBox()
         self._interval_spin.setRange(1, 1440)
         self._interval_spin.setValue(30)
-        self._interval_spin.setSuffix(" 分钟")
+        self._interval_spin.setSuffix(t(' 分钟'))
         self._interval_spin.setStyleSheet(self._spinbox_style(theme))
         self._interval_spin.set_arrow_color(theme['text_secondary'])
         l0.addWidget(self._interval_spin, 1)
@@ -400,7 +409,7 @@ class ReminderWindow(QWidget):
         page1 = QWidget()
         l1 = QHBoxLayout(page1)
         l1.setContentsMargins(0, 0, 0, 0)
-        l1.addWidget(self._make_label("时间", theme))
+        l1.addWidget(self._make_label(t('时间'), theme))
         self._once_datetime = QDateTimeEdit()
         self._once_datetime.setDisplayFormat("yyyy-MM-dd HH:mm")
         self._once_datetime.setCalendarPopup(True)
@@ -412,7 +421,7 @@ class ReminderWindow(QWidget):
         page2 = QWidget()
         l2 = QHBoxLayout(page2)
         l2.setContentsMargins(0, 0, 0, 0)
-        l2.addWidget(self._make_label("时间", theme))
+        l2.addWidget(self._make_label(t('时间'), theme))
         self._daily_time = QTimeEdit()
         self._daily_time.setDisplayFormat("HH:mm")
         self._daily_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
@@ -424,13 +433,13 @@ class ReminderWindow(QWidget):
         page3 = QWidget()
         l3 = QHBoxLayout(page3)
         l3.setContentsMargins(0, 0, 0, 0)
-        l3.addWidget(self._make_label("星期", theme))
+        l3.addWidget(self._make_label(t('星期'), theme))
         self._weekly_weekday = StyledComboBox()
-        self._weekly_weekday.addItems(WEEKDAY_NAMES)
+        self._weekly_weekday.addItems([t(x) for x in WEEKDAY_NAMES])
         self._weekly_weekday.setStyleSheet(self._combo_style(theme))
         self._weekly_weekday.set_arrow_color(theme['text_secondary'])
         l3.addWidget(self._weekly_weekday, 1)
-        l3.addWidget(self._make_label("时间", theme, width=40))
+        l3.addWidget(self._make_label(t('时间'), theme, width=40))
         self._weekly_time = QTimeEdit()
         self._weekly_time.setDisplayFormat("HH:mm")
         self._weekly_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
@@ -442,15 +451,15 @@ class ReminderWindow(QWidget):
         page4 = QWidget()
         l4 = QHBoxLayout(page4)
         l4.setContentsMargins(0, 0, 0, 0)
-        l4.addWidget(self._make_label("日期", theme))
+        l4.addWidget(self._make_label(t('日期'), theme))
         self._monthly_day = StyledSpinBox()
         self._monthly_day.setRange(1, 31)
         self._monthly_day.setValue(1)
-        self._monthly_day.setSuffix(" 号")
+        self._monthly_day.setSuffix(t(' 号'))
         self._monthly_day.setStyleSheet(self._spinbox_style(theme))
         self._monthly_day.set_arrow_color(theme['text_secondary'])
         l4.addWidget(self._monthly_day, 1)
-        l4.addWidget(self._make_label("时间", theme, width=40))
+        l4.addWidget(self._make_label(t('时间'), theme, width=40))
         self._monthly_time = QTimeEdit()
         self._monthly_time.setDisplayFormat("HH:mm")
         self._monthly_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
@@ -466,7 +475,7 @@ class ReminderWindow(QWidget):
         self._clear_layout(self._list_layout)
 
         if not self._items:
-            empty = QLabel("暂无提醒，点击上方「添加提醒」新建")
+            empty = QLabel(t('暂无提醒，点击上方「添加提醒」新建'))
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setStyleSheet(f"QLabel {{ color: {theme['text_muted']}; font-size: 12px; padding: 20px; }}")
             self._list_layout.addWidget(empty)
@@ -499,13 +508,13 @@ class ReminderWindow(QWidget):
         summary.setStyleSheet(f"QLabel {{ color: {theme['text_primary']}; font-size: 13px; }}")
         h.addWidget(summary, 1)
 
-        edit_btn = QPushButton("编辑")
+        edit_btn = QPushButton(t('编辑'))
         edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         edit_btn.setStyleSheet(self._secondary_btn_style(theme))
         edit_btn.clicked.connect(lambda _, id_=iid: self._start_edit(id_))
         h.addWidget(edit_btn)
 
-        del_btn = QPushButton("删除")
+        del_btn = QPushButton(t('删除'))
         del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         del_btn.setStyleSheet(self._danger_btn_style(theme))
         del_btn.clicked.connect(lambda _, id_=iid: self._delete_item(id_))
@@ -550,15 +559,15 @@ class ReminderWindow(QWidget):
     def _summarize(item: dict) -> str:
         mode = item.get('mode', 'interval')
         if mode == 'interval':
-            sched = f"每 {item.get('interval_minutes', 30)} 分钟"
+            sched = t('每 {0} 分钟', item.get('interval_minutes', 30))
         elif mode == 'once':
             sched = item.get('datetime', '')
         elif mode == 'daily':
-            sched = f"每天 {item.get('time', '')}"
+            sched = t('每天 {0}', item.get('time', ''))
         elif mode == 'weekly':
-            sched = f"每周{WEEKDAY_NAMES[int(item.get('weekday', 0)) % 7]} {item.get('time', '')}"
+            sched = t('每周{0} {1}', t(WEEKDAY_NAMES[int(item.get('weekday', 0)) % 7]), item.get('time', ''))
         elif mode == 'monthly':
-            sched = f"每月 {item.get('day', 1)} 号 {item.get('time', '')}"
+            sched = t('每月 {0} 号 {1}', item.get('day', 1), item.get('time', ''))
         else:
             sched = mode
         msg = (item.get('message') or '').strip()
@@ -585,7 +594,7 @@ class ReminderWindow(QWidget):
             return
         self._editing_id = iid
         self._populate_form(item)
-        self._save_btn.setText("保存修改")
+        self._save_btn.setText(t('保存修改'))
 
     def _delete_item(self, iid: str):
         try:
@@ -595,8 +604,8 @@ class ReminderWindow(QWidget):
         result = show_modal_message_box(
             self,
             QMessageBox.Icon.Question,
-            "删除提醒",
-            "确定要删除这条提醒吗？",
+            t('删除提醒'),
+            t('确定要删除这条提醒吗？'),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if result != QMessageBox.StandardButton.Yes:
@@ -620,10 +629,10 @@ class ReminderWindow(QWidget):
         self._params_stack.setCurrentIndex(0)
         self._interval_spin.setValue(30)
         self._preset_combo.blockSignals(True)
-        self._preset_combo.setCurrentText("自定义")
+        self._set_preset_by_key("自定义")
         self._preset_combo.blockSignals(False)
         self._message_edit.setText("")
-        self._save_btn.setText("添加提醒")
+        self._save_btn.setText(t('添加提醒'))
 
     def _populate_form(self, item: dict):
         mode = item.get('mode', 'interval')
@@ -666,7 +675,7 @@ class ReminderWindow(QWidget):
                 preset = name
                 break
         self._preset_combo.blockSignals(True)
-        self._preset_combo.setCurrentText(preset)
+        self._set_preset_by_key(preset)
         self._preset_combo.blockSignals(False)
 
     def _build_item_from_form(self) -> dict:
@@ -715,14 +724,22 @@ class ReminderWindow(QWidget):
     def _on_mode_changed(self, index: int):
         self._params_stack.setCurrentIndex(max(0, min(index, self._params_stack.count() - 1)))
 
-    def _on_preset_changed(self, name: str):
+    def _on_preset_changed(self, _index: int):
+        name = self._preset_combo.currentData()
         text = PRESETS.get(name, "")
         if text:
             self._message_edit.setText(text)
 
+    def _set_preset_by_key(self, key: str):
+        """按规范键选中预设项（显示文案可能已翻译，故用 itemData 匹配）"""
+        for i in range(self._preset_combo.count()):
+            if self._preset_combo.itemData(i) == key:
+                self._preset_combo.setCurrentIndex(i)
+                return
+
     def _on_message_edited(self, _text: str):
         self._preset_combo.blockSignals(True)
-        self._preset_combo.setCurrentText("自定义")
+        self._set_preset_by_key("自定义")
         self._preset_combo.blockSignals(False)
 
     # ------------------------------------------------------------------

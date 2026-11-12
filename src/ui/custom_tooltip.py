@@ -10,6 +10,11 @@ Qt 6 原生 QToolTip（QTipLabel 单例）在 Windows 上存在无法根治的�
 （ID 选择器，不影响其他控件）控制，字体在 setText 前已固定为 12px，
 首次显示即最终大小，无任何尺寸动画。
 """
+try:
+    from ..utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 from typing import Optional
 
 from PyQt6.QtCore import QPoint, QTimer, Qt

@@ -6,6 +6,11 @@
 - 支持激活 Skill（SKILL.md 正文注入系统提示词）
 - 支持 MCP 工具调用（官方 mcp SDK，工具在后台由 MCPClientManager 托管）
 """
+try:
+    from ..utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 import html
 import json
 import os
@@ -541,11 +546,11 @@ class ChatWorker(QThread):
         # OpenAI function name 仅允许 [a-zA-Z0-9_-]，用「服务器__工具名」映射
         name_map: Dict[str, MCPToolInfo] = {}
         openai_tools = []
-        for t in self._tools:
-            safe_server = re.sub(r'[^a-zA-Z0-9_-]', '_', t.server)
-            fn_name = f"{safe_server}__{t.name}"[:64]
-            name_map[fn_name] = t
-            tool_def = t.to_openai_tool()
+        for tool in self._tools:
+            safe_server = re.sub(r'[^a-zA-Z0-9_-]', '_', tool.server)
+            fn_name = f"{safe_server}__{tool.name}"[:64]
+            name_map[fn_name] = tool
+            tool_def = tool.to_openai_tool()
             tool_def['function']['name'] = fn_name
             openai_tools.append(tool_def)
 
@@ -614,26 +619,26 @@ class ChatWorker(QThread):
                 except Exception:
                     args = {}
                 if tc.function.name in local_tools:
-                    self.tool_info.emit(f"调用技能本地工具 {tc.function.name} ...")
+                    self.tool_info.emit(t('调用技能本地工具 {0} ...', tc.function.name))
                     result = self._skill_tools.call(tc.function.name, args)
                 elif not tool_info:
-                    result = f"[未知工具 {tc.function.name}]"
+                    result = t('[未知工具 {0}]', tc.function.name)
                 else:
-                    self.tool_info.emit(f"调用 MCP 工具 {tool_info.server}/{tool_info.name} ...")
+                    self.tool_info.emit(t('调用 MCP 工具 {0}/{1} ...', tool_info.server, tool_info.name))
                     try:
                         result = manager.call_tool(tool_info.server, tool_info.name, args)
                     except Exception as e:
-                        result = f"[工具调用失败: {e}]"
+                        result = t('[工具调用失败: {0}]', e)
                 msgs.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": result[:20000],
                 })
         else:
-            answer = answer or "[已达到最大工具调用轮数]"
+            answer = answer or t('[已达到最大工具调用轮数]')
 
         if not answer:
-            answer = "[模型未返回内容]"
+            answer = t('[模型未返回内容]')
         # 思考内嵌正文的模型（MiniMax 等）：把 <think> 段拆到思考框；
         # 已有 reasoning_content 的模型不重复拆
         if not self._reasoning_full:
@@ -646,7 +651,7 @@ class ChatWorker(QThread):
                         return
                     self.reasoning_chunk.emit(_think_part[_ri:_ri + 30])
                     time.sleep(0.01)
-                answer = _body_part or "[模型未返回正文]"
+                answer = _body_part or t('[模型未返回正文]')
         # 非流式路径：分块 emit 模拟流式显示（API 已一次性返回，
         # 逐块呈现避免整段瞬间弹出的突兀感）
         for _ri in range(0, len(answer), 20):
@@ -939,7 +944,7 @@ class ChatWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setObjectName("ChatWindow")
-        self.setWindowTitle(f"{APP_NAME} - AI 对话")
+        self.setWindowTitle(t('{0} - AI 对话', APP_NAME))
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
@@ -1002,6 +1007,13 @@ class ChatWindow(QWidget):
             from src.utils.theme import get_theme_manager
         get_theme_manager().theme_changed.connect(self._apply_theme)
 
+        # 语言切换：即时重设文案（窗口尺寸不变）
+        try:
+            from ..utils.i18n import get_i18n_manager
+        except ImportError:
+            from src.utils.i18n import get_i18n_manager
+        get_i18n_manager().language_changed.connect(self.retranslate_ui)
+
         # 气泡最大宽在渲染时按当时聊天区宽度定死，窗口变宽后防抖重排气泡
         self._last_render_width = 0
         self._relayout_timer = QTimer(self)
@@ -1058,7 +1070,7 @@ class ChatWindow(QWidget):
         title_layout = QHBoxLayout(self._title_bar)
         title_layout.setContentsMargins(12, 0, 8, 0)
 
-        self._title_label = QLabel(f"{APP_NAME} · AI 对话")
+        self._title_label = QLabel(t('{0} · AI 对话', APP_NAME))
         self._title_label.setObjectName("chatTitleLabel")
         title_layout.addWidget(self._title_label)
         title_layout.addStretch()
@@ -1069,7 +1081,7 @@ class ChatWindow(QWidget):
         self._minimize_btn.setFixedSize(22, 22)
         self._minimize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._minimize_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._minimize_btn.setToolTip("最小化")
+        self._minimize_btn.setToolTip(t('最小化'))
         self._minimize_btn.clicked.connect(self._on_minimize_clicked)
         title_layout.addWidget(self._minimize_btn)
 
@@ -1078,7 +1090,7 @@ class ChatWindow(QWidget):
         self._maximize_btn.setFixedSize(22, 22)
         self._maximize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._maximize_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._maximize_btn.setToolTip("最大化 / 还原")
+        self._maximize_btn.setToolTip(t('最大化 / 还原'))
         self._maximize_btn.clicked.connect(self._toggle_maximize)
         title_layout.addWidget(self._maximize_btn)
 
@@ -1106,7 +1118,7 @@ class ChatWindow(QWidget):
         side.setContentsMargins(10, 10, 8, 10)
         side.setSpacing(8)
 
-        self._new_session_btn = QPushButton("＋ 新建对话")
+        self._new_session_btn = QPushButton(t('＋ 新建对话'))
         self._new_session_btn.setObjectName("newSessionBtn")
         self._new_session_btn.setMinimumHeight(36)
         self._new_session_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -1136,10 +1148,10 @@ class ChatWindow(QWidget):
         top_bar = QHBoxLayout()
         top_bar.setSpacing(8)
 
-        self._skill_label = QLabel("技能:")
+        self._skill_label = QLabel(t('技能:'))
         self._skill_combo = QToolButton()
         self._skill_combo.setObjectName("skillBtn")
-        self._skill_combo.setText("无技能")
+        self._skill_combo.setText(t('无技能'))
         self._skill_combo.setMinimumHeight(28)
         self._skill_combo.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._skill_combo.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -1160,7 +1172,7 @@ class ChatWindow(QWidget):
         self._mcp_btn.setMenu(self._mcp_menu)
         top_bar.addWidget(self._mcp_btn)
 
-        self._clear_ctx_btn = QPushButton("清空上下文")
+        self._clear_ctx_btn = QPushButton(t('清空上下文'))
         self._clear_ctx_btn.setObjectName("clearCtxBtn")
         self._clear_ctx_btn.setMinimumHeight(28)
         self._clear_ctx_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -1235,7 +1247,7 @@ class ChatWindow(QWidget):
         self._send_btn.setObjectName("sendBtn")
         self._send_btn.setFixedSize(30, 30)
         self._send_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._send_btn.setToolTip("发送")
+        self._send_btn.setToolTip(t('发送'))
         self._send_btn.clicked.connect(lambda: self.send_message())
         self._input_box.installEventFilter(self)
 
@@ -1261,6 +1273,23 @@ class ChatWindow(QWidget):
             self._config.get('theme.custom_bg', '#2d2d2d'),
             self._config.get('font.size', 15),
         )
+
+    def retranslate_ui(self):
+        """语言切换：重设对话窗口静态文案（窗口尺寸不变）。"""
+        if not hasattr(self, '_title_label'):
+            return
+        self.setWindowTitle(t('{0} - AI 对话', APP_NAME))
+        self._title_label.setText(t('{0} · AI 对话', APP_NAME))
+        self._minimize_btn.setToolTip(t('最小化'))
+        self._maximize_btn.setToolTip(t('最大化 / 还原'))
+        self._new_session_btn.setText(t('＋ 新建对话'))
+        self._skill_label.setText(t('技能:'))
+        self._clear_ctx_btn.setText(t('清空上下文'))
+        self._send_btn.setToolTip(t('发送'))
+        # 技能按钮 / MCP 按钮按当前状态重设
+        self._update_skill_button(self._current_skill_name())
+        self._update_mcp_btn_text()
+
 
     def _apply_theme(self):
         self._theme = get_theme(self._config.get('theme.popup_style', 'dark'))
@@ -1613,7 +1642,7 @@ class ChatWindow(QWidget):
         quote = selected_text.strip()
         if len(quote) > 200:
             quote = quote[:200] + "…"
-        self._store.append_message(sid, 'user', f"[自定义功能: {action_name}]\n{quote}")
+        self._store.append_message(sid, 'user', t('[自定义功能: {0}]\n{1}', action_name, quote))
         self._store.append_message(sid, 'assistant', result or "（已执行，无返回内容）")
         self._render_messages()
 
@@ -2014,7 +2043,7 @@ class ChatWindow(QWidget):
         fm = self._session_list.fontMetrics()
         self._session_list.clear()
         for s in self._store.list_sessions():
-            title = (s.get('title') or "新对话").strip() or "新对话"
+            title = (s.get('title') or t('新对话')).strip() or t('新对话')
             elided = fm.elidedText(title, Qt.TextElideMode.ElideRight, title_w)
             try:
                 when = datetime.fromtimestamp(s.get('updated_at', 0) / 1000).strftime('%m-%d %H:%M')
@@ -2076,14 +2105,14 @@ class ChatWindow(QWidget):
             return
         sid = item.data(Qt.ItemDataRole.UserRole)
         menu = QMenu(self)
-        rename_act = menu.addAction("重命名")
-        delete_act = menu.addAction("删除")
+        rename_act = menu.addAction(t('重命名'))
+        delete_act = menu.addAction(t('删除'))
         chosen = menu.exec(self._session_list.mapToGlobal(pos))
         if chosen == rename_act:
             # 预填取存储里的完整标题（item.text() 是省略/含时间的显示文本）
             session = self._store.get_session(sid) or {}
-            old_title = (session.get('title') or "新对话").strip() or "新对话"
-            new_title, ok = QInputDialog.getText(self, "重命名对话", "新名称:", text=old_title)
+            old_title = (session.get('title') or t('新对话')).strip() or t('新对话')
+            new_title, ok = QInputDialog.getText(self, t('重命名对话'), t('新名称:'), text=old_title)
             if ok and new_title.strip():
                 self._store.rename_session(sid, new_title)
                 self._reload_session_list()
@@ -2095,7 +2124,7 @@ class ChatWindow(QWidget):
             self._cancel_worker()
             self._store.clear_messages(self._current_session_id)
             # 上下文从零开始：会话名一并重置，滚动摘要同步清空避免残留旧语境
-            self._store.rename_session(self._current_session_id, "新对话")
+            self._store.rename_session(self._current_session_id, t('新对话'))
             self._store.set_session_summary(self._current_session_id, "", 0)
             self._reload_session_list()
             self._render_messages()
@@ -2109,13 +2138,13 @@ class ChatWindow(QWidget):
         skills = manager.load_skills()
 
         # 技能执行总开关（与 MCP 菜单的"启用 MCP 工具"对应）
-        enable_act = self._skill_menu.addAction("启用技能执行")
+        enable_act = self._skill_menu.addAction(t('启用技能执行'))
         enable_act.setCheckable(True)
         enable_act.setChecked(self._config.get('skills.enabled', False))
         enable_act.toggled.connect(self._on_toggle_skills_enabled)
         self._skill_menu.addSeparator()
 
-        none_act = self._skill_menu.addAction("无技能")
+        none_act = self._skill_menu.addAction(t('无技能'))
         none_act.setCheckable(True)
         current = self._current_skill_name()
         none_act.setChecked(not current)
@@ -2131,7 +2160,7 @@ class ChatWindow(QWidget):
             act.triggered.connect(lambda checked=False, n=skill.name: self._activate_skill(n))
 
         self._skill_menu.addSeparator()
-        open_dir_act = self._skill_menu.addAction("打开 skills 目录…")
+        open_dir_act = self._skill_menu.addAction(t('打开 skills 目录…'))
         open_dir_act.triggered.connect(
             lambda: os.startfile(str(manager.skills_dir))
         )
@@ -2141,7 +2170,7 @@ class ChatWindow(QWidget):
         return (session or {}).get('skill', '')
 
     def _update_skill_button(self, skill_name: str):
-        self._skill_combo.setText(f"技能: {skill_name}" if skill_name else "无技能")
+        self._skill_combo.setText(t('技能: {0}', skill_name) if skill_name else t('无技能'))
 
     def _activate_skill(self, skill_name: str):
         if self._current_session_id:
@@ -2158,7 +2187,7 @@ class ChatWindow(QWidget):
         self._mcp_menu.clear()
         manager = get_mcp_manager()
 
-        enable_act = self._mcp_menu.addAction("启用 MCP 工具")
+        enable_act = self._mcp_menu.addAction(t('启用 MCP 工具'))
         enable_act.setCheckable(True)
         enable_act.setChecked(self._config.get('mcp.enabled', False))
         enable_act.toggled.connect(self._on_toggle_mcp_enabled)
@@ -2166,44 +2195,44 @@ class ChatWindow(QWidget):
         self._mcp_menu.addSeparator()
 
         if not manager.available:
-            self._mcp_menu.addAction("未安装 mcp 包（pip install mcp）").setEnabled(False)
+            self._mcp_menu.addAction(t('未安装 mcp 包（pip install mcp）')).setEnabled(False)
         elif self._mcp_connecting or manager.reconnecting:
-            self._mcp_menu.addAction("⏳ 正在连接 MCP 服务器…").setEnabled(False)
+            self._mcp_menu.addAction(t('⏳ 正在连接 MCP 服务器…')).setEnabled(False)
         else:
             statuses = manager.server_statuses()
             if not statuses:
-                self._mcp_menu.addAction("未配置 MCP 服务器").setEnabled(False)
+                self._mcp_menu.addAction(t('未配置 MCP 服务器')).setEnabled(False)
             disabled_tools = set(self._config.get('mcp.disabled_tools', []) or [])
             tools_by_server = {}
-            for t in manager.list_tools():
-                tools_by_server.setdefault(t.server, []).append(t)
+            for tool in manager.list_tools():
+                tools_by_server.setdefault(tool.server, []).append(tool)
             for st in statuses:
                 if st.connected:
                     server_tools = tools_by_server.get(st.name, [])
                     sub = StayOpenMenu(
-                        f"✓ {st.name}（{len(server_tools)} 个工具）", self._mcp_menu)
+                        t('✓ {0}（{1} 个工具）', st.name, len(server_tools)), self._mcp_menu)
                     self._mcp_menu.addMenu(sub)
                     if not server_tools:
-                        sub.addAction("（无工具）").setEnabled(False)
-                    for t in server_tools:
-                        tid = f"{t.server}/{t.name}"
-                        act = sub.addAction(t.name)
+                        sub.addAction(t('（无工具）')).setEnabled(False)
+                    for tool in server_tools:
+                        tid = f"{tool.server}/{tool.name}"
+                        act = sub.addAction(tool.name)
                         act.setCheckable(True)
                         act.setChecked(tid not in disabled_tools)
-                        act.setToolTip((t.description or "").strip() or "（无描述）")
+                        act.setToolTip((tool.description or "").strip() or t('（无描述）'))
                         act.toggled.connect(
                             lambda checked, _tid=tid: self._on_toggle_mcp_tool(_tid))
                 else:
-                    label = f"✗ {st.name}：{st.error[:30] or '连接失败'}"
+                    label = f"✗ {st.name}：{st.error[:30] or t('连接失败')}"
                     act = self._mcp_menu.addAction(label)
                     act.setEnabled(False)
                     # 完整失败原因悬停可见（详细错误也已写入日志）
-                    act.setToolTip(st.error or "连接失败")
+                    act.setToolTip(st.error or t('连接失败'))
 
         self._mcp_menu.addSeparator()
-        reconnect_act = self._mcp_menu.addAction("重新连接")
+        reconnect_act = self._mcp_menu.addAction(t('重新连接'))
         reconnect_act.triggered.connect(self._on_mcp_reconnect)
-        open_cfg_act = self._mcp_menu.addAction("打开配置文件…")
+        open_cfg_act = self._mcp_menu.addAction(t('打开配置文件…'))
         open_cfg_act.triggered.connect(
             lambda: os.startfile(str(manager.config_path))
         )
@@ -2215,13 +2244,13 @@ class ChatWindow(QWidget):
         manager = get_mcp_manager()
         tools = manager.list_tools()
         _disabled = set(self._config.get('mcp.disabled_tools', []) or [])
-        enabled_tools = [t for t in tools
-                         if f"{t.server}/{t.name}" not in _disabled]
+        enabled_tools = [tool for tool in tools
+                         if f"{tool.server}/{tool.name}" not in _disabled]
         if self._mcp_connecting or manager.reconnecting:
-            self._mcp_btn.setText("MCP（连接中…）")
+            self._mcp_btn.setText(t('MCP（连接中…）'))
         else:
             self._mcp_btn.setText(
-                f"MCP（{len(enabled_tools)}）" if enabled_tools else "MCP")
+                t('MCP（{0}）', len(enabled_tools)) if enabled_tools else "MCP")
 
     def _on_toggle_mcp_enabled(self, checked: bool):
         self._config.set('mcp.enabled', checked)
@@ -2299,7 +2328,7 @@ class ChatWindow(QWidget):
             wl = QVBoxLayout(wrap)
             wl.setContentsMargins(0, 90, 0, 0)
             wl.setSpacing(8)
-            title = QLabel("👋 开始对话")
+            title = QLabel(t('👋 开始对话'))
             title.setObjectName("emptyTitle")
             title.setAlignment(Qt.AlignmentFlag.AlignCenter)
             title.setMaximumWidth(usable)
@@ -2441,7 +2470,7 @@ class ChatWindow(QWidget):
         btn.setFixedSize(22, 22)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        btn.setToolTip("回退到这条消息（删除之后的对话）")
+        btn.setToolTip(t('回退到这条消息（删除之后的对话）'))
         theme = get_theme()
         # 透明背景无边框；图标色按气泡底色对比（深气泡白/浅气泡黑）
         icon_color = self._contrast_color(bubble_bg)
@@ -2474,9 +2503,9 @@ class ChatWindow(QWidget):
         menu = QMenu(self)
         act_rewind = None
         if not (self._worker and self._worker.isRunning()):
-            act_rewind = menu.addAction("↵ 回退到这条消息")
+            act_rewind = menu.addAction(t('↵ 回退到这条消息'))
             menu.addSeparator()
-        act_copy = menu.addAction("复制消息")
+        act_copy = menu.addAction(t('复制消息'))
         chosen = menu.exec(global_pos)
         if chosen is act_rewind and act_rewind is not None:
             self._rewind_to(index)
@@ -2576,7 +2605,7 @@ class ChatWindow(QWidget):
 
         header = QHBoxLayout()
         header.setSpacing(6)
-        title = QLabel("💭 思考过程")
+        title = QLabel(t('💭 思考过程'))
         title.setObjectName("reasoningTitle")
         header.addWidget(title)
         header.addStretch()
@@ -2956,14 +2985,14 @@ class ChatWindow(QWidget):
             return
         log_info(f"技能脚本确认弹窗: {skill_name}")
         box = QMessageBox(self)
-        box.setWindowTitle("技能脚本执行确认")
+        box.setWindowTitle(t('技能脚本执行确认'))
         box.setIcon(QMessageBox.Icon.Question)
-        box.setText(f"AI 请求执行技能目录中的脚本：\n\n{desc}")
+        box.setText(t('AI 请求执行技能目录中的脚本：\n\n{0}', desc))
         box.setStandardButtons(QMessageBox.StandardButton.Ok
                                | QMessageBox.StandardButton.Cancel)
-        box.button(QMessageBox.StandardButton.Ok).setText("允许执行")
-        box.button(QMessageBox.StandardButton.Cancel).setText("拒绝")
-        cb = QCheckBox("本会话内此技能不再询问")
+        box.button(QMessageBox.StandardButton.Ok).setText(t('允许执行'))
+        box.button(QMessageBox.StandardButton.Cancel).setText(t('拒绝'))
+        cb = QCheckBox(t('本会话内此技能不再询问'))
         box.setCheckBox(cb)
         # 模态弹窗必须抢到前台：QMessageBox 是应用级模态，一旦弹窗
         # 落在后面/看不见，整个应用就被模态锁住——其它窗口都能
@@ -3059,7 +3088,7 @@ class ChatWindow(QWidget):
         if self._current_session_id:
             # 清理本轮的空 assistant 占位，失败不残留空消息
             self._store.remove_trailing_empty_assistant(self._current_session_id)
-        self._render_messages(streaming_extra=f"[请求失败] {error}")
+        self._render_messages(streaming_extra=t('[请求失败] {0}', error))
 
     def _cancel_worker(self):
         worker = self._worker

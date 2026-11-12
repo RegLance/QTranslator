@@ -1,4 +1,9 @@
 """启动动画窗口 — 高帧率缩放脉动 + 状态文字，初始化完成后淡出"""
+try:
+    from ..utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 import math
 import time as _time
 from pathlib import Path
@@ -99,7 +104,7 @@ class SplashScreen(QWidget):
         self._dot_count = 0
 
         self._on_finished_callback: Optional[callable] = None
-        self._status_text = "正在启动"
+        self._status_text = t('正在启动')
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)

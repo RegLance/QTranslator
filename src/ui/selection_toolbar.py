@@ -7,6 +7,11 @@
 窗口为无边框置顶工具窗口，不抢占焦点（WA_ShowWithoutActivating），
 鼠标移出后自动隐藏。
 """
+try:
+    from ..utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 import math
 import os
 import sys
@@ -99,6 +104,17 @@ class SelectionToolbar(QWidget):
             from src.utils.theme import get_theme_manager
         get_theme_manager().theme_changed.connect(self._apply_theme)
 
+        # 语言切换：工具栏可见时重建按钮（每次弹出本就会 _rebuild，此处兜底）
+        try:
+            from ..utils.i18n import get_i18n_manager
+        except ImportError:
+            from src.utils.i18n import get_i18n_manager
+        get_i18n_manager().language_changed.connect(self._on_language_changed)
+
+    def _on_language_changed(self):
+        if self.isVisible():
+            self._rebuild()
+
     # ------------------------------------------------------------------
     # 主题
     # ------------------------------------------------------------------
@@ -151,10 +167,10 @@ class SelectionToolbar(QWidget):
         self._apply_theme()
 
         # 内置四功能（始终显示）
-        self._row.addWidget(self._make_button("🌐 翻译", self._on_translate))
-        self._row.addWidget(self._make_button("✨ 润色", self._on_polish))
-        self._row.addWidget(self._make_button("📝 总结", self._on_summarize))
-        self._row.addWidget(self._make_button("💬 AI对话", self._on_chat))
+        self._row.addWidget(self._make_button(t('🌐 翻译'), self._on_translate))
+        self._row.addWidget(self._make_button(t('✨ 润色'), self._on_polish))
+        self._row.addWidget(self._make_button(t('📝 总结'), self._on_summarize))
+        self._row.addWidget(self._make_button(t('💬 AI对话'), self._on_chat))
 
         # actions/ 目录 .py 扩展：默认不显示，在设置中勾选后才出现
         try:
@@ -171,7 +187,7 @@ class SelectionToolbar(QWidget):
             for action in actions[:6]:  # 最多显示 6 个，避免工具栏过长
                 label = f"{action.icon} {action.name}".strip()
                 btn = self._make_button(label, lambda checked=False, a=action: self._on_action(a))
-                btn.setToolTip(f"自定义功能：{action.file_path}")
+                btn.setToolTip(t('自定义功能：{0}', action.file_path))
                 self._row.addWidget(btn)
 
         self._row.addStretch()

@@ -1,4 +1,9 @@
 """帮助窗口模块 - 显示软件功能和使用说明"""
+try:
+    from ..utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 from typing import Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -78,6 +83,13 @@ class HelpWindow(QWidget):
             from src.utils.theme import get_theme_manager
         get_theme_manager().theme_changed.connect(self.update_theme)
 
+        # 语言切换：重建帮助正文
+        try:
+            from ..utils.i18n import get_i18n_manager
+        except ImportError:
+            from src.utils.i18n import get_i18n_manager
+        get_i18n_manager().language_changed.connect(self.retranslate_ui)
+
     def _setup_ui(self):
         """创建UI"""
         theme = get_theme(self._theme_style)
@@ -119,7 +131,7 @@ class HelpWindow(QWidget):
         title_bar_layout.setContentsMargins(0, 0, 0, 0)
 
         # 标题
-        self._title_label = QLabel(f"{APP_NAME} - 帮助")
+        self._title_label = QLabel(t('{0} - 帮助', APP_NAME))
         self._title_label.setObjectName("helpTitleLabel")
         self._title_label.setStyleSheet(f"""
             #helpTitleLabel {{
@@ -206,139 +218,7 @@ class HelpWindow(QWidget):
         self._help_layout.setSpacing(12)
         self._help_layout.setContentsMargins(5, 0, 5, 0)
 
-        # 功能介绍
-        self._add_section(self._help_layout, "功能介绍", theme)
-        self._add_text(self._help_layout, f"""
-{APP_NAME} 是一款智能翻译助手，基于大语言模型提供高质量的翻译服务。
-
-主要功能：
-• 划词翻译：选中文本后自动出现翻译按钮，点击即可翻译
-• 快捷键翻译：按快捷键主动翻译当前选中内容（适合 Excel、PowerPoint 等划词按钮不出现的场景）
-• 润色功能：对文本进行润色改进，可在设置中开启差异标记
-• 总结功能：对长文本进行智能总结
-• 识图翻译：截图或粘贴图片到原文框，自动识别图中文字后执行翻译、润色或总结
-• 划词写作：翻译并直接替换原文，支持保留原文选项
-• 翻译历史：自动保存历史记录，方便查阅和管理
-• 单词收藏：译文区点击星标收藏单词，支持浏览、搜索、删除、导出 JSON、朗读
-• 词汇短文：按复习次数选取收藏词，选择体裁后由 API 生成英语短文，辅助词汇巩固
-• 多主题：支持深色、浅色及多种彩色主题，也可自定义主题
-• 语种检测：语种联网（百度 / Google / Bing）或本地检测，联网检查失败则退回本地检查方式
-• 朗读：翻译窗口、历史记录窗口、单词收藏窗口均可朗读
-• 默认功能：点击功能按钮时会同步设为 Enter 键执行的默认功能
-• 单词卡片：双击选中单个英文单词自动弹出卡片，显示音标、释义、形态变化、速记，支持收藏和朗读
-• AI 对话：独立的多会话对话窗口，流式输出，支持 Skills 与 MCP 工具，可回退到历史某句对话
-• 更新检查：自动检测新版本并在标题栏提示，可在设置中关闭
-• 开机自启：可在设置中开启，更换 exe 后启动路径自动修复
-• 划词黑名单：指定程序中不出现划词按钮，避免与软件自带浮动工具栏冲突，支持手动管理
-        """, theme)
-
-        # 使用方法
-        self._add_section(self._help_layout, "使用方法", theme)
-        self._add_text(self._help_layout, """
-1. 首次使用
-   • 右键点击托盘图标 → 设置，配置 API Key、Base URL 和 Model。
-
-2. 划词翻译
-   • 选中文本后会出现翻译按钮
-   • 点击按钮即可显示翻译结果
-   • 支持流式输出，实时显示翻译内容
-   • 在 Excel、PowerPoint 等部分应用中默认不出现划词按钮（避免与其自带浮动工具栏冲突），请改用「选中翻译」快捷键
-
-3. 翻译窗口
-   • 右键托盘图标 → 翻译窗口，或双击托盘图标
-   • 输入文本后点击"翻译"、"润色"或"总结"按钮
-   • 按 Enter 键执行当前选中的默认功能，Shift+Enter 换行
-   • 点击功能按钮会执行对应功能，并同步设为默认功能（选中按钮高亮显示）
-   • 可在设置中开启"固定窗口高度"或"记忆窗口位置"
-   • 识图翻译（截图）：点击原文框右下角「截图」按钮 → 拖动框选屏幕区域 → 回车 / 双击 / ✓ 确认（Esc / ✗ 取消）
-   • 识图翻译（粘贴）：先复制一张图片（截图到剪贴板，或复制图片文件），再在原文框 Ctrl+V 粘贴
-   • 图片进入原文框后显示 [图片]，点击"翻译"/"润色"/"总结"（或按 Enter）会先自动识别图中文字、再执行对应功能
-
-4. 默认功能设置
-   • 左键点击"翻译"、"润色"或"总结"按钮中的任意一个
-   • 该按钮会执行对应功能，并被设为默认功能、以高亮颜色显示
-   • 按 Enter 键时会自动执行选中的默认功能
-   • 设置会持久化保存，程序重启后依然有效
-
-5. 选中翻译（快捷键）
-   • 在当前应用先选中需要翻译的文字，然后按下快捷键（默认 Ctrl+`，Esc 下方键）
-   • 程序会读取当前选中内容并在鼠标附近打开翻译窗口，取词优先级与自动划词一致
-   • 若未检测到选中内容，可先使用 Ctrl+C 复制后再试或确认输入焦点在正文区域
-   • 快捷键可在设置 → 「选中翻译」中修改
-
-6. 划词写作
-   • 选中文本后按 Ctrl+I
-   • 翻译结果会直接替换原文或插入在原文下方
-   • 可在设置中开启"保留原文"选项
-
-7. 润色差异
-   • 在设置中勾选"显示润色差异"后，程序将原文与润色结果做词/短语级比对并高亮
-   • 浅红背景表示相对原文删除或替换前的片段，浅绿背景表示新增或替换后的片段
-
-8. 单词收藏与词汇短文
-   • 翻译完成后，点击译文区右下角的星标按钮即可收藏单词（原文+译文配对保存）
-   • 右键托盘图标 → 单词收藏，打开收藏窗口
-   • 收藏窗口支持：浏览、搜索、双击条目在翻译窗口中打开、删除、导出 JSON
-   • 点击条目旁的朗读按钮可朗读单词，点击短文区的朗读按钮可朗读短文
-   • 词汇短文：在收藏窗口下方选择体裁（小故事/简报/歌词/诗等），点击「生成短文」
-   • 程序按复习次数从高到低取最多 50 条收藏词，由 API 生成约 160 词英语短文
-   • 生成过程中可点击「停止」中断
-
-9. 快捷键（可在设置中自定义）
-   • Ctrl+O：唤醒翻译窗口
-   • Ctrl+`：选中翻译（Esc 下方、Tab 上方的 ` 键）
-   • Ctrl+I：划词写作
-   • Esc：关闭窗口（翻译窗口等）
-
-10. 语种检测与朗读（均在设置中）
-   • 「语种检测」：联网（百度 / Google / Bing）或「本地」；联网失败则用本地检查
-   • 「朗读 (TTS)」：Edge TTS或系统离线TTS；Edge TTS失败则自动回退系统离线TTS ；
-
-11. 单词卡片（划词查词）
-   • 应用内：设置 → 翻译窗口设置勾选「启用划词查词（应用内）」，在原文框或译文框中双击选中单个英文单词
-   • 应用外：勾选「启用划词查词（应用外）」后，在桌面任意位置（浏览器、文档等）双击选中单词
-   • 卡片显示单词、音标、释义、形态变化和速记；⭐ 按钮收藏到单词本，喇叭按钮朗读发音
-   • 点击卡片外任意位置关闭；查询中双击新单词会直接切换为新单词的卡片
-
-12. AI 对话
-   • 入口：翻译窗口标题栏「AI」按钮，或右键托盘图标 → AI 对话
-   • 左侧会话列表支持新建、重命名、删除会话，对话内容与上下文保存在本地
-   • Skills：顶部选择 Skill 注入专项能力；MCP：勾选启用已配置的 MCP 工具
-   • 点击「清空上下文」可让 AI 忘记之前的对话内容
-   • 回退：鼠标悬停某条消息，点击气泡右下角 ↵（或右键消息 → 回退到这条消息），丢弃之后的对话并从该句重新开始
-   • 右键消息可复制内容；设置 → AI 对话中可取消「与翻译共用 API 配置」单独配置模型
-
-13. 更新检查与开机自启
-   • 检测到新版本时标题栏出现 ⬆️ 按钮，点击即可更新；设置中勾选「禁用更新检查」可关闭
-   • 设置中勾选「开机自动启动」后重启自动运行；更换或移动 exe 后下次启动会自动修复启动路径
-
-14. 划词黑名单
-   • 黑名单中的程序不显示划词按钮（避免与 Excel、PowerPoint 等软件自带的浮动工具栏冲突），可改用「选中翻译」快捷键
-   • 设置 → 划词黑名单：左侧为生效中的黑名单，点「→」移出；右侧为已移出的条目，点「←」重新加入
-   • 在下方输入框输入进程名（如 EXCEL.EXE）可手动添加；进程名可在任务管理器「详细信息」页查看
-        """, theme)
-
-        # 注意事项
-        self._add_section(self._help_layout, "注意事项", theme)
-        self._add_text(self._help_layout, """
-• 请确保已正确配置 API Key、Base URL 和 Model
-• 翻译方向：中文→英文，其它→中文等
-• 单词翻译会显示详细释义、音标和例句
-• 翻译结果仅供参考，请核实重要内容
-• 词汇短文、润色、总结等均消耗 LLM 用量
-• 单词收藏数据存储在本地，卸载前可先用导出 JSON 备份
-• 如遇到问题，可查看日志文件或检查API配置
-• 若某应用不出现划词按钮，通常属于有意规避冲突的设计，请使用「选中翻译」快捷键
-• 单词卡片仅对单个英文单词生效，选中多个单词或句子不会弹出，请使用正常翻译
-        """, theme)
-
-        # 更新信息
-        self._add_section(self._help_layout, "更新信息", theme)
-        self._add_text(self._help_layout, f"""
-{UPDATE_INFO_TEXT}
-        """, theme)
-
-        self._help_layout.addStretch()
+        self._build_help_sections(theme)
 
         self._scroll_area.setWidget(self._help_content)
         content_layout.addWidget(self._scroll_area, 1)
@@ -351,7 +231,7 @@ class HelpWindow(QWidget):
         btn_layout.setContentsMargins(0, 0, 0, 0)
 
         # 联系我们按钮
-        self._contact_btn = QPushButton("联系我们")
+        self._contact_btn = QPushButton(t('联系我们'))
         self._contact_btn.setObjectName("contactBtn")
         self._contact_btn.setFixedSize(100, 36)
         self._contact_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -377,7 +257,7 @@ class HelpWindow(QWidget):
 
         btn_layout.addStretch()
 
-        self._ok_btn = QPushButton("知道了")
+        self._ok_btn = QPushButton(t('知道了'))
         self._ok_btn.setFixedSize(100, 36)
         self._ok_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._ok_btn.setStyleSheet(f"""
@@ -396,6 +276,45 @@ class HelpWindow(QWidget):
 
         btn_layout.addWidget(self._ok_btn)
         content_layout.addWidget(self._btn_bar)
+
+
+    def _build_help_sections(self, theme):
+        """构建帮助正文各章节（语言切换时重建）"""
+        # 功能介绍
+        self._add_section(self._help_layout, t('功能介绍'), theme)
+        self._add_text(self._help_layout, t('\n{0} 是一款智能翻译助手，基于大语言模型提供高质量的翻译服务。\n\n主要功能：\n• 划词翻译：选中文本后自动出现翻译按钮，点击即可翻译\n• 快捷键翻译：按快捷键主动翻译当前选中内容（适合 Excel、PowerPoint 等划词按钮不出现的场景）\n• 润色功能：对文本进行润色改进，可在设置中开启差异标记\n• 总结功能：对长文本进行智能总结\n• 识图翻译：截图或粘贴图片到原文框，自动识别图中文字后执行翻译、润色或总结\n• 划词写作：翻译并直接替换原文，支持保留原文选项\n• 翻译历史：自动保存历史记录，方便查阅和管理\n• 单词收藏：译文区点击星标收藏单词，支持浏览、搜索、删除、导出 JSON、朗读\n• 词汇短文：按复习次数选取收藏词，选择体裁后由 API 生成英语短文，辅助词汇巩固\n• 多主题：支持深色、浅色及多种彩色主题，也可自定义主题\n• 语种检测：语种联网（百度 / Google / Bing）或本地检测，联网检查失败则退回本地检查方式\n• 朗读：翻译窗口、历史记录窗口、单词收藏窗口均可朗读\n• 默认功能：点击功能按钮时会同步设为 Enter 键执行的默认功能\n• 单词卡片：双击选中单个英文单词自动弹出卡片，显示音标、释义、形态变化、速记，支持收藏和朗读\n• AI 对话：独立的多会话对话窗口，流式输出，支持 Skills 与 MCP 工具，可回退到历史某句对话\n• 更新检查：自动检测新版本并在标题栏提示，可在设置中关闭\n• 开机自启：可在设置中开启，更换 exe 后启动路径自动修复\n• 划词黑名单：指定程序中不出现划词按钮，避免与软件自带浮动工具栏冲突，支持手动管理\n        ', APP_NAME), theme)
+
+        # 使用方法
+        self._add_section(self._help_layout, t('使用方法'), theme)
+        self._add_text(self._help_layout, t('\n1. 首次使用\n   • 右键点击托盘图标 → 设置，配置 API Key、Base URL 和 Model。\n\n2. 划词翻译\n   • 选中文本后会出现翻译按钮\n   • 点击按钮即可显示翻译结果\n   • 支持流式输出，实时显示翻译内容\n   • 在 Excel、PowerPoint 等部分应用中默认不出现划词按钮（避免与其自带浮动工具栏冲突），请改用「选中翻译」快捷键\n\n3. 翻译窗口\n   • 右键托盘图标 → 翻译窗口，或双击托盘图标\n   • 输入文本后点击"翻译"、"润色"或"总结"按钮\n   • 按 Enter 键执行当前选中的默认功能，Shift+Enter 换行\n   • 点击功能按钮会执行对应功能，并同步设为默认功能（选中按钮高亮显示）\n   • 可在设置中开启"固定窗口高度"或"记忆窗口位置"\n   • 识图翻译（截图）：点击原文框右下角「截图」按钮 → 拖动框选屏幕区域 → 回车 / 双击 / ✓ 确认（Esc / ✗ 取消）\n   • 识图翻译（粘贴）：先复制一张图片（截图到剪贴板，或复制图片文件），再在原文框 Ctrl+V 粘贴\n   • 图片进入原文框后显示 [图片]，点击"翻译"/"润色"/"总结"（或按 Enter）会先自动识别图中文字、再执行对应功能\n\n4. 默认功能设置\n   • 左键点击"翻译"、"润色"或"总结"按钮中的任意一个\n   • 该按钮会执行对应功能，并被设为默认功能、以高亮颜色显示\n   • 按 Enter 键时会自动执行选中的默认功能\n   • 设置会持久化保存，程序重启后依然有效\n\n5. 选中翻译（快捷键）\n   • 在当前应用先选中需要翻译的文字，然后按下快捷键（默认 Ctrl+`，Esc 下方键）\n   • 程序会读取当前选中内容并在鼠标附近打开翻译窗口，取词优先级与自动划词一致\n   • 若未检测到选中内容，可先使用 Ctrl+C 复制后再试或确认输入焦点在正文区域\n   • 快捷键可在设置 → 「选中翻译」中修改\n\n6. 划词写作\n   • 选中文本后按 Ctrl+I\n   • 翻译结果会直接替换原文或插入在原文下方\n   • 可在设置中开启"保留原文"选项\n\n7. 润色差异\n   • 在设置中勾选"显示润色差异"后，程序将原文与润色结果做词/短语级比对并高亮\n   • 浅红背景表示相对原文删除或替换前的片段，浅绿背景表示新增或替换后的片段\n\n8. 单词收藏与词汇短文\n   • 翻译完成后，点击译文区右下角的星标按钮即可收藏单词（原文+译文配对保存）\n   • 右键托盘图标 → 单词收藏，打开收藏窗口\n   • 收藏窗口支持：浏览、搜索、双击条目在翻译窗口中打开、删除、导出 JSON\n   • 点击条目旁的朗读按钮可朗读单词，点击短文区的朗读按钮可朗读短文\n   • 词汇短文：在收藏窗口下方选择体裁（小故事/简报/歌词/诗等），点击「生成短文」\n   • 程序按复习次数从高到低取最多 50 条收藏词，由 API 生成约 160 词英语短文\n   • 生成过程中可点击「停止」中断\n\n9. 快捷键（可在设置中自定义）\n   • Ctrl+O：唤醒翻译窗口\n   • Ctrl+`：选中翻译（Esc 下方、Tab 上方的 ` 键）\n   • Ctrl+I：划词写作\n   • Esc：关闭窗口（翻译窗口等）\n\n10. 语种检测与朗读（均在设置中）\n   • 「语种检测」：联网（百度 / Google / Bing）或「本地」；联网失败则用本地检查\n   • 「朗读 (TTS)」：Edge TTS或系统离线TTS；Edge TTS失败则自动回退系统离线TTS ；\n\n11. 单词卡片（划词查词）\n   • 应用内：设置 → 翻译窗口设置勾选「启用划词查词（应用内）」，在原文框或译文框中双击选中单个英文单词\n   • 应用外：勾选「启用划词查词（应用外）」后，在桌面任意位置（浏览器、文档等）双击选中单词\n   • 卡片显示单词、音标、释义、形态变化和速记；⭐ 按钮收藏到单词本，喇叭按钮朗读发音\n   • 点击卡片外任意位置关闭；查询中双击新单词会直接切换为新单词的卡片\n\n12. AI 对话\n   • 入口：翻译窗口标题栏「AI」按钮，或右键托盘图标 → AI 对话\n   • 左侧会话列表支持新建、重命名、删除会话，对话内容与上下文保存在本地\n   • Skills：顶部选择 Skill 注入专项能力；MCP：勾选启用已配置的 MCP 工具\n   • 点击「清空上下文」可让 AI 忘记之前的对话内容\n   • 回退：鼠标悬停某条消息，点击气泡右下角 ↵（或右键消息 → 回退到这条消息），丢弃之后的对话并从该句重新开始\n   • 右键消息可复制内容；设置 → AI 对话中可取消「与翻译共用 API 配置」单独配置模型\n\n13. 更新检查与开机自启\n   • 检测到新版本时标题栏出现 ⬆️ 按钮，点击即可更新；设置中勾选「禁用更新检查」可关闭\n   • 设置中勾选「开机自动启动」后重启自动运行；更换或移动 exe 后下次启动会自动修复启动路径\n\n14. 划词黑名单\n   • 黑名单中的程序不显示划词按钮（避免与 Excel、PowerPoint 等软件自带的浮动工具栏冲突），可改用「选中翻译」快捷键\n   • 设置 → 划词黑名单：左侧为生效中的黑名单，点「→」移出；右侧为已移出的条目，点「←」重新加入\n   • 在下方输入框输入进程名（如 EXCEL.EXE）可手动添加；进程名可在任务管理器「详细信息」页查看\n        '), theme)
+
+        # 注意事项
+        self._add_section(self._help_layout, t('注意事项'), theme)
+        self._add_text(self._help_layout, t('\n• 请确保已正确配置 API Key、Base URL 和 Model\n• 翻译方向：中文→英文，其它→中文等\n• 单词翻译会显示详细释义、音标和例句\n• 翻译结果仅供参考，请核实重要内容\n• 词汇短文、润色、总结等均消耗 LLM 用量\n• 单词收藏数据存储在本地，卸载前可先用导出 JSON 备份\n• 如遇到问题，可查看日志文件或检查API配置\n• 若某应用不出现划词按钮，通常属于有意规避冲突的设计，请使用「选中翻译」快捷键\n• 单词卡片仅对单个英文单词生效，选中多个单词或句子不会弹出，请使用正常翻译\n        '), theme)
+
+        # 更新信息
+        self._add_section(self._help_layout, t('更新信息'), theme)
+        self._add_text(self._help_layout, f"""
+{UPDATE_INFO_TEXT}
+        """, theme)
+
+        self._help_layout.addStretch()
+
+    def _clear_help_sections(self):
+        """清空帮助正文布局（用于语言切换重建）"""
+        while self._help_layout.count():
+            item = self._help_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def retranslate_ui(self):
+        """语言切换：重设标题/按钮并重建正文（窗口尺寸不变）"""
+        self._title_label.setText(t('{0} - 帮助', APP_NAME))
+        self._contact_btn.setText(t('联系我们'))
+        self._ok_btn.setText(t('知道了'))
+        self._clear_help_sections()
+        self._build_help_sections(get_theme(self._theme_style))
 
     def _add_section(self, layout, title, theme):
         """添加章节标题"""

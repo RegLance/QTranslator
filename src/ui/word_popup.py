@@ -1,5 +1,10 @@
 """单词查询浮动弹窗模块 — 选中英文单词时显示发音、释义与收藏入口。"""
 from __future__ import annotations
+try:
+    from ..utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 
 import os
 import re
@@ -119,9 +124,9 @@ class _DictLookupWorker(QThread):
                     parts = [definition, forms_line, '\n'.join(mnemonic_lines).strip()]
                     self.result_ready.emit('|||'.join(parts), self._generation)
                 else:
-                    self.lookup_error.emit("未查到释义", self._generation)
+                    self.lookup_error.emit(t('未查到释义'), self._generation)
             else:
-                self.lookup_error.emit("未查到释义", self._generation)
+                self.lookup_error.emit(t('未查到释义'), self._generation)
         except Exception as e:
             if not self._cancelled:
                 self.lookup_error.emit(str(e), self._generation)
@@ -193,6 +198,13 @@ class WordPopup(QFrame):
             from src.utils.theme import get_theme_manager
         get_theme_manager().theme_changed.connect(self.update_theme)
 
+        # 语言切换：即时重设文案（窗口尺寸不变）
+        try:
+            from ..utils.i18n import get_i18n_manager
+        except ImportError:
+            from src.utils.i18n import get_i18n_manager
+        get_i18n_manager().language_changed.connect(self.retranslate_ui)
+
     # ------------------------------------------------------------------
     # UI 构建
     # ------------------------------------------------------------------
@@ -253,7 +265,7 @@ class WordPopup(QFrame):
         self._collect_btn.setObjectName("popupCollectBtn")
         self._collect_btn.setFixedSize(30, 30)
         self._collect_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._collect_btn.setToolTip("收藏到单词本")
+        self._collect_btn.setToolTip(t('收藏到单词本'))
         self._collect_btn.clicked.connect(self._on_collect)
         header_row.addWidget(self._collect_btn)
 
@@ -262,7 +274,7 @@ class WordPopup(QFrame):
         self._speak_btn.setObjectName("popupSpeakBtn")
         self._speak_btn.setFixedSize(30, 30)
         self._speak_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._speak_btn.setToolTip("朗读发音")
+        self._speak_btn.setToolTip(t('朗读发音'))
         self._speak_btn.setIcon(self._create_speak_icon())
         self._speak_btn.clicked.connect(self._on_speak)
         header_row.addWidget(self._speak_btn)
@@ -338,7 +350,7 @@ class WordPopup(QFrame):
         self._mnemonic_label.hide()
 
         # === 加载提示（查询中显示） ===
-        self._loading_label = QLabel("查询中…")
+        self._loading_label = QLabel(t('查询中…'))
         self._loading_label.setObjectName("loadingLabel")
         self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         load_font = QFont()
@@ -427,6 +439,14 @@ class WordPopup(QFrame):
             self._tts_speak_prep.start_prepare()
         else:
             self._tts_speak_prep.end_prepare()
+
+    def retranslate_ui(self):
+        """语言切换：重设单词卡片按钮提示（内容为用户查询数据，不重译）。"""
+        if not hasattr(self, '_collect_btn'):
+            return
+        self._collect_btn.setToolTip(t('收藏到单词本'))
+        self._speak_btn.setToolTip(t('朗读发音'))
+
 
     def update_theme(self):
         """响应全局主题变更。"""
@@ -707,7 +727,7 @@ class WordPopup(QFrame):
         if generation != self._lookup_generation:
             return
         self._loading_label.hide()
-        self._definition_label.setText(f"(查询失败: {error_msg})")
+        self._definition_label.setText(t('(查询失败: {0})', error_msg))
         self._resize_to_content()
 
     # ------------------------------------------------------------------

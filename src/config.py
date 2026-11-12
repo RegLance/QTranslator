@@ -263,6 +263,9 @@ class Config:
                 'engine': 'local',  # local=本地 langdetect；baidu | google | bing（联网失败自动回退本地）
                 'timeout': 3,  # 联网检测超时（秒），限制在 3～60
             },
+            'ui': {
+                'language': 'system',  # 界面语言：system=跟随系统 / zh=中文 / en=英文（仅界面文案，不影响翻译功能）
+            },
             'theme': {
                 'popup_style': 'dark',  # 主题名称：dark/light/ocean_blue/forest_green/royal_purple/warm_orange/rose_pink/mint_light/custom
                 'custom_accent': '#007AFF',  # 自定义主题强调色

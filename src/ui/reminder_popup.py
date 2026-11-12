@@ -4,6 +4,11 @@
 WA_ShowWithoutActivating / WA_TransparentForMouseEvents；用 Tool + 置顶，
 不抢前台焦点、不出现在任务栏，同时按钮可正常点击。超时自动关闭。
 """
+try:
+    from ..utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
@@ -35,6 +40,19 @@ class ReminderPopup(QWidget):
 
         self._setup_ui()
 
+        # 语言切换：重设标题与按钮（内容为用户提醒数据，不重译）
+        try:
+            from ..utils.i18n import get_i18n_manager
+        except ImportError:
+            from src.utils.i18n import get_i18n_manager
+        get_i18n_manager().language_changed.connect(self.retranslate_ui)
+
+    def retranslate_ui(self):
+        if not hasattr(self, '_ok_btn'):
+            return
+        self._title_label.setText(t('⏰ 提醒'))
+        self._ok_btn.setText(t('知道了'))
+
     def _setup_ui(self):
         theme = get_theme()
 
@@ -63,7 +81,8 @@ class ReminderPopup(QWidget):
         frame_layout.setSpacing(12)
 
         # 标题
-        title = QLabel("⏰ 提醒")
+        title = QLabel(t('⏰ 提醒'))
+        self._title_label = title
         title.setStyleSheet(f"""
             QLabel {{
                 color: {theme['accent_color']};
@@ -89,7 +108,7 @@ class ReminderPopup(QWidget):
         # 知道了按钮
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
-        self._ok_btn = QPushButton("知道了")
+        self._ok_btn = QPushButton(t('知道了'))
         self._ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._ok_btn.setStyleSheet(f"""
             QPushButton {{

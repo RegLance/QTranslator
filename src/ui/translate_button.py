@@ -7,6 +7,11 @@ DWM 直接采用位图不加任何后处理（无阴影、无 peek、无 blur）
 坐标完全走物理像素路径（Win32 `GetCursorPos` + `GetSystemMetrics`），
 图标大小按显示器 DPI 缩放（base 28 × scale），适配 100%/125%/150%/200%。
 """
+try:
+    from ..utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 import math
 from pathlib import Path
 from typing import Optional, Tuple

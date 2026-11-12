@@ -1,4 +1,9 @@
 """系统托盘模块 - QTranslator"""
+try:
+    from ..utils.i18n import t, get_i18n_manager
+except ImportError:
+    from src.utils.i18n import t, get_i18n_manager
+
 import sys
 import os
 import traceback
@@ -52,6 +57,21 @@ class TrayIcon(QObject):
         except ImportError:
             from src.utils.theme import get_theme_manager
         get_theme_manager().theme_changed.connect(self.update_theme)
+
+        # 语言切换：即时重设菜单文案
+        get_i18n_manager().language_changed.connect(self.retranslate_ui)
+
+    def retranslate_ui(self):
+        """语言切换：重设托盘菜单各项文案（不重建菜单，尺寸/状态不变）"""
+        self._enable_action.setText(t('启用划词'))
+        self._translator_action.setText(t('翻译窗口'))
+        self._history_action.setText(t('翻译历史'))
+        self._vocabulary_action.setText(t('单词收藏'))
+        self._chat_action.setText(t('AI 对话'))
+        self._reminder_action.setText(t('提醒'))
+        self._settings_action.setText(t('设置...'))
+        self._help_action.setText(t('帮助...'))
+        self._exit_action.setText(t('退出'))
 
     def _create_icon(self):
         """创建托盘图标"""
@@ -145,7 +165,7 @@ class TrayIcon(QObject):
         self._apply_menu_style()
 
         # 启用/禁用选项
-        self._enable_action = QAction("启用划词", self._menu)
+        self._enable_action = QAction(t('启用划词'), self._menu)
         self._enable_action.setCheckable(True)
         self._enable_action.setIcon(self._check_icon)  # 设置勾选图标
         self._enable_action.triggered.connect(self._on_enable_toggle)
@@ -157,43 +177,43 @@ class TrayIcon(QObject):
         self._menu.addSeparator()
 
         # 翻译窗口选项
-        self._translator_action = QAction("翻译窗口", self._menu)
+        self._translator_action = QAction(t('翻译窗口'), self._menu)
         self._translator_action.triggered.connect(self._on_translator_window)
         self._menu.addAction(self._translator_action)
 
         # 历史记录选项
-        self._history_action = QAction("翻译历史", self._menu)
+        self._history_action = QAction(t('翻译历史'), self._menu)
         self._history_action.triggered.connect(self._on_history)
         self._menu.addAction(self._history_action)
 
-        self._vocabulary_action = QAction("单词收藏", self._menu)
+        self._vocabulary_action = QAction(t('单词收藏'), self._menu)
         self._vocabulary_action.triggered.connect(self._on_vocabulary)
         self._menu.addAction(self._vocabulary_action)
 
         # AI 对话选项
-        self._chat_action = QAction("AI 对话", self._menu)
+        self._chat_action = QAction(t('AI 对话'), self._menu)
         self._chat_action.triggered.connect(self._on_chat)
         self._menu.addAction(self._chat_action)
 
         # 提醒选项
-        self._reminder_action = QAction("提醒", self._menu)
+        self._reminder_action = QAction(t('提醒'), self._menu)
         self._reminder_action.triggered.connect(self._on_reminder)
         self._menu.addAction(self._reminder_action)
 
         # 设置选项
-        self._settings_action = QAction("设置...", self._menu)
+        self._settings_action = QAction(t('设置...'), self._menu)
         self._settings_action.triggered.connect(self._on_settings)
         self._menu.addAction(self._settings_action)
 
         # 帮助选项
-        self._help_action = QAction("帮助...", self._menu)
+        self._help_action = QAction(t('帮助...'), self._menu)
         self._help_action.triggered.connect(self._on_help)
         self._menu.addAction(self._help_action)
 
         self._menu.addSeparator()
 
         # 退出选项
-        self._exit_action = QAction("退出", self._menu)
+        self._exit_action = QAction(t('退出'), self._menu)
         self._exit_action.triggered.connect(self._on_exit)
         self._menu.addAction(self._exit_action)
 
@@ -246,7 +266,7 @@ class TrayIcon(QObject):
             self._tray.show()
             self._tray.showMessage(
                 APP_NAME,
-                "已启动，选中文本后点击图标即可翻译",
+                t('已启动，选中文本后点击图标即可翻译'),
                 QSystemTrayIcon.MessageIcon.Information,
                 2000
             )

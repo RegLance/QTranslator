@@ -1,4 +1,9 @@
 """独立翻译窗口模块 - QTranslator（无边框风格，支持主题切换、纯文本显示）"""
+try:
+    from ..utils.i18n import t
+except ImportError:
+    from src.utils.i18n import t
+
 import sys
 import math
 import time
@@ -12,7 +17,7 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect, QApplication, QSplitter, QSplitterHandle
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect, QRectF, QPointF, QTimer, QPropertyAnimation, QEasingCurve, QSize, QBuffer, QByteArray, QIODevice
-from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QKeySequence, QIcon, QFont, QPixmap, QImage, QPainter, QPen, QBrush, QLinearGradient, QPolygonF
+from PyQt6.QtGui import QColor, QCursor, QMouseEvent, QKeySequence, QIcon, QFont, QFontMetrics, QPixmap, QImage, QPainter, QPen, QBrush, QLinearGradient, QPolygonF
 
 try:
     from ..utils.theme import (
@@ -483,6 +488,9 @@ class TranslatorWindow(QWidget):
     def __init__(self):
         super().__init__()
 
+        # 顶栏宽度计算用的稳定字体族（初始化时捕获，避免语言切换期字体度量失真）
+        self._bar_font_family = self.font().family()
+
         # 设置窗口对象名称
         self.setObjectName("TranslatorWindow")
 
@@ -564,7 +572,7 @@ class TranslatorWindow(QWidget):
 
         # 识图：原文框粘贴的图片（识别后写回文本并清空）
         self._input_image: Optional[QImage] = None
-        self._IMAGE_PLACEHOLDER = "[图片]"
+        self._IMAGE_PLACEHOLDER = t('[图片]')
         self._pending_function_after_ocr: Optional[str] = None
 
         # 润色差异：勾选「显示润色差异」时由客户端做词/短语级 diff，模型只返回纯文本
@@ -617,6 +625,13 @@ class TranslatorWindow(QWidget):
         except ImportError:
             from src.utils.theme import get_theme_manager
         get_theme_manager().theme_changed.connect(self.update_theme)
+
+        # 语言切换：即时重设文案（窗口尺寸不变）
+        try:
+            from ..utils.i18n import get_i18n_manager
+        except ImportError:
+            from src.utils.i18n import get_i18n_manager
+        get_i18n_manager().language_changed.connect(self.retranslate_ui)
 
         # 悬浮窗收藏变更 → 同步翻译窗口的收藏按钮状态
         get_word_popup().collection_changed.connect(self._refresh_collect_button_state)
@@ -1012,7 +1027,7 @@ class TranslatorWindow(QWidget):
         self._update_btn.setObjectName("updateBtn")
         self._update_btn.setFixedSize(22, 22)
         self._update_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._update_btn.setToolTip("有新版本可用，点击更新")
+        self._update_btn.setToolTip(t('有新版本可用，点击更新'))
         self._update_btn.setStyleSheet(f"""
             QPushButton#updateBtn {{
                 background-color: transparent;
@@ -1034,7 +1049,7 @@ class TranslatorWindow(QWidget):
         self._ai_btn.setFixedSize(22, 22)
         self._ai_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._ai_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._ai_btn.setToolTip("AI 对话")
+        self._ai_btn.setToolTip(t('AI 对话'))
         self._ai_btn.setStyleSheet(f"""
             QPushButton#aiBtn {{
                 background-color: transparent;
@@ -1058,7 +1073,7 @@ class TranslatorWindow(QWidget):
         self._help_btn.setFixedSize(22, 22)
         self._help_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._help_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._help_btn.setToolTip("帮助")
+        self._help_btn.setToolTip(t('帮助'))
         self._help_btn.setStyleSheet(f"""
             QPushButton#helpBtn {{
                 background-color: transparent;
@@ -1081,7 +1096,7 @@ class TranslatorWindow(QWidget):
         self._settings_btn.setObjectName("settingsBtn")
         self._settings_btn.setFixedSize(22, 22)
         self._settings_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._settings_btn.setToolTip("设置")
+        self._settings_btn.setToolTip(t('设置'))
         self._settings_btn.setStyleSheet(f"""
             QPushButton#settingsBtn {{
                 background-color: transparent;
@@ -1176,15 +1191,17 @@ class TranslatorWindow(QWidget):
         self._control_bar.setStyleSheet("QFrame { background-color: transparent; }")
         control_layout = QHBoxLayout(self._control_bar)
         control_layout.setContentsMargins(0, 0, 0, 0)
-        control_layout.setSpacing(10)
+        control_layout.setSpacing(8)
 
         # 语言选择
-        self._lang_label = QLabel("目标语言：")
+        self._lang_label = QLabel(t('目标语言：'))
         self._lang_label.setStyleSheet(f"QLabel {{ color: {theme['text_secondary']}; font-size: 13px; }}")
         control_layout.addWidget(self._lang_label)
 
         self._lang_combo = QComboBox()
-        self._lang_combo.addItems(["自动检测", "中文", "英文", "日文", "韩文"])
+        # 显示文案走 t()，功能值（itemData）固定为规范中文，供翻译/TTS/历史使用
+        for _lang in ["自动检测", "中文", "英文", "日文", "韩文"]:
+            self._lang_combo.addItem(t(_lang), _lang)
         self._lang_combo.setFixedHeight(28)
         self._lang_combo.setMaxVisibleItems(5)  # 避免弹出视图滚动
         self._lang_combo.setStyleSheet(get_combobox_style(theme))
@@ -1194,7 +1211,7 @@ class TranslatorWindow(QWidget):
         control_layout.addStretch()
 
         # 清空按钮
-        self._clear_btn = QPushButton("清空")
+        self._clear_btn = QPushButton(t('清空'))
         self._clear_btn.setFixedHeight(28)
         self._clear_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._clear_btn.setStyleSheet(f"""
@@ -1214,8 +1231,9 @@ class TranslatorWindow(QWidget):
         control_layout.addWidget(self._clear_btn)
 
         # 翻译按钮
-        self._translate_btn = QPushButton("翻译")
-        self._translate_btn.setFixedSize(55, 28)  # 统一宽度55px
+        self._translate_btn = QPushButton(t('翻译'))
+        self._translate_btn.setFixedHeight(28)
+        self._translate_btn.setMinimumWidth(55)  # 中文55px；英文按文案自适应避免裁切
         self._translate_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._translate_btn.setStyleSheet(f"""
             QPushButton {{
@@ -1244,8 +1262,9 @@ class TranslatorWindow(QWidget):
         control_layout.addWidget(self._translate_btn)
 
         # 润色按钮
-        self._polishing_btn = QPushButton("润色")
-        self._polishing_btn.setFixedSize(55, 28)  # 统一宽度55px
+        self._polishing_btn = QPushButton(t('润色'))
+        self._polishing_btn.setFixedHeight(28)
+        self._polishing_btn.setMinimumWidth(55)  # 中文55px；英文按文案自适应避免裁切
         self._polishing_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._polishing_btn.setStyleSheet(f"""
             QPushButton {{
@@ -1273,8 +1292,9 @@ class TranslatorWindow(QWidget):
         control_layout.addWidget(self._polishing_btn)
 
         # 总结按钮
-        self._summarize_btn = QPushButton("总结")
-        self._summarize_btn.setFixedSize(55, 28)  # 统一宽度55px
+        self._summarize_btn = QPushButton(t('总结'))
+        self._summarize_btn.setFixedHeight(28)
+        self._summarize_btn.setMinimumWidth(55)  # 中文55px；英文按文案自适应避免裁切
         self._summarize_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._summarize_btn.setStyleSheet(f"""
             QPushButton {{
@@ -1302,6 +1322,7 @@ class TranslatorWindow(QWidget):
         control_layout.addWidget(self._summarize_btn)
 
         content_layout.addWidget(self._control_bar)
+        self._fit_control_bar_widths()
 
         # 分割器（使用动画分隔器）
         self._splitter = AnimatedSplitter(Qt.Orientation.Vertical)
@@ -1318,7 +1339,7 @@ class TranslatorWindow(QWidget):
         self._input_container.setMinimumHeight(input_min_height)
 
         self._input_text = ImageInputTextEdit(self._input_container)
-        self._input_text.setPlaceholderText("输入要翻译的文本...")
+        self._input_text.setPlaceholderText(t('输入要翻译的文本...'))
         # 滚动条常显：滚动条出现/消失会改变视口宽度导致文本重排，
         # 底部截断行状态变化后滚动易残留（同设置窗口滚动区修复模式）
         self._input_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
@@ -1371,7 +1392,7 @@ class TranslatorWindow(QWidget):
         self._speak_input_btn.setObjectName("speakInputBtn")
         self._speak_input_btn.setFixedSize(28, 28)
         self._speak_input_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._speak_input_btn.setToolTip("朗读原文")
+        self._speak_input_btn.setToolTip(t('朗读原文'))
         self._speak_input_btn.setIcon(self._create_speak_icon(theme))
         self._speak_input_btn.setStyleSheet(f"""
             QPushButton#speakInputBtn {{
@@ -1400,7 +1421,7 @@ class TranslatorWindow(QWidget):
         self._collect_output_btn.setObjectName("collectOutputBtn")
         self._collect_output_btn.setFixedSize(28, 28)
         self._collect_output_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._collect_output_btn.setToolTip("收藏到单词本")
+        self._collect_output_btn.setToolTip(t('收藏到单词本'))
         self._collect_output_btn.setIcon(self._create_star_icon(theme, False))
         self._collect_output_btn.setIconSize(QSize(22, 22))
         self._collect_output_btn.setStyleSheet(f"""
@@ -1427,7 +1448,7 @@ class TranslatorWindow(QWidget):
         self._screenshot_btn.setObjectName("screenshotBtn")
         self._screenshot_btn.setFixedSize(28, 28)
         self._screenshot_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._screenshot_btn.setToolTip("截图识别")
+        self._screenshot_btn.setToolTip(t('截图识别'))
         self._screenshot_btn.setIcon(self._create_screenshot_icon(theme))
         self._screenshot_btn.setStyleSheet(f"""
             QPushButton#screenshotBtn {{
@@ -1473,7 +1494,7 @@ class TranslatorWindow(QWidget):
             Qt.TextInteractionFlag.TextSelectableByMouse |
             Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
-        self._output_text.setPlaceholderText("翻译结果...")
+        self._output_text.setPlaceholderText(t('翻译结果...'))
         self._output_text.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {theme['bg_secondary']};
@@ -1522,7 +1543,7 @@ class TranslatorWindow(QWidget):
         self._speak_output_btn.setObjectName("speakOutputBtn")
         self._speak_output_btn.setFixedSize(28, 28)
         self._speak_output_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._speak_output_btn.setToolTip("朗读译文")
+        self._speak_output_btn.setToolTip(t('朗读译文'))
         self._speak_output_btn.setIcon(self._create_speak_icon(theme))
         self._speak_output_btn.setStyleSheet(f"""
             QPushButton#speakOutputBtn {{
@@ -1552,7 +1573,7 @@ class TranslatorWindow(QWidget):
         self._copy_output_btn.setObjectName("copyOutputBtn")
         self._copy_output_btn.setFixedSize(28, 28)
         self._copy_output_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._copy_output_btn.setToolTip("复制译文")
+        self._copy_output_btn.setToolTip(t('复制译文'))
         self._copy_output_btn.setIcon(self._create_copy_icon(theme))
         self._copy_output_btn.setStyleSheet(f"""
             QPushButton#copyOutputBtn {{
@@ -1575,7 +1596,7 @@ class TranslatorWindow(QWidget):
         self._history_output_btn.setObjectName("historyOutputBtn")
         self._history_output_btn.setFixedSize(28, 28)
         self._history_output_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._history_output_btn.setToolTip("翻译历史")
+        self._history_output_btn.setToolTip(t('翻译历史'))
         self._history_output_btn.setIcon(self._create_history_icon(theme))
         self._history_output_btn.setStyleSheet(f"""
             QPushButton#historyOutputBtn {{
@@ -1663,15 +1684,15 @@ class TranslatorWindow(QWidget):
             filled = collected
             self._collect_output_btn.setIcon(self._create_star_icon(theme, filled))
             if not word:
-                self._collect_output_btn.setToolTip("输入文本后可收藏到单词本")
+                self._collect_output_btn.setToolTip(t('输入文本后可收藏到单词本'))
             elif collected:
-                self._collect_output_btn.setToolTip("取消收藏")
+                self._collect_output_btn.setToolTip(t('取消收藏'))
             elif not has_trans:
-                self._collect_output_btn.setToolTip("完成翻译后可添加到单词本")
+                self._collect_output_btn.setToolTip(t('完成翻译后可添加到单词本'))
             elif not synced_with_output:
-                self._collect_output_btn.setToolTip("译文与当前输入不一致，请翻译后再收藏")
+                self._collect_output_btn.setToolTip(t('译文与当前输入不一致，请翻译后再收藏'))
             else:
-                self._collect_output_btn.setToolTip("收藏到单词本")
+                self._collect_output_btn.setToolTip(t('收藏到单词本'))
         except RuntimeError:
             pass
 
@@ -1697,7 +1718,7 @@ class TranslatorWindow(QWidget):
                     trans = self._output_text.toPlainText().strip()
                 if not trans:
                     return
-                lang = self._lang_combo.currentText()
+                lang = self._lang_combo.currentData()
                 voc.put_item(word, trans, "" if lang == "自动检测" else lang)
             self._refresh_collect_button_state()
         except Exception:
@@ -1813,7 +1834,7 @@ class TranslatorWindow(QWidget):
             return
         self._update_available = True
         self._update_btn.show()
-        self._update_btn.setToolTip(f"新版本 {new_version} 可用，点击更新")
+        self._update_btn.setToolTip(t('新版本 {0} 可用，点击更新', new_version))
 
     def _on_no_update(self):
         """无新版本"""
@@ -1974,6 +1995,62 @@ class TranslatorWindow(QWidget):
 
         # 标记用户手动调整了窗口大小（用于记忆窗口大小功能）
         self._user_manually_resized = True
+
+    def _fit_control_bar_widths(self):
+        """按绘制字体显式设定顶栏按钮/下拉宽度，避免英文裁切或撑爆固定宽窗口。
+
+        不依赖 widget.font()/sizeHint（语言切换路径上字体度量会临时失真），
+        用「族名 + 固定 13px」参考字体计算（与样式表绘制字号一致）；中文保持 ≥55px。
+        """
+        for btn, pad, bold in ((self._clear_btn, 12, False), (self._translate_btn, 8, True),
+                               (self._polishing_btn, 12, False), (self._summarize_btn, 12, False)):
+            ref = QFont(self._bar_font_family)
+            ref.setPixelSize(13)
+            ref.setBold(bold)
+            w = QFontMetrics(ref).horizontalAdvance(btn.text()) + 2 * pad + 2
+            btn.setFixedWidth(max(55, w))
+        combo = self._lang_combo
+        ref = QFont(self._bar_font_family)
+        ref.setPixelSize(13)
+        fm = QFontMetrics(ref)
+        # chrome = padding(10*2) + border(2) + drop-down(20) = 42，另加 4px 安全余量
+        cw = max((fm.horizontalAdvance(combo.itemText(i))
+                  for i in range(combo.count())), default=0) + 46
+        combo.setFixedWidth(max(90, cw))
+
+    def retranslate_ui(self):
+        """语言切换：重设翻译窗口静态文案（不改变窗口尺寸）。"""
+        if not hasattr(self, '_translate_btn'):
+            return
+        self._ai_btn.setToolTip(t('AI 对话'))
+        self._help_btn.setToolTip(t('帮助'))
+        self._settings_btn.setToolTip(t('设置'))
+        self._lang_label.setText(t('目标语言：'))
+        # 目标语言下拉：重译显示，功能值（itemData）与当前选择不变
+        self._lang_combo.blockSignals(True)
+        _cur = self._lang_combo.currentData()
+        self._lang_combo.clear()
+        for _lang in ["自动检测", "中文", "英文", "日文", "韩文"]:
+            self._lang_combo.addItem(t(_lang), _lang)
+        for _i in range(self._lang_combo.count()):
+            if self._lang_combo.itemData(_i) == _cur:
+                self._lang_combo.setCurrentIndex(_i)
+                break
+        self._lang_combo.blockSignals(False)
+        self._clear_btn.setText(t('清空'))
+        self._translate_btn.setText(t('翻译'))
+        self._polishing_btn.setText(t('润色'))
+        self._summarize_btn.setText(t('总结'))
+        self._fit_control_bar_widths()
+        self._input_text.setPlaceholderText(t('输入要翻译的文本...'))
+        self._output_text.setPlaceholderText(t('翻译结果...'))
+        self._speak_input_btn.setToolTip(t('朗读原文'))
+        self._screenshot_btn.setToolTip(t('截图识别'))
+        self._speak_output_btn.setToolTip(t('朗读译文'))
+        self._copy_output_btn.setToolTip(t('复制译文'))
+        self._history_output_btn.setToolTip(t('翻译历史'))
+        # 收藏按钮提示按当前状态重设
+        self._refresh_collect_button_state()
 
     def update_theme(self):
         """更新主题"""
@@ -2218,7 +2295,7 @@ class TranslatorWindow(QWidget):
                 color: #ffffff;
                 border: 1px solid transparent;
                 border-radius: 4px;
-                padding: 0 16px;
+                padding: 0 8px;
                 font-size: 13px;
                 font-weight: bold;
             }}
@@ -2523,7 +2600,7 @@ class TranslatorWindow(QWidget):
                 self._tts_speak_input_prep.end_prepare()
                 return
 
-            hint = self._lang_combo.currentText()
+            hint = self._lang_combo.currentData()
             if hint == "自动检测":
                 hint = None
             self._tts_speak_output_prep.attach_to_tts_engine(tts)
@@ -2737,7 +2814,7 @@ class TranslatorWindow(QWidget):
             image_bytes = None
         if not image_bytes:
             self._input_image = None
-            self._output_text.setPlainText("识图失败: 图片数据无效")
+            self._output_text.setPlainText(t('识图失败: 图片数据无效'))
             return True
 
         self._stop_tts_playback()
@@ -2754,7 +2831,7 @@ class TranslatorWindow(QWidget):
         self._ensure_output_plain_mode()
         self._clear_polish_diff_snapshot()
         self._streaming_text = ""
-        self._output_text.setPlainText("正在识别图片文字…")
+        self._output_text.setPlainText(t('正在识别图片文字…'))
 
         # 重置流式状态
         self._is_streaming = False
@@ -2793,7 +2870,7 @@ class TranslatorWindow(QWidget):
 
             recognized = (text or "").strip()
             if not recognized:
-                self._output_text.setPlainText("识图失败: 未识别到图片中的文字")
+                self._output_text.setPlainText(t('识图失败: 未识别到图片中的文字'))
                 return
 
             # 识别文字写回原文框（更新历史原文与收藏配对），随后执行操作
@@ -2821,7 +2898,7 @@ class TranslatorWindow(QWidget):
             self._pending_function_after_ocr = None
             self._current_worker = None
             self._splitter.stop_animation()
-            self._output_text.setPlainText(f"识图失败: {error}")
+            self._output_text.setPlainText(t('识图失败: {0}', error))
         except RuntimeError:
             # 窗口已被销毁，忽略
             pass
@@ -2880,7 +2957,7 @@ class TranslatorWindow(QWidget):
         self._splitter.start_animation()
 
         # 获取目标语言
-        target_language = self._lang_combo.currentText()
+        target_language = self._lang_combo.currentData()
         if target_language == "自动检测":
             target_language = None  # 使用自动检测
 
@@ -3007,7 +3084,7 @@ class TranslatorWindow(QWidget):
             if result:
                 try:
                     from src.utils.history import add_translation_history
-                    target_lang = self._lang_combo.currentText()
+                    target_lang = self._lang_combo.currentData()
                     if target_lang == "自动检测":
                         target_lang = "中文"  # 默认
                     add_translation_history(
@@ -3047,7 +3124,7 @@ class TranslatorWindow(QWidget):
             self._show_output_scrollbar()
             self._ensure_output_plain_mode()
             self._clear_polish_diff_snapshot()
-            self._output_text.setPlainText(f"翻译失败: {error}")
+            self._output_text.setPlainText(t('翻译失败: {0}', error))
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
@@ -3207,7 +3284,7 @@ class TranslatorWindow(QWidget):
             self._polishing_source_for_diff = ""
             self._clear_polish_diff_snapshot()
             self._ensure_output_plain_mode()
-            self._output_text.setPlainText(f"润色失败: {error}")
+            self._output_text.setPlainText(t('润色失败: {0}', error))
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
@@ -3273,7 +3350,7 @@ class TranslatorWindow(QWidget):
         self._splitter.start_animation()
 
         # 获取目标语言（用于总结输出的语言）
-        target_language = self._lang_combo.currentText()
+        target_language = self._lang_combo.currentData()
         if target_language == "自动检测":
             target_language = "中文"
 
@@ -3313,7 +3390,7 @@ class TranslatorWindow(QWidget):
             if result:
                 try:
                     from src.utils.history import add_translation_history
-                    target_lang = self._lang_combo.currentText()
+                    target_lang = self._lang_combo.currentData()
                     if target_lang == "自动检测":
                         target_lang = "中文"
                     add_translation_history(
@@ -3350,7 +3427,7 @@ class TranslatorWindow(QWidget):
             self._show_output_scrollbar()
             self._ensure_output_plain_mode()
             self._clear_polish_diff_snapshot()
-            self._output_text.setPlainText(f"总结失败: {error}")
+            self._output_text.setPlainText(t('总结失败: {0}', error))
             self._translate_btn.setEnabled(True)
             self._polishing_btn.setEnabled(True)
             self._summarize_btn.setEnabled(True)
@@ -3422,40 +3499,40 @@ class TranslatorWindow(QWidget):
         menu = QMenu(self)
         menu.setStyleSheet(get_menu_style(theme))
 
-        undo_action = menu.addAction("撤销")
+        undo_action = menu.addAction(t('撤销'))
         undo_action.setShortcut("Ctrl+Z")
         undo_action.triggered.connect(self._input_text.undo)
 
-        redo_action = menu.addAction("重做")
+        redo_action = menu.addAction(t('重做'))
         redo_action.setShortcut("Ctrl+Y")
         redo_action.triggered.connect(self._input_text.redo)
 
         menu.addSeparator()
 
-        cut_action = menu.addAction("剪切")
+        cut_action = menu.addAction(t('剪切'))
         cut_action.setShortcut("Ctrl+X")
         cut_action.triggered.connect(self._input_text.cut)
 
-        copy_action = menu.addAction("复制")
+        copy_action = menu.addAction(t('复制'))
         copy_action.setShortcut("Ctrl+C")
         copy_action.triggered.connect(self._input_text.copy)
 
-        paste_action = menu.addAction("粘贴")
+        paste_action = menu.addAction(t('粘贴'))
         paste_action.setShortcut("Ctrl+V")
         paste_action.triggered.connect(self._input_text.paste)
 
         menu.addSeparator()
 
-        delete_action = menu.addAction("删除")
+        delete_action = menu.addAction(t('删除'))
         delete_action.triggered.connect(self._input_text.textCursor().removeSelectedText)
 
         menu.addSeparator()
 
-        select_all_action = menu.addAction("全选")
+        select_all_action = menu.addAction(t('全选'))
         select_all_action.setShortcut("Ctrl+A")
         select_all_action.triggered.connect(self._input_text.selectAll)
 
-        clear_action = menu.addAction("清空")
+        clear_action = menu.addAction(t('清空'))
         clear_action.triggered.connect(self._input_text.clear)
 
         menu.exec(self._input_text.mapToGlobal(pos))
@@ -3468,16 +3545,16 @@ class TranslatorWindow(QWidget):
         menu = QMenu(self)
         menu.setStyleSheet(get_menu_style(theme))
 
-        copy_action = menu.addAction("复制")
+        copy_action = menu.addAction(t('复制'))
         copy_action.setShortcut("Ctrl+C")
         copy_action.triggered.connect(self._copy_output_standard)
 
-        copy_all_action = menu.addAction("复制全部译文")
+        copy_all_action = menu.addAction(t('复制全部译文'))
         copy_all_action.triggered.connect(self._copy_all_text)
 
         menu.addSeparator()
 
-        select_all_action = menu.addAction("全选")
+        select_all_action = menu.addAction(t('全选'))
         select_all_action.setShortcut("Ctrl+A")
         select_all_action.triggered.connect(self._output_text.selectAll)
 
@@ -3892,9 +3969,9 @@ class TranslatorWindow(QWidget):
             'polishing': '润色',
             'summarize': '总结'
         }
-        label = function_labels.get(function_name, '翻译')
+        label = t(function_labels.get(function_name, '翻译'))
         self._default_function_title_restore_timer.stop()
-        self._title_label.setText(f"QTranslator - Enter 默认功能: {label}")
+        self._title_label.setText(t('QTranslator - Enter 默认功能: {0}', label))
         self._default_function_title_restore_timer.start(2000)
 
     def _run_function_button(self, function_name: str):
@@ -4242,7 +4319,7 @@ class TranslatorWindow(QWidget):
         self._clear_polish_diff_snapshot()
         self._output_paired_source_text = ""
         self._pending_operation_source_text = ""
-        self._output_text.setPlainText("正在翻译...")
+        self._output_text.setPlainText(t('正在翻译...'))
 
     def show_streaming_start(self, original_text: str = None):
         """开始流式翻译显示
@@ -4809,7 +4886,7 @@ class TranslatorWindow(QWidget):
         if result.error:
             self._ensure_output_plain_mode()
             self._clear_polish_diff_snapshot()
-            self._output_text.setPlainText(f"翻译失败: {result.error}")
+            self._output_text.setPlainText(t('翻译失败: {0}', result.error))
             self._output_paired_source_text = ""
         else:
             self._input_text.setPlainText(result.original_text)

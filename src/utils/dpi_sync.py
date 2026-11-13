@@ -220,6 +220,7 @@ def sync_window_dpi(widget) -> bool:
     try:
         _nudge(widget)
         _diagnose(widget, "after-nudge")
+        _reapply_intended(widget)
         return True
     except Exception:
         return False
@@ -263,6 +264,56 @@ def sync_all_windows() -> int:
 
 _REASSERT_INTERVAL_MS = 3000
 _REASSERT_MAX_TICKS = 40  # 约 120 秒：覆盖显示器深度休眠唤醒后的异步重建窗口
+_REASSERT_SHRINK_WINDOW_TICKS = 10  # 约 30 秒：仅在此窗口内纠正"无用户操作的骤缩"
+
+
+def _guard_skip(window) -> bool:
+    """这些状态下尺寸是"有意/动态"的，守卫与兜底一律不干预。"""
+    try:
+        if window.isMinimized() or window.isMaximized():
+            return True
+        if getattr(window, "_is_resizing", False):
+            return True
+        if getattr(window, "_is_streaming", False):
+            return True
+    except Exception:
+        return True
+    return False
+
+
+def note_user_resize(window) -> None:
+    """用户手动调整尺寸后调用：把意图/保护目标更新为用户新尺寸并停用棘轮守卫。
+
+    守卫只该纠正"系统唤醒缩小"，不该与用户手动调整对抗；用户一旦手动调整，
+    其尺寸即成为新的意图尺寸，守卫停止、屏幕变化兜底也按新目标判断。
+    """
+    try:
+        size = (window.width(), window.height())
+        window._intended_size = size
+        window._reassert_target = size
+    except Exception:
+        pass
+    _stop_guard(window)
+
+
+def _reapply_intended(window) -> None:
+    """DPI 重评估(nudge)后把尺寸恢复回意图尺寸，从源头消除唤醒"撑大/缩小"。
+
+    仅对 opt-in 窗口（翻译窗）生效；流式/最大化/拖拽中不干预。
+    """
+    if not getattr(window, "_dpi_guard_opt_in", False):
+        return
+    if _guard_skip(window):
+        return
+    try:
+        intended = getattr(window, "_intended_size", None)
+        if not intended:
+            return
+        tw, th = intended
+        if (window.width(), window.height()) != (tw, th):
+            window.resize(max(tw, window.minimumWidth()), max(th, window.minimumHeight()))
+    except Exception:
+        pass
 
 
 def reassert_after_show(window) -> None:
@@ -292,8 +343,15 @@ def reassert_after_show(window) -> None:
     except Exception:
         return
     try:
-        target_w = window.width()
-        target_h = window.height()
+        # 优先用"意图尺寸"（记忆尺寸/预设/用户手动调整后的尺寸），
+        # 不从唤醒后可能已被 DPI 重评估撑大/缩小的实时尺寸抓目标。
+        intended = getattr(window, "_intended_size", None)
+        if intended:
+            target_w, target_h = intended
+        else:
+            target_w = window.width()
+            target_h = window.height()
+            window._intended_size = (target_w, target_h)
     except Exception:
         return
     if target_w <= 0 or target_h <= 0:
@@ -311,19 +369,27 @@ def reassert_after_show(window) -> None:
 
     def _check() -> None:
         try:
-            if not window.isVisible():
+            if not window.isVisible() or _guard_skip(window):
                 return
             cur_w = window.width()
             cur_h = window.height()
             min_w = window.minimumWidth()
             min_h = window.minimumHeight()
-            if cur_w < target_w or cur_h < target_h or cur_w < min_w or cur_h < min_h:
+            # 收窄纠正条件：小于 minimumSize 一定是异常（原生 WM_SIZE 绕过 Qt 约束）；
+            # "小于目标"只在 show 后短窗口内纠正（唤醒骤缩），不再长期与用户对抗。
+            shrink_anomaly = cur_w < min_w or cur_h < min_h
+            recent_shrink = (
+                state["ticks"] <= _REASSERT_SHRINK_WINDOW_TICKS
+                and (cur_w < target_w or cur_h < target_h)
+            )
+            if shrink_anomaly or recent_shrink:
                 fix_w = max(target_w, min_w)
                 fix_h = max(target_h, min_h)
                 _diagnose(window, f"reassert:{fix_w}x{fix_h}")
                 window.resize(fix_w, fix_h)
             # DPR 失同步（Qt 缓存 DPR 与显示器不一致，如唤醒后回落 1.0）→ nudge 触发重评估
-            _nudge_if_dpi_mismatched(window)
+            if _nudge_if_dpi_mismatched(window):
+                _reapply_intended(window)
         except Exception:
             pass
 
@@ -385,12 +451,16 @@ def reassert_all_visible() -> int:
                 continue
             if w.windowType() != Qt.WindowType.Window:
                 continue
+            if _guard_skip(w):
+                continue
             target = getattr(w, "_reassert_target", None)
             if not target:
                 continue
             tw, th = target
             cw, ch = w.width(), w.height()
             mw, mh = w.minimumWidth(), w.minimumHeight()
+            # 目标已随用户手动调整更新（note_user_resize），故"小于目标"即系统骤缩；
+            # 流式/最大化/拖拽中不干预。
             if cw < tw or ch < th or cw < mw or ch < mh:
                 fw = max(tw, mw)
                 fh = max(th, mh)

@@ -1,0 +1,472 @@
+"""配置管理模块 - QTranslator"""
+import os
+import sys
+import yaml
+import json
+import uuid
+import traceback
+from pathlib import Path
+from typing import Any, Dict
+from datetime import datetime
+
+
+# 应用名称
+APP_NAME = "QTranslator"
+APP_ID = "com.qtranslator.app"
+APP_VERSION = "2.0.0"
+BUILD_TIME = "2026-04-24"
+
+# 配置文件结构版本号：升级版本时若需对旧配置文件做一次性迁移，递增此值并实现对应迁移逻辑
+CONFIG_VERSION = 2
+
+# 应用 URLs 和服务配置
+CONTACT_URL = "xxxx"
+UPDATE_CHECK_URL = "http://109.105.111.17:5005/update"
+UPDATE_GITHUB_URL = "https://github.com/SQAG/QTranslator/releases"
+
+# 更新检查配置
+TOOL_NAME = "QTranslator"
+CHECK_TIMEOUT = 5  # 请求超时时间（秒），避免网络不通时长时间等待
+
+# 版本显示配置
+VERSION_AUTHOR = "Reg"  # 翻译窗口版本标签中的作者信息
+UPDATE_INFO_TEXT = """v2.0.1
+•哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈
+•哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈
+v2.0.1
+•哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈
+•哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈
+v2.0.1
+•哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈
+•哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈
+"""  # 帮助窗口更新信息占位文本
+
+
+def get_app_data_dir() -> Path:
+    """获取 Windows 应用数据目录（在用户 AppData 目录下）"""
+    # Windows: C:\Users\用户名\AppData\Local\QTranslator
+    base_dir = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
+    app_dir = Path(base_dir) / APP_NAME
+
+    # 确保目录存在
+    app_dir.mkdir(parents=True, exist_ok=True)
+    return app_dir
+
+
+class Config:
+    """配置管理类"""
+
+    def __init__(self):
+        """初始化配置"""
+        self._app_dir = get_app_data_dir()
+        self._config_path = self._app_dir / "config.yaml"
+        self._cache_path = self._app_dir / "cache.json"
+        self._backup_path = self._app_dir / "config.yaml.bak"
+        self._crash_log_path = self._app_dir / "crash.log"
+
+        print(f"配置目录: {self._app_dir}", file=sys.stderr)
+        print(f"配置文件: {self._config_path}", file=sys.stderr)
+
+        # 加载配置
+        if self._config_path.exists():
+            raw_version = self._raw_config_version(str(self._config_path))
+            self._config = self._load_config(str(self._config_path))
+            # 验证加载的配置是否有效（至少包含基本结构）
+            if not self._validate_config(self._config):
+                print("配置文件验证失败，尝试从备份恢复", file=sys.stderr)
+                self._restore_from_backup()
+                return
+            self._apply_migrations(raw_version)
+        else:
+            # 尝试从旧位置迁移
+            self._migrate_from_old_location()
+            if not self._config_path.exists():
+                self._config = self._get_default_config()
+                self.save()
+
+    def _validate_config(self, config: Dict[str, Any]) -> bool:
+        """验证配置是否有效"""
+        if config is None:
+            return False
+        required_keys = ['theme']
+        for key in required_keys:
+            if key not in config:
+                print(f"配置缺少必需字段: {key}", file=sys.stderr)
+                return False
+        return True
+
+    def _restore_from_backup(self):
+        """从备份恢复配置"""
+        if self._backup_path.exists():
+            try:
+                raw_version = self._raw_config_version(str(self._backup_path))
+                self._config = self._load_config(str(self._backup_path))
+                if self._validate_config(self._config):
+                    print("已从备份恢复配置", file=sys.stderr)
+                    # 恢复后重新保存（含必要的版本迁移）
+                    self._apply_migrations(raw_version)
+                    self.save()
+                    return
+            except Exception as e:
+                print(f"从备份恢复失败: {e}", file=sys.stderr)
+        # 如果备份也无效，使用默认配置
+        print("使用默认配置", file=sys.stderr)
+        self._config = self._get_default_config()
+        self.save()
+
+    def _migrate_from_old_location(self):
+        """从旧位置迁移配置"""
+        src_dir = Path(__file__).parent
+        project_dir = src_dir.parent
+        old_config = project_dir / "config.yaml"
+
+        if old_config.exists():
+            try:
+                import shutil
+                shutil.copy(str(old_config), str(self._config_path))
+                print(f"已迁移配置文件到: {self._config_path}", file=sys.stderr)
+                raw_version = self._raw_config_version(str(self._config_path))
+                self._config = self._load_config(str(self._config_path))
+                self._apply_migrations(raw_version)
+            except Exception as e:
+                print(f"迁移配置文件失败: {e}", file=sys.stderr)
+                self._config = self._get_default_config()
+
+    def _raw_config_version(self, path: str) -> int | None:
+        """读取配置文件中的原始结构版本号（未合并默认值，用于判断是否需要迁移）。"""
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            if not content.strip():
+                return None
+            raw = yaml.safe_load(content)
+            if not isinstance(raw, dict):
+                return None
+            version = raw.get('config_version')
+            return int(version) if version is not None else None
+        except Exception:
+            return None
+
+    def _apply_migrations(self, raw_version: int | None):
+        """按配置文件结构版本执行一次性迁移，执行后写入新版本号避免重复执行。
+
+        迁移只会触发一次：迁移完成后 config_version 写入文件，下次启动时不再执行，
+        因此用户在迁移后手动将条目移回黑名单不会被再次自动改出。
+        """
+        if raw_version is not None and raw_version >= CONFIG_VERSION:
+            return
+
+        changed = False
+        if raw_version is None or raw_version < 1:
+            # v1：旧版本将 Excel / PowerPoint 默认列入黑名单，现默认移出黑名单
+            blacklist = self._config.get('selection', {}).get('blacklist')
+            if isinstance(blacklist, list):
+                for entry in blacklist:
+                    if isinstance(entry, dict) and str(entry.get('exe', '')).strip().lower() in ('excel.exe', 'powerpnt.exe'):
+                        if entry.get('enabled', True):
+                            entry['enabled'] = False
+                            changed = True
+            if raw_version is not None:
+                print("执行配置迁移: v1 划词黑名单（Excel/PowerPoint 移出黑名单）", file=sys.stderr)
+
+        if raw_version is None or raw_version < 2:
+            # v2：提醒从「单条周期提醒」迁移为「提醒列表」
+            if self._migrate_reminder_to_list():
+                changed = True
+            if raw_version is not None:
+                print("执行配置迁移: v2 提醒改为提醒列表", file=sys.stderr)
+
+        if changed or raw_version is None:
+            self._config['config_version'] = CONFIG_VERSION
+            self.save()
+
+    def _migrate_reminder_to_list(self) -> bool:
+        """把旧版单条周期提醒（reminder.enabled/interval_minutes/message）迁移为提醒列表。
+
+        已有列表时仅清理遗留的旧字段；无列表但存在旧字段时，生成一条 interval 提醒。
+        返回是否有变更（是否需要保存）。
+        """
+        rem = self._config.get('reminder')
+        if not isinstance(rem, dict):
+            return False
+
+        items = rem.get('items')
+        if isinstance(items, list) and items:
+            # 已存在提醒列表，仅清理可能遗留的旧字段
+            changed = False
+            for k in ('enabled', 'interval_minutes', 'message'):
+                if k in rem:
+                    rem.pop(k, None)
+                    changed = True
+            return changed
+
+        # 旧格式：单条周期提醒。没有内容则不生成任何提醒。
+        enabled = bool(rem.get('enabled', False))
+        try:
+            interval = max(1, int(rem.get('interval_minutes', 30)))
+        except (TypeError, ValueError):
+            interval = 30
+        message = str(rem.get('message', '')).strip()
+
+        new_items = []
+        if message:
+            new_items.append({
+                'id': uuid.uuid4().hex[:12],
+                'enabled': enabled,
+                'mode': 'interval',
+                'interval_minutes': interval,
+                'message': message,
+            })
+        rem['items'] = new_items
+        for k in ('enabled', 'interval_minutes', 'message'):
+            rem.pop(k, None)
+        return True
+
+    def _load_config(self, path: str) -> Dict[str, Any]:
+        """加载配置文件"""
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                if not content.strip():
+                    print(f"配置文件为空: {path}", file=sys.stderr)
+                    return self._get_default_config()
+                config = yaml.safe_load(content)
+                if config is None:
+                    return self._get_default_config()
+                
+                return self._merge_with_defaults(config)
+        except yaml.YAMLError as e:
+            print(f"YAML解析错误: {e}", file=sys.stderr)
+            return self._get_default_config()
+        except Exception as e:
+            print(f"加载配置文件失败: {e}", file=sys.stderr)
+            return self._get_default_config()
+
+    def _get_default_config(self) -> Dict[str, Any]:
+        """获取默认配置"""
+        return {
+            'translator': {
+                'api_key': 'EMPTY',  # API Key
+                'base_url': 'http://109.105.111.17:8000/qsprite/qwenchat',  # API Base URL
+                'model': 'qwenchat',  # 模型名称
+                'timeout': 60,  # 请求超时时间（秒）
+                'no_proxy': '109.105.111.17',  # 不使用代理的地址，多个用逗号分隔
+            },
+            'vision': {
+                'use_shared_model': False,  # 勾选：识图模型与翻译模型相同（共用翻译的 URL、Key 与模型）
+                'api_key': '',  # 识图专用 API Key（use_shared_model=False 时生效）
+                'base_url': '',  # 识图专用 Base URL
+                'model': '',  # 识图模型名称
+                'timeout': 60,  # 识图请求超时时间（秒）
+            },
+            'language_detection': {
+                'engine': 'local',  # local=本地 langdetect；baidu | google | bing（联网失败自动回退本地）
+                'timeout': 3,  # 联网检测超时（秒），限制在 3～60
+            },
+            'ui': {
+                'language': 'system',  # 界面语言：system=跟随系统 / zh=中文 / en=英文（仅界面文案，不影响翻译功能）
+            },
+            'theme': {
+                'popup_style': 'dark',  # 主题名称：dark/light/ocean_blue/forest_green/royal_purple/warm_orange/rose_pink/mint_light/custom
+                'custom_accent': '#007AFF',  # 自定义主题强调色
+                'custom_bg': '#2d2d2d',  # 自定义主题背景色
+                'opacity': 0.95,
+            },
+            'font': {
+                'size': 15,  # 字体大小
+            },
+            'hotkey': {
+                'translator_window': 'Ctrl+O',  # 唤醒翻译窗口的快捷键
+                'writing': 'Ctrl+I',  # 写作快捷键
+                'selection_translate': 'Ctrl+`',  # 当前窗口选中内容翻译（Esc 下方 ` 键）
+                'ai_chat': 'Ctrl+Shift+P',  # 唤起 AI 对话窗口的快捷键
+            },
+            'startup': {
+                'auto_start': False,  # 开机自启
+            },
+            'popup': {
+                'opacity': 0.95,
+            },
+            'selection': {
+                'enabled': True,  # 托盘右键「启用划词」开关
+                'blacklist': None,  # 划词黑名单，None 表示使用内置默认列表
+                'trigger_mode': 'toolbar',  # 划词触发方式：toolbar=悬浮工具栏 / button=翻译图标按钮
+                'custom_actions': {},  # actions/ 目录 .py 扩展的显示开关 {文件名.py: bool}
+            },
+            'reminder': {
+                'items': [],  # 提醒列表，每项为 dict（字段见 core/reminder.py 说明）
+            },
+            'config_version': CONFIG_VERSION,  # 配置文件结构版本号（用于升级时一次性迁移）
+            'writing': {
+                'keep_original': False,  # 保留原文
+                'newline_hotkey': 'enter',  # 换行快捷键：enter / shift+enter / ctrl+enter
+                'animation': True,  # 动画逐字输入
+                'paste_threshold': 10,  # 超过此字符数用剪贴板粘贴
+            },
+            'polishing': {
+                'show_diff': False,  # 显示润色差异（默认不勾选）
+            },
+            'translator_window': {
+                'fixed_height_mode': False,  # 固定高度模式（勾选后不自动调整窗口高度）
+                'remember_window_position': False,  # 记忆窗口位置（勾选后记住窗口关闭时的位置）
+                'always_on_top': False,  # 始终置顶（勾选后翻译窗口始终在最顶层）
+                'default_function': 'translate',  # 默认功能：translate/polishing/summarize
+            },
+            'tts': {
+                'provider': 'system',  # system=Windows 离线 / edge=在线（失败时自动回退系统）
+                'edge_voice': '',  # 留空则按语言自动；可填如 zh-CN-XiaoxiaoNeural
+                'edge_rate': '+0%',  # Edge 语速，如 +20% / -10%
+                'edge_volume': '+0%',
+            },
+            'phonetic': {
+                'enabled': True,  # 用本地开源词典(ipa-dict)替换大模型生成的英文音标，
+                                  # 同时显示英式/美式音标（谷歌/Oxford 风格，相同则合并显示一个）
+            },
+            'chat': {
+                'use_shared_api': True,  # 勾选则与翻译共用 API Key 与模型配置
+                'api_key': '',           # AI 对话专用 API Key（use_shared_api=False 时生效）
+                'base_url': '',          # AI 对话专用 Base URL
+                'model': '',             # AI 对话专用模型
+                'timeout': 60,           # AI 对话超时（秒）
+                'model_context_limit': 32768,  # 模型上下文窗口（tokens）；上下文不限条数，
+                                               # 超过约 70% 窗口时按摘要缓冲策略自动压缩历史
+            },
+            'mcp': {
+                'enabled': True,  # AI 对话中是否启用 MCP 工具调用
+            },
+        }
+
+    def _merge_with_defaults(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """合并用户配置与默认配置"""
+        defaults = self._get_default_config()
+
+        def merge_dict(base: dict, override: dict) -> dict:
+            result = base.copy()
+            for key, value in override.items():
+                if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                    result[key] = merge_dict(result[key], value)
+                else:
+                    result[key] = value
+            return result
+
+        return merge_dict(defaults, config)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """获取配置值（支持点分隔的嵌套键）"""
+        keys = key.split('.')
+        value = self._config
+        try:
+            for k in keys:
+                value = value[k]
+            return value
+        except (KeyError, TypeError):
+            return default
+
+    def set(self, key: str, value: Any):
+        """设置配置值"""
+        keys = key.split('.')
+        config = self._config
+        for k in keys[:-1]:
+            if k not in config:
+                config[k] = {}
+            config = config[k]
+        config[keys[-1]] = value
+
+    def save(self):
+        """保存配置到文件（带备份机制和验证）"""
+        try:
+            # 先创建备份（如果原文件存在且有效）
+            if self._config_path.exists():
+                try:
+                    import shutil
+                    shutil.copy(str(self._config_path), str(self._backup_path))
+                except Exception as e:
+                    print(f"创建备份失败: {e}", file=sys.stderr)
+
+            # 写入新配置
+            config_content = yaml.safe_dump(
+                self._config,
+                allow_unicode=True,
+                default_flow_style=False,
+                sort_keys=False  # 保持原有顺序
+            )
+
+            with open(self._config_path, 'w', encoding='utf-8') as f:
+                f.write(config_content)
+
+            # 验证保存是否成功 - 立即重新加载验证
+            with open(self._config_path, 'r', encoding='utf-8') as f:
+                saved_content = f.read()
+                saved_config = yaml.safe_load(saved_content)
+                if saved_config is None:
+                    raise Exception("保存后配置文件为空")
+
+            print(f"配置已保存到: {self._config_path}", file=sys.stderr)
+
+        except yaml.YAMLError as e:
+            print(f"YAML序列化错误: {e}", file=sys.stderr)
+            self._log_crash(f"配置保存YAML错误: {e}\n{traceback.format_exc()}")
+        except Exception as e:
+            print(f"保存配置文件失败: {e}", file=sys.stderr)
+            self._log_crash(f"配置保存失败: {e}\n{traceback.format_exc()}")
+
+    def _log_crash(self, message: str):
+        """记录崩溃日志"""
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(self._crash_log_path, 'a', encoding='utf-8') as f:
+                f.write(f"\n{'='*50}\n")
+                f.write(f"[{timestamp}] CRASH LOG\n")
+                f.write(f"{'='*50}\n")
+                f.write(message)
+                f.write(f"\n{'='*50}\n")
+        except Exception:
+            pass  # 避免日志写入失败导致程序崩溃
+
+    @property
+    def crash_log_path(self) -> Path:
+        """崩溃日志路径"""
+        return self._crash_log_path
+
+    @property
+    def app_dir(self) -> Path:
+        """应用数据目录"""
+        return self._app_dir
+
+    @property
+    def config_path(self) -> Path:
+        """配置文件路径"""
+        return self._config_path
+
+    @property
+    def translator(self) -> Dict[str, Any]:
+        """翻译服务配置"""
+        return self._config.get('translator', {})
+
+    @property
+    def theme(self) -> Dict[str, Any]:
+        """主题配置"""
+        return self._config.get('theme', {})
+
+    @property
+    def startup(self) -> Dict[str, Any]:
+        """启动配置"""
+        return self._config.get('startup', {})
+
+
+# 全局配置实例
+_config_instance: Config = None
+
+
+def get_config() -> Config:
+    """获取全局配置实例"""
+    global _config_instance
+    if _config_instance is None:
+        _config_instance = Config()
+    return _config_instance
+
+
+def reload_config():
+    """重新加载配置"""
+    global _config_instance
+    _config_instance = Config()

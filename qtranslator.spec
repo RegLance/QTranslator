@@ -31,9 +31,9 @@ a = Analysis(
     binaries=_mcp_binaries,
     datas=[
         # 添加 native 目录 - 包含 selection-hook Node.js 服务和嵌入式 Node.js 运行时
-        ("E:/qoder/QTranslator/native", "native"),
+        ("D:/QTranslator/native", "native"),
         # 添加 assets 目录 - 包含应用图标
-        ("E:/qoder/QTranslator/assets", "assets"),
+        ("D:/QTranslator/assets", "assets"),
     ] + _mcp_datas,
     hiddenimports=[
         "PyQt6.QtCore",
@@ -143,5 +143,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="E:/qoder/QTranslator/assets/icon.ico",  # 应用图标
+    icon="D:/QTranslator/assets/icon.ico",  # 应用图标
 )

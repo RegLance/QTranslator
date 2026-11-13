@@ -123,7 +123,7 @@ EN = {
     '固定窗口大小（上一次调整的大小）': 'Remember window size',
     '固定窗口高度': 'Fixed window height',
     '复制': 'Copy',
-    '复制全部译文': 'Copy all translation',
+    '复制润色后的译文': 'Copy polished translation',
     '复制原文': 'Copy original',
     '复制消息': 'Copy message',
     '复制译文': 'Copy translation',

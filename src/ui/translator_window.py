@@ -2544,7 +2544,11 @@ class TranslatorWindow(QWidget):
             clipboard.setText(translated_text)
 
     def _copy_output_standard(self):
-        """译文框右键「复制」：差异视图下复制全文润色稿，否则复制当前选区。"""
+        """译文框右键「复制」/Ctrl+C：有所选即按所见原样复制选区（含差异红/绿片段）；差异视图无选区时复制全文润色稿。"""
+        cursor = self._output_text.textCursor()
+        if cursor.hasSelection():
+            self._output_text.copy()
+            return
         if self._polish_diff_snapshot:
             _, polished = self._polish_diff_snapshot
             if polished:
@@ -3549,7 +3553,7 @@ class TranslatorWindow(QWidget):
         copy_action.setShortcut("Ctrl+C")
         copy_action.triggered.connect(self._copy_output_standard)
 
-        copy_all_action = menu.addAction(t('复制全部译文'))
+        copy_all_action = menu.addAction(t('复制润色后的译文'))
         copy_all_action.triggered.connect(self._copy_all_text)
 
         menu.addSeparator()
@@ -3762,17 +3766,26 @@ class TranslatorWindow(QWidget):
 
     def eventFilter(self, obj, event):
         """事件过滤器 - 处理子控件的鼠标事件和输入框的键盘事件"""
-        # 译文框 Ctrl+C：润色差异视图下只复制最终润色稿（与复制按钮一致）
+        # 译文框 Ctrl+C：与右键「复制」一致（有所选按所见原样复制选区，差异视图无选区才复制全文润色稿）
         if hasattr(self, "_output_text") and obj == self._output_text and event.type() == event.Type.KeyPress:
             if (
                 event.key() == Qt.Key.Key_C
                 and event.modifiers() == Qt.KeyboardModifier.ControlModifier
                 and self._polish_diff_snapshot
             ):
-                polished = self._polish_diff_snapshot[1]
-                if polished:
-                    QApplication.clipboard().setText(polished)
-                    return True
+                self._copy_output_standard()
+                return True
+
+        # 焦点离开原文/译文框：frame 级全量重绘，擦除非整数 DPI(如125%)下 :focus 边框残留细线
+        # （边框画在 QTextEdit frame 上、viewport 之外，故不能用 viewport().update()）
+        if event.type() == event.Type.FocusOut and hasattr(self, "_input_text"):
+            if obj is self._input_text or (hasattr(self, "_output_text") and obj is self._output_text):
+                obj.repaint()
+                # 125% 下残留像素可能落在父容器/分隔条的 backingstore（子控件自身
+                # 重绘覆盖不到最后一设备行）。整窗失效＝拖分隔条/跨屏能擦掉残影的
+                # 同一机制；update 异步合并，不闪烁。
+                self.update()
+                return False
 
         # 处理输出容器的 resize 事件（确保属性已存在）
         if hasattr(self, '_output_container') and obj == self._output_container and event.type() == event.Type.Resize:

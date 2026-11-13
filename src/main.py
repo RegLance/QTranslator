@@ -4726,6 +4726,36 @@ class TranslatorApp(QApplication):
         return super().notify(receiver, event)
 
 
+def _repaint_focus_border_on_change(old, new):
+    """非整数 DPI(如125%)下 QSS :focus 边框切换易留残影：焦点离开时对旧控件做 frame 级全量重绘。
+
+    集中覆盖所有窗口的输入类控件（设置/历史/提醒/聊天/翻译等），与翻译窗 eventFilter
+    的 FocusOut 重绘同机制；边框画在控件 frame 上，viewport().update() 够不着。
+    """
+    if old is None:
+        return
+    from PyQt6.QtWidgets import (
+        QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox, QAbstractButton,
+    )
+    if isinstance(old, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox,
+                        QComboBox, QAbstractButton)):
+        target = old
+        # QSpinBox/QDateTimeEdit/可编辑下拉的焦点实际落在内部 QLineEdit 上，
+        # 而 :focus 边框画在外层 frame → 需重绘外层容器而非内部编辑区
+        parent = old.parent()
+        if isinstance(old, (QLineEdit, QTextEdit)) and isinstance(parent, (QAbstractSpinBox, QComboBox)):
+            target = parent
+        try:
+            target.repaint()
+            # 残留像素可能落在父容器/分隔条等祖先的 backingstore（子控件自身重绘
+            # 覆盖不到），整窗失效才能擦净——与拖分隔条/跨屏擦残影同一机制。
+            win = old.window()
+            if win is not None:
+                win.update()
+        except RuntimeError:
+            pass  # 控件已销毁
+
+
 def main():
     """主入口。"""
     _startup_timing('main() 入口')
@@ -4745,6 +4775,7 @@ def main():
 
     app = TranslatorApp(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    app.focusChanged.connect(_repaint_focus_border_on_change)
 
     # 界面语言初始化（system/zh/en），须在创建任何窗口之前
     try:

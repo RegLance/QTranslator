@@ -318,12 +318,12 @@ def _reapply_intended(window) -> None:
 
 
 def refresh_layered_render(window) -> None:
-    """唤醒/表面重建后强制重建 layered 窗的阴影 effect 渲染（方案 2）。
+    """唤醒/表面重建后强制重建 layered 窗的阴影 effect 渲染。
 
     锁屏唤醒时 Windows/DWM 重建 layered 表面，但不经过 Qt 的 hide/show，
     QGraphicsDropShadowEffect 的像素缓存对着新表面失效 → 阴影丢失。
     这里禁用→重启用 effect 强制整体重建，并 +1/-1px 尺寸抖动 + repaint 强制
-    全量重绘（同 word_popup / showEvent 的 workaround）。仅 opt-in 窗口；
+    全量重绘（同 word_popup 的 workaround）。仅 opt-in 窗口；
     流式/最大化/拖拽中不干预；0.5s 节流避免同批信号重复抖动。
     """
     if not getattr(window, "_dpi_guard_opt_in", False):

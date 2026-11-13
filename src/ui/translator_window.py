@@ -4944,33 +4944,6 @@ class TranslatorWindow(QWidget):
         except Exception:
             return True
 
-    def showEvent(self, event):
-        """显示时重新启用阴影 effect 并强制 layered 全量重绘。
-
-        layered 窗（WA_TranslucentBackground）的 QGraphicsDropShadowEffect 像素缓存
-        在 hide/表面重建后可能失效或保留旧外观；hide 时已禁用 effect，这里重新启用
-        强制整体重建，并做 +1/-1px 尺寸抖动 + repaint 强制全量重绘（同 word_popup）。
-        覆盖 show_window / show_at_mouse / 托盘等所有 show 路径。
-        """
-        super().showEvent(event)
-        try:
-            frame = getattr(self, "_content_frame", None)
-            if frame is not None:
-                _eff = frame.graphicsEffect()
-                if _eff is not None:
-                    _eff.setEnabled(True)
-        except RuntimeError:
-            pass
-        try:
-            if self.isVisible() and not self.isMaximized():
-                _h = self.height()
-                self.resize(self.width(), _h + 1)
-                self.resize(self.width(), _h)
-                self.repaint()
-                QTimer.singleShot(0, self.repaint)
-        except RuntimeError:
-            pass
-
     def hide(self):
         """隐藏窗口"""
         self._stop_tts_playback()
@@ -5008,15 +4981,6 @@ class TranslatorWindow(QWidget):
         # 重置自动翻译模式状态
         self._auto_mode = False
         self._pending_original_text = ""
-
-        # layered 窗 hide 前禁用阴影 effect：其像素缓存可能保留旧外观，
-        # 下次 show 时重新启用以强制整体重建（同 word_popup 的 workaround）
-        try:
-            _eff = self._content_frame.graphicsEffect()
-            if _eff is not None:
-                _eff.setEnabled(False)
-        except RuntimeError:
-            pass
 
         super().hide()
         self.closed.emit()

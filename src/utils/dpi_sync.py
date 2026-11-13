@@ -221,6 +221,7 @@ def sync_window_dpi(widget) -> bool:
         _nudge(widget)
         _diagnose(widget, "after-nudge")
         _reapply_intended(widget)
+        refresh_layered_render(widget)
         return True
     except Exception:
         return False
@@ -316,6 +317,45 @@ def _reapply_intended(window) -> None:
         pass
 
 
+def refresh_layered_render(window) -> None:
+    """唤醒/表面重建后强制重建 layered 窗的阴影 effect 渲染（方案 2）。
+
+    锁屏唤醒时 Windows/DWM 重建 layered 表面，但不经过 Qt 的 hide/show，
+    QGraphicsDropShadowEffect 的像素缓存对着新表面失效 → 阴影丢失。
+    这里禁用→重启用 effect 强制整体重建，并 +1/-1px 尺寸抖动 + repaint 强制
+    全量重绘（同 word_popup / showEvent 的 workaround）。仅 opt-in 窗口；
+    流式/最大化/拖拽中不干预；0.5s 节流避免同批信号重复抖动。
+    """
+    if not getattr(window, "_dpi_guard_opt_in", False):
+        return
+    if _guard_skip(window):
+        return
+    import time
+    now = time.monotonic()
+    if now - getattr(window, "_last_layered_refresh", 0.0) < 0.5:
+        return
+    try:
+        window._last_layered_refresh = now
+    except Exception:
+        pass
+    try:
+        from PyQt6.QtCore import QTimer
+        frame = getattr(window, "_content_frame", None)
+        target = frame if frame is not None else window
+        eff = target.graphicsEffect()
+        if eff is not None:
+            eff.setEnabled(False)
+            eff.setEnabled(True)
+        if window.isVisible() and not window.isMaximized():
+            _h = window.height()
+            window.resize(window.width(), _h + 1)
+            window.resize(window.width(), _h)
+            window.repaint()
+            QTimer.singleShot(0, window.repaint)
+    except Exception:
+        pass
+
+
 def reassert_after_show(window) -> None:
     """在窗口显示后持续重断言其尺寸，修复锁屏/显示器唤醒后被系统缩小的问题。
 
@@ -390,6 +430,7 @@ def reassert_after_show(window) -> None:
             # DPR 失同步（Qt 缓存 DPR 与显示器不一致，如唤醒后回落 1.0）→ nudge 触发重评估
             if _nudge_if_dpi_mismatched(window):
                 _reapply_intended(window)
+                refresh_layered_render(window)
         except Exception:
             pass
 
@@ -467,6 +508,8 @@ def reassert_all_visible() -> int:
                 _diagnose(w, f"reassert-all:{fw}x{fh}")
                 w.resize(fw, fh)
                 fixed += 1
+            # 唤醒/屏幕变化即使尺寸未变，layered 表面也可能已重建 → 重建阴影渲染
+            refresh_layered_render(w)
         except Exception:
             continue
     return fixed

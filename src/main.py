@@ -3621,6 +3621,16 @@ class MainController(QObject):
         self._hotkey_retry_count = 0
         self._hotkey_manager.reinstall_all()
 
+        # 补"变大/骤缩"：解锁/休眠恢复后把 opt-in 窗口尺寸双向恢复到意图尺寸。
+        # 事件驱动，不依赖 DPI 失同步检测/定时器棘轮；唤醒几何会稍后才稳定，
+        # 故做几次延迟重试（本函数已在解锁后 2s 触发）。
+        try:
+            from .utils.dpi_sync import restore_intended_sizes
+        except ImportError:
+            from src.utils.dpi_sync import restore_intended_sizes
+        for _delay in (0, 1000, 3000):
+            QTimer.singleShot(_delay, restore_intended_sizes)
+
     def _pre_render_windows(self):
         """预创建并预渲染所有窗口，消除首次显示延迟"""
         import threading
@@ -4669,6 +4679,12 @@ class TranslatorApp(QApplication):
 
     def __init__(self, argv):
         super().__init__(argv)
+        # 高 DPI 失同步修复：全局监听显示器 / DPI 变化，唤醒后自动重排窗口
+        try:
+            from .utils.dpi_sync import install_dpi_monitor
+        except ImportError:
+            from src.utils.dpi_sync import install_dpi_monitor
+        install_dpi_monitor(self)
 
     def notify(self, receiver, event):
         if event.type() == QEvent.Type.ToolTip:
@@ -4701,16 +4717,39 @@ class TranslatorApp(QApplication):
                 receiver.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, True)
             except Exception:
                 pass
+            # 高 DPI 失同步修复：顶层窗口显示后延迟重同步一次
+            # （锁屏/显示器唤醒后首次打开窗口尤其需要；正常情况下是 no-op）
+            if receiver.isWindow():
+                try:
+                    from .utils.dpi_sync import sync_window_dpi
+                except ImportError:
+                    from src.utils.dpi_sync import sync_window_dpi
+                QTimer.singleShot(0, lambda w=receiver: sync_window_dpi(w))
+                # 锁屏/显示器唤醒后 layered 窗口被系统缩小：主窗口（Window 类型）
+                # 显示后重断言尺寸。Tool/ToolTip 等浮层尺寸是动态的，排除在外。
+                if receiver.windowType() == Qt.WindowType.Window:
+                    try:
+                        from .utils.dpi_sync import reassert_after_show
+                    except ImportError:
+                        from src.utils.dpi_sync import reassert_after_show
+                    reassert_after_show(receiver)
         return super().notify(receiver, event)
 
 
 def _repaint_focus_border_on_change(old, new):
-    """非整数 DPI(如125%)下 QSS :focus 边框切换易留残影：焦点离开时对旧控件做 frame 级全量重绘。
+    """非整数 DPI(如125%)下 QSS :focus 边框切换易留残影：焦点离开时只异步局部重绘旧控件边框一圈。
 
-    集中覆盖所有窗口的输入类控件（设置/历史/提醒/聊天/翻译等），与翻译窗 eventFilter
-    的 FocusOut 重绘同机制；边框画在控件 frame 上，viewport().update() 够不着。
+    安全版：① 旧窗已最小化则直接跳过，不在正在消失的窗口上重绘（旧版同步 repaint + 整窗
+    update 会卡住最小化、并在半透明+阴影窗上触发整屏重合成）；② 只异步 update 控件边框一圈
+    + 父容器外扩 1px，不用同步 repaint、不整窗 update。
     """
     if old is None:
+        return
+    try:
+        win = old.window()
+    except RuntimeError:
+        return
+    if win is None or win.isMinimized():
         return
     from PyQt6.QtWidgets import (
         QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox, QAbstractButton,
@@ -4724,12 +4763,11 @@ def _repaint_focus_border_on_change(old, new):
         if isinstance(old, (QLineEdit, QTextEdit)) and isinstance(parent, (QAbstractSpinBox, QComboBox)):
             target = parent
         try:
-            target.repaint()
-            # 残留像素可能落在父容器/分隔条等祖先的 backingstore（子控件自身重绘
-            # 覆盖不到），整窗失效才能擦净——与拖分隔条/跨屏擦残影同一机制。
-            win = old.window()
-            if win is not None:
-                win.update()
+            # 同步只重绘"控件在顶层窗口里的那块矩形(外扩2px)"：同步能擦净 125% 残影，
+            # 范围小不触发整屏重合成；旧窗已最小化时上面已 return，不会卡最小化。
+            from PyQt6.QtCore import QRect, QPoint
+            r = QRect(target.mapTo(win, QPoint(0, 0)), target.size()).adjusted(-2, -2, 2, 2)
+            win.repaint(r)
         except RuntimeError:
             pass  # 控件已销毁
 

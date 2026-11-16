@@ -531,6 +531,8 @@ class TranslatorWindow(QWidget):
         self._scrollbar_hidden = False  # 滚动条是否被隐藏（流式输出高度增长时）
         self._user_resized_during_streaming = False  # 用户在流式期间手动调整了窗口大小
         self._user_manually_resized = False  # 用户手动调整了窗口大小（非流式输出自动变大）
+        self._dpi_guard_opt_in = True  # 启用 DPI 尺寸守卫的意图尺寸跟踪（dpi_sync）
+        self._intended_size = None  # 意图尺寸 (w,h)：show/重置/用户手动调整/流式落定时更新
 
         # 逐字输出相关
         self._char_queue = []  # 待输出的字符缓冲区
@@ -1995,6 +1997,12 @@ class TranslatorWindow(QWidget):
 
         # 标记用户手动调整了窗口大小（用于记忆窗口大小功能）
         self._user_manually_resized = True
+        # 最大化/还原均为用户手动调整：更新意图尺寸并停用 DPI 棘轮守卫
+        try:
+            from ..utils.dpi_sync import note_user_resize
+        except ImportError:
+            from src.utils.dpi_sync import note_user_resize
+        note_user_resize(self)
 
     def _fit_control_bar_widths(self):
         """按绘制字体显式设定顶栏按钮/下拉宽度，避免英文裁切或撑爆固定宽窗口。
@@ -3744,6 +3752,12 @@ class TranslatorWindow(QWidget):
             # 标记用户手动调整了窗口大小（用于记忆窗口大小功能）
             if was_resizing:
                 self._user_manually_resized = True
+                # 用户手动调整：更新意图尺寸并停用 DPI 棘轮守卫，避免被弹回
+                try:
+                    from ..utils.dpi_sync import note_user_resize
+                except ImportError:
+                    from src.utils.dpi_sync import note_user_resize
+                note_user_resize(self)
 
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         super().mouseReleaseEvent(event)
@@ -3776,15 +3790,23 @@ class TranslatorWindow(QWidget):
                 self._copy_output_standard()
                 return True
 
-        # 焦点离开原文/译文框：frame 级全量重绘，擦除非整数 DPI(如125%)下 :focus 边框残留细线
-        # （边框画在 QTextEdit frame 上、viewport 之外，故不能用 viewport().update()）
+        # 焦点离开原文/译文框：擦除非整数 DPI(如125%)下 :focus 边框残留细线。
+        # 安全版：① 去激活/弹层导致的 FocusOut（如点最小化）直接跳过，不在正在消失的
+        # 窗口上重绘（旧版同步 repaint 会卡住最小化）；② 只异步刷控件边框一圈 + 父容器
+        # 外扩 1px，不用同步 repaint、不整窗 update（半透明+阴影主窗整窗重绘面积代价大）。
         if event.type() == event.Type.FocusOut and hasattr(self, "_input_text"):
             if obj is self._input_text or (hasattr(self, "_output_text") and obj is self._output_text):
-                obj.repaint()
-                # 125% 下残留像素可能落在父容器/分隔条的 backingstore（子控件自身
-                # 重绘覆盖不到最后一设备行）。整窗失效＝拖分隔条/跨屏能擦掉残影的
-                # 同一机制；update 异步合并，不闪烁。
-                self.update()
+                reason = event.reason()
+                # 去激活/弹层导致的 FocusOut（点最小化、切窗口、弹层抢焦点）跳过：
+                # 不在正在消失的窗口上重绘，避免同步 repaint 卡住最小化。
+                if reason not in (Qt.FocusReason.ActiveWindowFocusReason,
+                                  Qt.FocusReason.PopupFocusReason):
+                    # 同步只重绘"该控件在顶层窗口里的那块矩形(外扩2px)"——同步能擦净残影，
+                    # 范围小不触发整屏重合成(不拖慢大窗/流式)，且覆盖父容器/分隔条重叠区。
+                    win = obj.window()
+                    if win is not None:
+                        r = QRect(obj.mapTo(win, QPoint(0, 0)), obj.size()).adjusted(-2, -2, 2, 2)
+                        win.repaint(r)
                 return False
 
         # 处理输出容器的 resize 事件（确保属性已存在）
@@ -4162,6 +4184,7 @@ class TranslatorWindow(QWidget):
         elif self._remember_window_size and self._saved_window_size is not None:
             self.setMinimumSize(450, 450)
             self.resize(self._saved_window_size)
+        self._note_intended_size()
 
         # 记忆窗口位置：优先使用保存的位置，否则居中显示
         if self._remember_window_position and self._saved_window_pos is not None:
@@ -4884,6 +4907,7 @@ class TranslatorWindow(QWidget):
             else:
                 self.resize(500, 400)
 
+            self._note_intended_size()
             # 确保窗口在屏幕范围内
             self._ensure_within_screen()
 
@@ -4986,6 +5010,13 @@ class TranslatorWindow(QWidget):
         except Exception:
             pass
 
+    def _note_intended_size(self):
+        """记录当前尺寸为"意图尺寸"，供 DPI 守卫/兜底作为恢复目标（dpi_sync）。"""
+        try:
+            self._intended_size = (self.width(), self.height())
+        except RuntimeError:
+            pass
+
     def _show_output_scrollbar(self):
         """恢复译文框滚动条（流式输出结束后）：按内容长度决定显示"""
         try:
@@ -4997,6 +5028,8 @@ class TranslatorWindow(QWidget):
                 self._unlock_input_height()
                 self._splitter.setStretchFactor(0, 0)  # 原文框不拉伸
                 self._splitter.setStretchFactor(1, 1)  # 译文框拉伸
+            # 流式落定/显示恢复后，把当前尺寸记为意图尺寸（DPI 守卫恢复目标）
+            self._note_intended_size()
         except RuntimeError:
             pass
         except Exception:

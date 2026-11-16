@@ -3621,6 +3621,16 @@ class MainController(QObject):
         self._hotkey_retry_count = 0
         self._hotkey_manager.reinstall_all()
 
+        # 补"变大/骤缩"：解锁/休眠恢复后把 opt-in 窗口尺寸双向恢复到意图尺寸。
+        # 事件驱动，不依赖 DPI 失同步检测/定时器棘轮；唤醒几何会稍后才稳定，
+        # 故做几次延迟重试（本函数已在解锁后 2s 触发）。
+        try:
+            from .utils.dpi_sync import restore_intended_sizes
+        except ImportError:
+            from src.utils.dpi_sync import restore_intended_sizes
+        for _delay in (0, 1000, 3000):
+            QTimer.singleShot(_delay, restore_intended_sizes)
+
     def _pre_render_windows(self):
         """预创建并预渲染所有窗口，消除首次显示延迟"""
         import threading

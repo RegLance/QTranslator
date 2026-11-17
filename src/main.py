@@ -3621,16 +3621,6 @@ class MainController(QObject):
         self._hotkey_retry_count = 0
         self._hotkey_manager.reinstall_all()
 
-        # 补"变大/骤缩"：解锁/休眠恢复后把 opt-in 窗口尺寸双向恢复到意图尺寸。
-        # 事件驱动，不依赖 DPI 失同步检测/定时器棘轮；唤醒几何会稍后才稳定，
-        # 故做几次延迟重试（本函数已在解锁后 2s 触发）。
-        try:
-            from .utils.dpi_sync import restore_intended_sizes
-        except ImportError:
-            from src.utils.dpi_sync import restore_intended_sizes
-        for _delay in (0, 1000, 3000):
-            QTimer.singleShot(_delay, restore_intended_sizes)
-
     def _pre_render_windows(self):
         """预创建并预渲染所有窗口，消除首次显示延迟"""
         import threading
@@ -4679,12 +4669,6 @@ class TranslatorApp(QApplication):
 
     def __init__(self, argv):
         super().__init__(argv)
-        # 高 DPI 失同步修复：全局监听显示器 / DPI 变化，唤醒后自动重排窗口
-        try:
-            from .utils.dpi_sync import install_dpi_monitor
-        except ImportError:
-            from src.utils.dpi_sync import install_dpi_monitor
-        install_dpi_monitor(self)
 
     def notify(self, receiver, event):
         if event.type() == QEvent.Type.ToolTip:
@@ -4717,22 +4701,6 @@ class TranslatorApp(QApplication):
                 receiver.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, True)
             except Exception:
                 pass
-            # 高 DPI 失同步修复：顶层窗口显示后延迟重同步一次
-            # （锁屏/显示器唤醒后首次打开窗口尤其需要；正常情况下是 no-op）
-            if receiver.isWindow():
-                try:
-                    from .utils.dpi_sync import sync_window_dpi
-                except ImportError:
-                    from src.utils.dpi_sync import sync_window_dpi
-                QTimer.singleShot(0, lambda w=receiver: sync_window_dpi(w))
-                # 锁屏/显示器唤醒后 layered 窗口被系统缩小：主窗口（Window 类型）
-                # 显示后重断言尺寸。Tool/ToolTip 等浮层尺寸是动态的，排除在外。
-                if receiver.windowType() == Qt.WindowType.Window:
-                    try:
-                        from .utils.dpi_sync import reassert_after_show
-                    except ImportError:
-                        from src.utils.dpi_sync import reassert_after_show
-                    reassert_after_show(receiver)
         return super().notify(receiver, event)
 
 

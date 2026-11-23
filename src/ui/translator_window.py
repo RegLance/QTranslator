@@ -3787,12 +3787,13 @@ class TranslatorWindow(QWidget):
                 # 不在正在消失的窗口上重绘，避免同步 repaint 卡住最小化。
                 if reason not in (Qt.FocusReason.ActiveWindowFocusReason,
                                   Qt.FocusReason.PopupFocusReason):
-                    # 同步只重绘"该控件在顶层窗口里的那块矩形(外扩2px)"——同步能擦净残影，
-                    # 范围小不触发整屏重合成(不拖慢大窗/流式)，且覆盖父容器/分隔条重叠区。
+                    # 异步标脏"该控件在顶层窗口里的那块矩形(外扩2px)"，交给事件循环下一帧画：
+                    # 不同步 repaint→不阻塞/不重入(避免卡死及连带的误触发最大化)；区域级覆盖
+                    # 父容器/分隔条重叠区以擦净残影。
                     win = obj.window()
                     if win is not None:
                         r = QRect(obj.mapTo(win, QPoint(0, 0)), obj.size()).adjusted(-2, -2, 2, 2)
-                        win.repaint(r)
+                        win.update(r)
                 return False
 
         # 处理输出容器的 resize 事件（确保属性已存在）

@@ -4731,11 +4731,11 @@ def _repaint_focus_border_on_change(old, new):
         if isinstance(old, (QLineEdit, QTextEdit)) and isinstance(parent, (QAbstractSpinBox, QComboBox)):
             target = parent
         try:
-            # 同步只重绘"控件在顶层窗口里的那块矩形(外扩2px)"：同步能擦净 125% 残影，
-            # 范围小不触发整屏重合成；旧窗已最小化时上面已 return，不会卡最小化。
+            # 异步标脏"控件在顶层窗口里的那块矩形(外扩2px)"，交事件循环下一帧画：不同步
+            # repaint→不阻塞/不重入(避免卡死+连带的误触发最大化)；区域级覆盖父容器/分隔条擦残影。
             from PyQt6.QtCore import QRect, QPoint
             r = QRect(target.mapTo(win, QPoint(0, 0)), target.size()).adjusted(-2, -2, 2, 2)
-            win.repaint(r)
+            win.update(r)
         except RuntimeError:
             pass  # 控件已销毁
 

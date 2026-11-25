@@ -2775,7 +2775,7 @@ class TranslatorWindow(QWidget):
         self._on_system_screenshot_done(image)
 
     def _on_system_screenshot_done(self, image: Optional[QImage]):
-        """截图完成回调：拿到图片则走粘贴识图流程，取消/超时则忽略。"""
+        """截图完成回调：拿到图片则设图并自动翻译（仅截图按钮），取消/超时则忽略。"""
         try:
             from ..utils.logger import log_debug
         except ImportError:
@@ -2783,6 +2783,8 @@ class TranslatorWindow(QWidget):
         if image is not None and not image.isNull():
             log_debug(f"[trans_window] 截图完成，进入识图流程，尺寸={image.width()}x{image.height()}")
             self._on_image_pasted(image)
+            # 截图按钮专属：确认后自动翻译（手动粘贴图片不自动，仍只走 image_pasted 信号）
+            self._start_translation()
         else:
             log_debug("[trans_window] 截图取消，忽略")
 

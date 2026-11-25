@@ -8,8 +8,9 @@
   在混合缩放下必然错位。
 - 框选用「每块屏一个遮罩窗口」（ScreenshotOverlay）。单个 QWidget 跨多块不同
   缩放比例的屏幕时，Qt 只会按其中一块屏的 DPR 渲染整窗、导致副屏错位，所以必须
-  一块屏一个窗口、各自按本屏 DPR 渲染。遮罩不再画截图底图，而是「半透明蒙层 +
-  选区擦除亮显」直接透出真实屏幕，既省性能又不会错位。
+  一块屏一个窗口、各自按本屏 DPR 渲染。遮罩把「点截图瞬间抓好的定格底图」画成
+  不透明背景（选区外压暗、选区内亮显），屏幕定格、所见即所裁，避免拖动时实时
+  画面仍在滚动导致选区与裁剪结果对不上。
 - 确认后按每块屏的 devicePixelRatio 把逻辑选区映射回物理坐标，从 mss 抓的
   物理底图上裁剪拼接。mss 不可用时回退到 QScreen.grabWindow 的旧实现。
 
@@ -175,7 +176,7 @@ class ScreenshotSession:
 
 
 class ScreenshotOverlay(QWidget):
-    """单个显示器上的遮罩窗口：半透明蒙层 + 选区擦除亮显。
+    """单个显示器上的遮罩窗口：定格底图 + 压暗蒙层 + 选区亮显。
 
     每个屏一个实例、覆盖该屏的「逻辑矩形」，Qt 会按本屏 DPR 正确渲染，避免
     单窗跨屏时的缩放错位。
@@ -194,6 +195,15 @@ class ScreenshotOverlay(QWidget):
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setMouseTracking(True)
         self.setGeometry(self._logical)
+
+        # 定格底图：点截图瞬间已抓好的本屏物理像素图（所见即所裁，屏幕不再滚动）
+        self._frozen: Optional[QPixmap] = None
+        self._dpr = 1.0
+        for logical, _physical, dpr, grab in session.caps:
+            if logical == self._logical:
+                self._frozen = grab
+                self._dpr = dpr
+                break
 
         # 选区右下角的确认/取消按钮（框选完成后显示）
         self._tool_confirm = self._make_tool_button(True)
@@ -275,17 +285,29 @@ class ScreenshotOverlay(QWidget):
     # ---- 绘制 ----
     def paintEvent(self, event):
         painter = QPainter(self)
-        # 半透明暗色蒙层，透出真实屏幕
+        frozen = self._frozen
+        has_frozen = frozen is not None and not frozen.isNull()
+        if has_frozen:
+            # 定格底图：把点截图瞬间抓好的整屏画成不透明背景，屏幕不再随实时画面滚动
+            painter.drawPixmap(self.rect(), frozen)
+        # 暗色蒙层压暗（有底图时压暗底图；无底图兜底时透出真实屏幕）
         painter.fillRect(self.rect(), QColor(0, 0, 0, 120))
         sel = self._session.selection
         if sel is not None and sel.width() > 0 and sel.height() > 0:
             inter = self._logical.intersected(sel)
             if not inter.isEmpty():
                 local = inter.translated(-self._logical.x(), -self._logical.y())
-                # 擦除选区蒙层，露出真实屏幕（明亮）
-                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-                painter.fillRect(local, QColor(0, 0, 0, 0))
-                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+                if has_frozen:
+                    # 选区内重绘未压暗的底图（亮显）；源矩形按本屏 DPR 映射到物理像素
+                    dpr = self._dpr
+                    src = QRect(round(local.x() * dpr), round(local.y() * dpr),
+                                round(local.width() * dpr), round(local.height() * dpr))
+                    painter.drawPixmap(local, frozen, src)
+                else:
+                    # 兜底：擦除选区蒙层，露出真实屏幕（明亮）
+                    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+                    painter.fillRect(local, QColor(0, 0, 0, 0))
+                    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
                 painter.setPen(QPen(QColor(0, 122, 255), 1.5))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRect(local)

@@ -298,11 +298,13 @@ class ScreenshotOverlay(QWidget):
             if not inter.isEmpty():
                 local = inter.translated(-self._logical.x(), -self._logical.y())
                 if has_frozen:
-                    # 选区内重绘未压暗的底图（亮显）；源矩形按本屏 DPR 映射到物理像素
-                    dpr = self._dpr
-                    src = QRect(round(local.x() * dpr), round(local.y() * dpr),
-                                round(local.width() * dpr), round(local.height() * dpr))
-                    painter.drawPixmap(local, frozen, src)
+                    # 选区内亮显：用与背景完全相同的变换重绘整张底图、仅裁剪到选区。
+                    # 不能单独缩放裁剪块——其缩放比随选区尺寸取整而变化，会与背景产生
+                    # 亚像素错位，拖动选区时表现为区域内文字抖动。同变换+裁剪则零错位。
+                    painter.save()
+                    painter.setClipRect(local)
+                    painter.drawPixmap(self.rect(), frozen)
+                    painter.restore()
                 else:
                     # 兜底：擦除选区蒙层，露出真实屏幕（明亮）
                     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
